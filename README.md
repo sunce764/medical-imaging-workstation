@@ -4,14 +4,9 @@
 
 ## 功能演示
 
-### 临床阅片模式
-![主界面](screenshots/01_main.png)
-
-### 重建实验室 - DFR
-![DFR重建](screenshots/02_dfr.png)
-
-### 重建实验室 - BP vs FBP对比
-![FBP对比](screenshots/03_fbp.png)
+![主界面](01_main.png)
+![DFR重建](02_dfr.png)
+![FBP对比](03_fbp.png)
 
 ## 技术栈
 - Python · PySide6 · PyDicom · NumPy · Scikit-Image · SciPy · ONNX
