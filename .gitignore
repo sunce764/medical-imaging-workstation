@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- Medical data & model weights (kept local, never committed) ---
+*.dcm
+*.onnx
+*.onnx.data
+organs.onnx.data
+models/
+肺癌/
+Exported_Lesions/
