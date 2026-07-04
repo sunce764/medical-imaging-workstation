@@ -1427,13 +1427,21 @@ class MedicalViewer(QMainWindow):
             print(f"检测到 {len(shape_groups)} 种切片尺寸，选用数量最多的（{len(datasets)} 张 {r0}×{c0}）")
         self.dicom_datasets = datasets
 
-        def _sort_key(ds):
+        # 排序键必须在整个序列内保持一致：z 物理坐标(mm)与 InstanceNumber(序号)是不同量纲，
+        # 逐切片回退（部分切片缺 ImagePositionPatient）会把缺位置信息的层按序号插进有位置
+        # 信息的层之间，打乱解剖顺序。因此先做序列级判定——所有切片都含 z 坐标才按 z 排序，
+        # 否则整列统一回退 InstanceNumber（序列内单调的采集序号）。
+        def _has_ipp(ds):
             try:
-                return float(ds.ImagePositionPatient[2])
+                float(ds.ImagePositionPatient[2])
+                return True
             except Exception:
-                return int(getattr(ds, 'InstanceNumber', 0))
+                return False
 
-        self.dicom_datasets.sort(key=_sort_key)
+        if all(_has_ipp(ds) for ds in self.dicom_datasets):
+            self.dicom_datasets.sort(key=lambda ds: float(ds.ImagePositionPatient[2]))
+        else:
+            self.dicom_datasets.sort(key=lambda ds: int(getattr(ds, 'InstanceNumber', 0)))
         return True
 
     def _build_volume_hu(self):

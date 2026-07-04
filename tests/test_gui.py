@@ -269,7 +269,7 @@ def test_edge_cases(v, app):
 
 
 def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST'):
-    """写一张最小合规的 CT DICOM，供混合形状加载测试使用。"""
+    """写一张最小合规的 CT DICOM，供混合形状加载测试使用。ipp_z=None 则不写 ImagePositionPatient。"""
     import numpy as _np
     from pydicom.dataset import FileDataset, FileMetaDataset
     from pydicom.uid import ExplicitVRLittleEndian, generate_uid, CTImageStorage
@@ -285,7 +285,8 @@ def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST'):
     ds.SOPClassUID = CTImageStorage
     ds.Modality = 'CT'
     ds.InstanceNumber = inst
-    ds.ImagePositionPatient = [0.0, 0.0, float(ipp_z)]
+    if ipp_z is not None:
+        ds.ImagePositionPatient = [0.0, 0.0, float(ipp_z)]
     ds.PixelSpacing = [1.0, 1.0]
     ds.SliceThickness = 1.0
     ds.RescaleSlope = 1
@@ -331,6 +332,31 @@ def test_mixed_shape_dicom(app):
             shutil.rmtree(d, ignore_errors=True)
             if v2.ai_thread:
                 v2.ai_thread.cancel()
+
+
+def test_dicom_sort_consistency(app):
+    """部分切片缺 ImagePositionPatient 时，排序键须序列级统一，不得 z/InstanceNumber 混排。"""
+    print("[DICOM 排序键一致性]")
+    import tempfile, shutil
+    from pydicom.uid import generate_uid
+    vs = m.MedicalViewer(); app.processEvents()
+    if vs.ai_thread:
+        vs.ai_thread.cancel()
+    sid = generate_uid()
+    # 前两层有 IPP(z=10,5)，后两层缺 IPP(instance=3,4)。混排会把 3,4 插到 z=5,10 之前；
+    # 序列级回退应整列按 InstanceNumber -> 顺序为 inst 1,2,3,4。
+    spec = [(10.0, 1), (5.0, 2), (None, 3), (None, 4)]
+    d = tempfile.mkdtemp()
+    try:
+        for ipp, inst in spec:
+            _write_min_dcm(os.path.join(d, f"i{inst}.dcm"), (64, 64), sid, ipp_z=ipp, inst=inst)
+        vs._read_dicom_dir(d)
+        order = [int(getattr(x, 'InstanceNumber', -1)) for x in vs.dicom_datasets]
+        check(order == [1, 2, 3, 4], f"缺位置信息时整列按 InstanceNumber 排序 -> {order}")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+        if vs.ai_thread:
+            vs.ai_thread.cancel()
 
 
 def test_i18n_persistent(app):
@@ -390,6 +416,7 @@ def main_run():
         test_compliance(v, app)
         test_edge_cases(v, app)
         test_mixed_shape_dicom(app)
+        test_dicom_sort_consistency(app)
         test_i18n_persistent(app)
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0
