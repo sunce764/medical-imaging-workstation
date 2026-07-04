@@ -12,6 +12,7 @@
 
 import sys
 import os
+import re
 import math
 import csv
 import json
@@ -1358,7 +1359,7 @@ class MedicalViewer(QMainWindow):
     def _load_saved_mask(self, pid):
         """尝试加载上次保存的 AI 分割标签图(.npz)，shape 匹配才恢复到 volume_mask。"""
         fp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "Exported_Lesions", f"{pid}_mask.npz")
+                          "Exported_Lesions", f"{self._safe_name(pid)}_mask.npz")
         if not os.path.exists(fp):
             return False
         try:
@@ -1476,7 +1477,7 @@ class MedicalViewer(QMainWindow):
     def _load_annotations_json(self, pid):
         """尝试加载同 PatientID 命名的注解 JSON 文件，恢复历史标注。文件不存在或损坏均静默跳过。"""
         af = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "Exported_Lesions", f"{pid}_annotations.json")
+                          "Exported_Lesions", f"{self._safe_name(pid)}_annotations.json")
         if not os.path.exists(af):
             return
         try:
@@ -1742,11 +1743,22 @@ class MedicalViewer(QMainWindow):
         if not self.recon_mode_active:
             self.update_display()
 
+    @staticmethod
+    def _safe_name(s, fallback="Unknown"):
+        """把患者标识净化为安全文件名片段。患者 DICOM 数据不可信：PatientID/Name
+        可能含 '/'、'\\' 或 '..'，若直接拼进路径会导致存盘失败（子目录不存在）甚至
+        路径穿越写到导出目录之外。仅保留字母数字/中日韩等词字符与 . _ -，其余替换为 _，
+        再去掉首尾点（杜绝 '..' 与隐藏文件），并限长避免 ENAMETOOLONG。
+        存/取两侧都经此函数，同一 PatientID 恒定映射到同一文件名，保证往返一致。"""
+        s = re.sub(r'[^\w.\-]', '_', str(s), flags=re.UNICODE).strip('. ')
+        return (s[:64] or fallback)
+
     def _export_tag(self):
         """导出文件名用的患者标识；脱敏时返回匿名前缀，防止文件名泄露姓名。"""
         if self.anonymize or not self.dicom_datasets:
             return "ANON"
-        return str(getattr(self.dicom_datasets[0], 'PatientName', 'P')).replace('^', '_')
+        name = str(getattr(self.dicom_datasets[0], 'PatientName', 'P')).replace('^', '_')
+        return self._safe_name(name, fallback="P")
 
     def _toggle_overlay(self, on):
         """切换所有视图的 DICOM 信息叠加显隐。"""
@@ -1937,7 +1949,7 @@ class MedicalViewer(QMainWindow):
         pid = "ANON" if self.anonymize else str(getattr(self.dicom_datasets[0], 'PatientID', 'Unknown'))
         ed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Exported_Lesions")
         os.makedirs(ed, exist_ok=True)
-        fp = os.path.join(ed, f"{pid}_organ_stats.csv")
+        fp = os.path.join(ed, f"{self._safe_name(pid)}_organ_stats.csv")
         try:
             with open(fp, 'w', newline='', encoding='utf-8-sig') as f:
                 w = csv.writer(f)
@@ -2024,7 +2036,7 @@ class MedicalViewer(QMainWindow):
         """
         if not self.dicom_datasets:
             return
-        pid = str(getattr(self.dicom_datasets[0], 'PatientID', 'Unknown'))
+        pid = self._safe_name(str(getattr(self.dicom_datasets[0], 'PatientID', 'Unknown')))
         ed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Exported_Lesions")
         os.makedirs(ed, exist_ok=True)
         try:

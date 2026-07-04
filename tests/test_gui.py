@@ -334,6 +334,60 @@ def test_mixed_shape_dicom(app):
                 v2.ai_thread.cancel()
 
 
+def test_export_path_safety(app):
+    """PatientID 含 '/' 或 '..' 时：不得路径穿越写到导出目录之外；净化后存取仍往返一致。"""
+    print("[导出文件名路径安全]")
+    import glob
+    ED = os.path.join(_ROOT, "Exported_Lesions")
+    # 净化器单元：普通 ID 不变（不破坏既有文件），危险字符被中和
+    su = m.MedicalViewer._safe_name
+    check(su("12345") == "12345" and su("RIDER-1234") == "RIDER-1234", "普通 PatientID 不被改动")
+    check("/" not in su("A/B") and su("..") == "Unknown" and su("") == "Unknown", "斜杠/纯点/空被中和")
+
+    vp = m.MedicalViewer(); app.processEvents()
+    if vp.ai_thread:
+        vp.ai_thread.cancel()
+
+    class _DS:
+        def __init__(self, pid): self.PatientID = pid; self.PatientName = pid
+
+    made = []
+    try:
+        # 1) 路径穿越封堵
+        esc = os.path.abspath(os.path.join(ED, "..", "PWNED_annotations.json"))
+        before = os.path.exists(esc)
+        vp.dicom_datasets = [_DS("../PWNED")]
+        vp.global_annotations = {'all': [{'id': 'x', 'type': 'ruler', 'p1': (1, 1), 'p2': (2, 2)}]}
+        vp.volume_mask = np.ones((3, 8, 8), np.uint8)
+        vp.save_project()
+        made += glob.glob(os.path.join(ED, "_PWNED_*"))
+        check(not (os.path.exists(esc) and not before), "路径穿越被封堵（未写到 Exported_Lesions 之外）")
+
+        # 2) 斜杠 PatientID 存取往返一致
+        vp.dicom_datasets = [_DS("PID/WITH/SLASH")]
+        vp.volume_hu = np.zeros((3, 8, 8), np.float32)
+        vp.global_annotations = {'all': [{'id': 'rt', 'type': 'ruler', 'p1': (1, 1), 'p2': (5, 5)}]}
+        vp.volume_mask = np.ones((3, 8, 8), np.uint8) * 7
+        vp.save_project()
+        made += glob.glob(os.path.join(ED, "PID_WITH_SLASH_*"))
+        vp.global_annotations = {'all': []}
+        vp._load_annotations_json("PID/WITH/SLASH")
+        anno_ok = vp.global_annotations.get('all') and vp.global_annotations['all'][0]['id'] == 'rt'
+        mask_ok = vp._load_saved_mask("PID/WITH/SLASH") and int(vp.volume_mask.max()) == 7
+        check(bool(anno_ok) and bool(mask_ok), "斜杠 PatientID 净化后存取往返一致")
+    finally:
+        for f in made:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        for f in glob.glob(os.path.abspath(os.path.join(ED, "..", "PWNED_*"))):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+
 def test_dicom_sort_consistency(app):
     """部分切片缺 ImagePositionPatient 时，排序键须序列级统一，不得 z/InstanceNumber 混排。"""
     print("[DICOM 排序键一致性]")
@@ -416,6 +470,7 @@ def main_run():
         test_compliance(v, app)
         test_edge_cases(v, app)
         test_mixed_shape_dicom(app)
+        test_export_path_safety(app)
         test_dicom_sort_consistency(app)
         test_i18n_persistent(app)
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))

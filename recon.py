@@ -329,7 +329,9 @@ def build_system_matrix(n, theta, cached_A, cached_A_key, progress_cb=None):
 
     # 每个批次处理的像素数：让每个 worker 大约承担 1/4 的工作量，
     # 多批次（batch 数 > worker 数）使负载均衡更好
-    n_workers = min(_mp.cpu_count(), 8)
+    # os.cpu_count() 在无法探测时返回 None（回退 4）；不用 _mp.cpu_count()——后者探测不到会抛
+    # NotImplementedError。与项目其余处（ai_engine/graphics_view/_read_dicom_dir）保持同一写法。
+    n_workers = min(os.cpu_count() or 4, 8)
     batch = max(32, n_pixels // (n_workers * 4))
     jobs = [(i, min(i + batch, n_pixels), n, theta)
             for i in range(0, n_pixels, batch)]
