@@ -1,0 +1,8 @@
+# 医学影像工作站 Pro — 项目直接依赖（环境: conda dicom_gui, Python 3.10.20）
+# 生成命令: pip install -r requirements.txt
+PySide6==6.11.0
+pydicom==3.0.2
+numpy==2.2.6
+scipy==1.15.3
+scikit-image==0.25.2
+onnxruntime==1.23.2

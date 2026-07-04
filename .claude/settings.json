@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/sc/01_Projects/GUI/main.py'\\).read\\(\\)\\); print\\('语法检查通过 OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/sc/01_Projects/GUI/main.py'\\).read\\(\\)\\); print\\('main.py 语法 OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/sc/01_Projects/GUI/recon.py'\\).read\\(\\)\\); print\\('recon.py 语法 OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/sc/01_Projects/GUI/graphics_view.py'\\).read\\(\\)\\); print\\('graphics_view.py 语法 OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/sc/01_Projects/GUI/ai_engine.py'\\).read\\(\\)\\); print\\('ai_engine.py 语法 OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/sc/01_Projects/GUI/main.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('recon.py'\\).read\\(\\)\\); print\\('recon.py OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/sc/01_Projects/GUI/graphics_view.py'\\).read\\(\\)\\); print\\('graphics_view.py OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/sc/01_Projects/GUI/main.py'\\).read\\(\\)\\); print\\('main.py OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/sc/01_Projects/GUI/recon.py'\\).read\\(\\)\\); print\\('recon.py OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/sc/01_Projects/GUI/ai_engine.py'\\).read\\(\\)\\); print\\('ai_engine.py OK'\\)\")",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/sc/01_Projects/GUI/recon.py'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python3 -c 'import ast; ast.parse\\(open\\('\\\\''/Users/sc/01_Projects/GUI/__TRACKED_VAR__'\\\\''\\).read\\(\\)\\); print\\('\\\\''__TRACKED_VAR__ OK'\\\\''\\)')",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c 'import ast; ast.parse\\(open\\('\\\\''__TRACKED_VAR__'\\\\''\\).read\\(\\)\\); print\\('\\\\''__TRACKED_VAR__ OK'\\\\''\\)')",
+      "Bash(python3 -c \"from scipy.interpolate import LinearNDInterpolator; from scipy.spatial import Delaunay; print\\('scipy imports OK'\\)\")",
+      "Bash(python3)"
+    ]
+  }
+}

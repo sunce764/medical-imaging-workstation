@@ -1,0 +1,17 @@
+# 医学影像工作站 Pro + 重建实验室 — conda 环境定义
+# 复现命令: conda env create -f environment.yml
+# 激活:     conda activate dicom_gui
+name: dicom_gui
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - PySide6==6.11.0
+      - pydicom==3.0.2
+      - numpy==2.2.6
+      - scipy==1.15.3
+      - scikit-image==0.25.2
+      - onnxruntime==1.23.2
