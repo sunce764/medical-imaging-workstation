@@ -229,6 +229,41 @@ def test_compliance(v, app):
     check("非诊断依据" in v.lbl_disclaimer.text(), "AI 面板常驻免责声明")
 
 
+def test_edge_cases(v, app):
+    print("[边界/崩溃防护]")
+    z = v.current_3d_pos[0]
+    v.volume_mask = np.zeros(v.volume_hu.shape, np.uint8)
+    v.handle_seg_paint(1, [(200, 200)], False)
+    # 换病例清撤销栈
+    v._build_volume_hu()
+    check(len(v._mask_undo) == 0, "换病例清空分割撤销栈")
+    # 换更小病例后撤销不越界崩溃
+    v.volume_mask = np.zeros(v.volume_hu.shape, np.uint8)
+    v.handle_seg_paint(1, [(200, 200)], False)
+    v.volume_hu = np.zeros((50, 512, 512), np.float32)
+    v.volume_mask = np.zeros((50, 512, 512), np.uint8)
+    v.current_3d_pos[0] = 25
+    crashed = False
+    try:
+        v._undo_mask_edit()
+    except Exception:
+        crashed = True
+    check(not crashed, "换病例后撤销不越界崩溃")
+    # 脱敏隐去对比既往日期（PHI）
+    vv = m.MedicalViewer(); app.processEvents()
+    if vv.ai_thread:
+        vv.ai_thread.cancel()
+    vv.anonymize = True
+    vv.compare_volume = np.zeros((10, 64, 64), np.float32)
+    vv.compare_datasets = [type('D', (), {'StudyDate': '20200115'})()]
+    vv.compare_mode_active = True
+    vv._primary_zpos = np.arange(vv.volume_hu.shape[0]).astype(float)
+    vv._compare_zpos = np.arange(10).astype(float)
+    vv.current_3d_pos[0] = 5
+    vv._render_compare(); app.processEvents()
+    check("2020" not in vv.views[2]['title_label'].text(), "脱敏模式隐去对比既往检查日期")
+
+
 def main_run():
     app = QApplication([])
     if not os.path.isdir(os.path.join(_ROOT, "肺癌")):
@@ -248,6 +283,7 @@ def main_run():
         test_compare(v, app)
         test_cine_keyboard(v, app)
         test_compliance(v, app)
+        test_edge_cases(v, app)
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0
 

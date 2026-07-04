@@ -1094,7 +1094,8 @@ class MedicalViewer(QMainWindow):
         if not self._mask_undo or self.volume_mask is None:
             return
         z, snap = self._mask_undo.pop()
-        if snap.shape == self.volume_mask[z].shape:
+        # z 越界保护：换病例后旧切片号可能超出新蒙版层数
+        if z < self.volume_mask.shape[0] and snap.shape == self.volume_mask[z].shape:
             self.volume_mask[z] = snap
             self._update_organ_stats()
             if not self.recon_mode_active:
@@ -1284,6 +1285,7 @@ class MedicalViewer(QMainWindow):
         if self.volume_mask is not None:
             self.volume_mask = np.zeros(self.volume_hu.shape, dtype=np.uint8)
         self._hidden_organs.clear()
+        self._mask_undo = []         # 重置清撤销栈，避免撤销回被清掉的编辑
         self.lbl_hud.setText("")     # 清除光标 HUD 残留文本
         self._update_organ_stats()  # 蒙版已清，定量面板同步清空
         self.btn_mpr.setChecked(False)
@@ -1322,6 +1324,7 @@ class MedicalViewer(QMainWindow):
 
     def load_data(self, path):
         """加载 DICOM 目录并构建 3D 体积——分四步：读盘 / 构 HU / 加载注解 / 启动 AI。"""
+        self._stop_cine()               # 换病例停止 Cine 播放
         if self.compare_mode_active:
             self._exit_compare_mode()   # 新主序列作废旧的对比配对
         if not self._read_dicom_dir(path):
@@ -1440,6 +1443,7 @@ class MedicalViewer(QMainWindow):
         self.volume_mask = np.zeros_like(self.volume_hu, dtype=np.uint8)
         self.global_annotations = {'all': []}
         self._hidden_organs.clear()   # 换病例时清除上一例的图例隐藏状态
+        self._mask_undo = []          # 换病例清撤销栈，防止旧切片号越界访问新蒙版
         z, y, x = self.volume_hu.shape
         # 默认将 3D 光标定位在体积中心（中间切片、中间行、中间列）
         self.current_3d_pos = [z // 2, y // 2, x // 2]
@@ -1668,8 +1672,8 @@ class MedicalViewer(QMainWindow):
             z2 = min(Z2 - 1, max(0, int(round(z / max(1, Z1 - 1) * (Z2 - 1)))))
             reg = "比例" if not self.is_english else "ratio"
         self._show_windowed(2, self.compare_volume[z2], ww, wl)
-        # 标题带既往检查日期，医生一眼知道对比的是哪一期
-        date = str(getattr(self.compare_datasets[0], 'StudyDate', '')) if self.compare_datasets else ''
+        # 标题带既往检查日期（脱敏时隐去——检查日期属可识别信息）
+        date = '' if self.anonymize else (str(getattr(self.compare_datasets[0], 'StudyDate', '')) if self.compare_datasets else '')
         dtag = f" {date[:4]}-{date[4:6]}-{date[6:8]}" if len(date) == 8 else ''
         self.set_view_title(2, (f"V2 [Prior{dtag} {z2 + 1}/{Z2} · {reg}]" if self.is_english
                                 else f"V2 [既往{dtag} {z2 + 1}/{Z2} · {reg}]"))
