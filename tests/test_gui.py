@@ -333,6 +333,42 @@ def test_mixed_shape_dicom(app):
                 v2.ai_thread.cancel()
 
 
+def test_i18n_persistent(app):
+    """切换到英文后，所有常驻控件不得残留中文（语言按钮与瞬态视图标题除外）。
+    用独立 viewer，避免继承其它用例故意制造的越界状态。"""
+    print("[i18n 持久控件完整性]")
+    import re
+    from PySide6.QtWidgets import QLabel, QPushButton, QGroupBox, QCheckBox, QComboBox
+    CJK = re.compile(r'[一-鿿]')
+    vi = m.MedicalViewer(); app.processEvents()
+    if vi.ai_thread:
+        vi.ai_thread.cancel()
+    # 排除：语言按钮（英文态故意显示"中"表示可切回）+ 四个视图标题（瞬态/受模式渲染控制）
+    exclude = {vi.btn_lang}
+    for vid in vi.views:
+        tl = vi.views[vid].get('title_label')
+        if tl is not None:
+            exclude.add(tl)
+    vi.is_english = True
+    vi.update_language(); app.processEvents()
+    residue = []
+    for w in vi.findChildren(QGroupBox):
+        if w not in exclude and CJK.search(w.title()):
+            residue.append(f"GroupBox:{w.title()!r}")
+    for cls in (QLabel, QPushButton, QCheckBox):
+        for w in vi.findChildren(cls):
+            if w in exclude:
+                continue
+            t = w.text()
+            if t.strip() and CJK.search(t):
+                residue.append(f"{cls.__name__}:{t!r}")
+    for cb in vi.findChildren(QComboBox):
+        for i in range(cb.count()):
+            if CJK.search(cb.itemText(i)):
+                residue.append(f"Combo:{cb.itemText(i)!r}")
+    check(not residue, "英文模式无中文残留常驻控件" + (f" — 残留: {residue}" if residue else ""))
+
+
 def main_run():
     app = QApplication([])
     if not os.path.isdir(os.path.join(_ROOT, "肺癌")):
@@ -354,6 +390,7 @@ def main_run():
         test_compliance(v, app)
         test_edge_cases(v, app)
         test_mixed_shape_dicom(app)
+        test_i18n_persistent(app)
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0
 

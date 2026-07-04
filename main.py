@@ -584,6 +584,7 @@ class MedicalViewer(QMainWindow):
         self.chk_overlay.setText("Overlay" if e else "信息叠加")
         self.chk_invert.setText("Invert" if e else "反色")
         self.chk_anon.setText("De-ID" if e else "脱敏")
+        self.chk_global_scope.setText("New anno → all slices" if e else "新标注穿透所有切片")
         self._refresh_patient_info()   # 脱敏占位文字随语言刷新
         self.on_slice_changed(self.slider_slice.value())
 
