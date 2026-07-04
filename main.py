@@ -1658,6 +1658,17 @@ class MedicalViewer(QMainWindow):
                 continue
             self._render_clinical_plane(vdata, z, y, x, ww_m, wl_m, px_sp, slice_thick)
 
+        # 图例集中判定：仅当存在可见 Axial 视图开启 Anno 且蒙版有内容时才显示检出器官，
+        # 否则清空——避免"关掉 Anno 后叠加已隐藏、图例却仍列着器官"的残留不一致。
+        show_legend = self.volume_mask is not None and any(
+            vd['plane'] == AXIAL and vd['chk_anno'].isChecked() and not vd['container'].isHidden()
+            for vd in self.views.values())
+        if show_legend:
+            present = np.unique(self.volume_mask[z])
+            self._update_legend(present[present != 0])
+        else:
+            self._update_legend([])
+
     def _render_recon_reference(self, z):
         """重建实验室分支：仅刷新 V1 的"真实切片"参考图，并重置 V2-V4 重建流水线状态。"""
         img_gt = self.volume_hu[z]
@@ -1925,7 +1936,7 @@ class MedicalViewer(QMainWindow):
                         lut[lid] = 0  # 被隐藏器官置为全透明
                 ov = np.ascontiguousarray(lut[sm])  # (h,w,4) RGBA
                 mq = QImage(ov.data, w, h, w * 4, QImage.Format_RGBA8888).copy()
-            self._update_legend(present)
+            # 图例统一在 update_display 末尾按全局状态刷新（此处不再各视图分别刷，避免多视图相互覆盖）
 
         vdata['view'].set_image(QPixmap.fromImage(qimg), mq, sp)
         self._apply_dicom_overlay(vdata, plane, z, y, x, ww, wl, px_sp, slice_thick)

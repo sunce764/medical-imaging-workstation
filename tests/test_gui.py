@@ -342,6 +342,38 @@ def test_mixed_shape_dicom(app):
                 v2.ai_thread.cancel()
 
 
+def test_legend_consistency(v, app):
+    """图例与蒙版叠加显隐保持一致：关 Anno / 无器官切片 → 图例清空；有器官且开 Anno → 显示。"""
+    print("[图例一致性]")
+    from constants import AXIAL
+    saved_mask = v.volume_mask
+    saved_pos = list(v.current_3d_pos)
+    Z, Y, X = v.volume_hu.shape
+    z_org, z_empty = Z // 2, 0                       # 按当前体积形状取切片，避免依赖固定层数
+    v.volume_mask = np.zeros(v.volume_hu.shape, np.uint8)
+    v.volume_mask[z_org, Y // 4:Y // 4 + 6, X // 4:X // 4 + 6] = 5
+    v.views[1]['plane'] = AXIAL
+    v.views[1]['chk_anno'].setChecked(True)
+    v.current_3d_pos[0] = z_org
+    v.update_display(); app.processEvents()
+    on = v.lbl_ai_legend.text()
+    v.current_3d_pos[0] = z_empty                    # 无器官切片
+    v.update_display(); app.processEvents()
+    empty_slice = v.lbl_ai_legend.text()
+    v.current_3d_pos[0] = z_org                       # 回到有器官层
+    v.update_display(); app.processEvents()
+    v.views[1]['chk_anno'].setChecked(False)        # 关闭叠加
+    v.update_display(); app.processEvents()
+    anno_off = v.lbl_ai_legend.text()
+    check("toggle:5" in on, "有器官且开 Anno 时图例显示该器官")
+    check(empty_slice == "", "无器官切片图例清空")
+    check(anno_off == "", "关闭 Anno 后图例随叠加一并清空")
+    v.views[1]['chk_anno'].setChecked(True)
+    v.volume_mask = saved_mask
+    v.current_3d_pos = saved_pos
+    v.update_display(); app.processEvents()
+
+
 def test_recon_finite(app):
     """重建算法对含 NaN/Inf 的病态弦图仍须输出有限可显示图（对齐 DFR 的 nan_to_num 约定）。"""
     print("[重建数值稳定性]")
@@ -676,6 +708,7 @@ def main_run():
         test_compliance(v, app)
         test_edge_cases(v, app)
         test_mixed_shape_dicom(app)
+        test_legend_consistency(v, app)
         test_recon_finite(app)
         test_malformed_annotations(v, app)
         test_close_cancels_ai(app)
