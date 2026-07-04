@@ -1117,7 +1117,7 @@ class MedicalViewer(QMainWindow):
         idx = self.current_3d_pos[0]
         ds = self.dicom_datasets[idx]
         hu = self.volume_hu[idx]
-        sp = (float(getattr(ds, 'PixelSpacing', [1, 1])[0]), float(getattr(ds, 'PixelSpacing', [1, 1])[1]))
+        sp = (self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0), self._dcm_float(ds, 'PixelSpacing', 1.0, idx=1))
         h, w = hu.shape
         # 用 QPainter 将多边形光栅化为掩码图像
         mq = QImage(w, h, QImage.Format_Grayscale8); mq.fill(Qt.black)
@@ -1457,10 +1457,10 @@ class MedicalViewer(QMainWindow):
         self._refresh_patient_info()   # 按脱敏状态填患者面板
 
         # 批量转换 HU 值：列表推导式遍历所有切片，堆叠为 3D float32 数组
-        # getattr 提供默认值兼容不规范 DICOM（缺少 RescaleSlope/Intercept 的旧设备）
+        # _dcm_float 兼容不规范 DICOM（RescaleSlope/Intercept 缺失或留空为 None 的设备/脱敏工具）
         self.volume_hu = np.array([
-            d.pixel_array.astype(np.float32) * float(getattr(d, 'RescaleSlope', 1)) +
-            float(getattr(d, 'RescaleIntercept', 0))
+            d.pixel_array.astype(np.float32) * self._dcm_float(d, 'RescaleSlope', 1.0) +
+            self._dcm_float(d, 'RescaleIntercept', 0.0)
             for d in self.dicom_datasets
         ])
         self.volume_mask = np.zeros_like(self.volume_hu, dtype=np.uint8)
@@ -1577,9 +1577,9 @@ class MedicalViewer(QMainWindow):
         ww_m, wl_m = self.slider_ww.value(), self.slider_wl.value()
         self.lbl_ww.setText(f"WW: {ww_m}"); self.lbl_wl.setText(f"WL: {wl_m}")
         ds = self.dicom_datasets[z]
-        px_sp = float(getattr(ds, 'PixelSpacing', [1, 1])[0])
-        # SliceThickness 用于冠/矢状面像素宽高比计算；若缺失则估算为 px_sp×3（典型螺旋 CT 值）
-        slice_thick = float(getattr(ds, 'SliceThickness', px_sp * 3))
+        px_sp = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
+        # SliceThickness 用于冠/矢状面像素宽高比计算；若缺失/为空则估算为 px_sp×3（典型螺旋 CT 值）
+        slice_thick = self._dcm_float(ds, 'SliceThickness', px_sp * 3)
 
         for vid, vdata in self.views.items():
             if vdata['container'].isHidden():
@@ -1640,8 +1640,8 @@ class MedicalViewer(QMainWindow):
                 return None, []
             dsets = self.dicom_datasets
             vol = np.array([
-                d.pixel_array.astype(np.float32) * float(getattr(d, 'RescaleSlope', 1)) +
-                float(getattr(d, 'RescaleIntercept', 0)) for d in dsets])
+                d.pixel_array.astype(np.float32) * self._dcm_float(d, 'RescaleSlope', 1.0) +
+                self._dcm_float(d, 'RescaleIntercept', 0.0) for d in dsets])
             return vol, dsets
         except Exception as e:
             print(f"读取对比序列失败: {e}")
@@ -1742,6 +1742,23 @@ class MedicalViewer(QMainWindow):
         self._refresh_patient_info()
         if not self.recon_mode_active:
             self.update_display()
+
+    @staticmethod
+    def _dcm_float(ds, tag, default, idx=None):
+        """安全读取 DICOM 数值标签为 float：标签缺失、为空(None)、或无法转 float 时返回 default。
+        idx 非空时取序列第 idx 个元素（如 PixelSpacing[0]）。
+        动机：getattr 的默认值只在属性【缺失】时生效；畸形 DICOM 常把数值标签留空
+        （pydicom 读回 None），此时 float(None) / None[idx] 会抛 TypeError，导致
+        加载/显示/定量全线崩溃。此处统一兜底。"""
+        v = getattr(ds, tag, None)
+        if v is None:
+            return default
+        try:
+            if idx is not None:
+                v = v[idx]
+            return float(v)
+        except (TypeError, ValueError, IndexError):
+            return default
 
     @staticmethod
     def _safe_name(s, fallback="Unknown"):
@@ -1889,9 +1906,10 @@ class MedicalViewer(QMainWindow):
         if self.volume_mask is None or self.volume_hu is None or not self.dicom_datasets:
             return []
         ds = self.dicom_datasets[0]
-        ps = getattr(ds, 'PixelSpacing', [1.0, 1.0])
-        st = float(getattr(ds, 'SliceThickness', 1.0))
-        vox_ml = float(ps[0]) * float(ps[1]) * st / 1000.0  # 单体素体积，mm³→mL
+        ps0 = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
+        ps1 = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=1)
+        st = self._dcm_float(ds, 'SliceThickness', 1.0)
+        vox_ml = ps0 * ps1 * st / 1000.0  # 单体素体积，mm³→mL
         counts = np.bincount(self.volume_mask.ravel(), minlength=256)
         present = [i for i in range(1, 256) if counts[i] > 0]
         if not present:

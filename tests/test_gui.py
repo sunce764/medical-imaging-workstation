@@ -268,8 +268,10 @@ def test_edge_cases(v, app):
     check("2020" not in vv.views[2]['title_label'].text(), "脱敏模式隐去对比既往检查日期")
 
 
-def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST'):
-    """写一张最小合规的 CT DICOM，供混合形状加载测试使用。ipp_z=None 则不写 ImagePositionPatient。"""
+def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_numeric=False):
+    """写一张最小合规的 CT DICOM，供混合形状加载测试使用。ipp_z=None 则不写 ImagePositionPatient。
+    empty_numeric=True 时把 RescaleSlope/Intercept/PixelSpacing/SliceThickness 写成空值（None），
+    模拟畸形 DICOM（pydicom 读回 None，直接 float() 会崩）。"""
     import numpy as _np
     from pydicom.dataset import FileDataset, FileMetaDataset
     from pydicom.uid import ExplicitVRLittleEndian, generate_uid, CTImageStorage
@@ -287,10 +289,10 @@ def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST'):
     ds.InstanceNumber = inst
     if ipp_z is not None:
         ds.ImagePositionPatient = [0.0, 0.0, float(ipp_z)]
-    ds.PixelSpacing = [1.0, 1.0]
-    ds.SliceThickness = 1.0
-    ds.RescaleSlope = 1
-    ds.RescaleIntercept = -1024
+    ds.PixelSpacing = None if empty_numeric else [1.0, 1.0]
+    ds.SliceThickness = None if empty_numeric else 1.0
+    ds.RescaleSlope = None if empty_numeric else 1
+    ds.RescaleIntercept = None if empty_numeric else -1024
     ds.SamplesPerPixel = 1
     ds.PhotometricInterpretation = 'MONOCHROME2'
     ds.Rows, ds.Columns = rows, cols
@@ -332,6 +334,37 @@ def test_mixed_shape_dicom(app):
             shutil.rmtree(d, ignore_errors=True)
             if v2.ai_thread:
                 v2.ai_thread.cancel()
+
+
+def test_empty_dicom_tags(app):
+    """RescaleSlope/Intercept/PixelSpacing/SliceThickness 存在但为空(None)时，
+    加载/定量不得因 float(None) 崩溃。"""
+    print("[空数值标签 DICOM 防护]")
+    import tempfile, shutil
+    from pydicom.uid import generate_uid
+    ve = m.MedicalViewer(); app.processEvents()
+    if ve.ai_thread:
+        ve.ai_thread.cancel()
+    sid = generate_uid()
+    d = tempfile.mkdtemp()
+    try:
+        for i in range(3):
+            _write_min_dcm(os.path.join(d, f"e{i}.dcm"), (16, 16), sid, ipp_z=i, inst=i, empty_numeric=True)
+        crashed = False
+        try:
+            ve.load_data(d); app.processEvents()
+            if ve.ai_thread:
+                ve.ai_thread.cancel()
+            ve.volume_mask = np.ones(ve.volume_hu.shape, np.uint8)
+            ve._compute_organ_stats()   # 用到 PixelSpacing/SliceThickness
+        except Exception as ex:
+            crashed = True
+            print("   ", type(ex).__name__, ex)
+        check(not crashed and ve.volume_hu is not None, "空数值标签 DICOM 可正常加载并定量")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+        if ve.ai_thread:
+            ve.ai_thread.cancel()
 
 
 def test_export_path_safety(app):
@@ -470,6 +503,7 @@ def main_run():
         test_compliance(v, app)
         test_edge_cases(v, app)
         test_mixed_shape_dicom(app)
+        test_empty_dicom_tags(app)
         test_export_path_safety(app)
         test_dicom_sort_consistency(app)
         test_i18n_persistent(app)
