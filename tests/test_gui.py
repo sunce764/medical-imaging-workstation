@@ -209,6 +209,31 @@ def test_mpr_ruler_spacing(v, app):
     v.update_display(); app.processEvents()
 
 
+def test_mpr_aniso_aspect(v, app):
+    """各向异性面按物理比例显示：Axial 变换均匀；Coronal 变换比例=ST/PS；坐标仍=体素。"""
+    print("[MPR 各向异性显示比例]")
+    from PySide6.QtCore import QPointF
+    from constants import AXIAL, CORONAL
+    ds = v.dicom_datasets[0]
+    px = v._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
+    st = v._dcm_float(ds, 'SliceThickness', 1.0)
+    view = v.views[1]['view']; view.resize(400, 400)
+    saved_plane = v.views[1]['plane']
+    # Axial（各向同性）：变换均匀，不受各向异性分支影响
+    v.views[1]['plane'] = AXIAL; v.update_display(); app.processEvents()
+    t = view.transform()
+    check(abs(t.m11() - t.m22()) < 1e-6, "横断面变换均匀（各向同性路径不变）")
+    # Coronal（各向异性）：垂直/水平缩放比 = SliceThickness/PixelSpacing
+    v.views[1]['plane'] = CORONAL; v.update_display(); app.processEvents()
+    t = view.transform()
+    check(abs(t.m22() / t.m11() - st / px) < 1e-3,
+          f"冠状面显示比例修正 m22/m11={t.m22()/t.m11():.3f}≈ST/PS={st/px:.3f}")
+    # 坐标不变：scene 坐标仍严格=体素索引（mapToScene 求逆），hover/测量不受影响
+    got = view.get_real_coordinates(view.mapFromScene(QPointF(50, 30)))
+    check(got == (50, 30), f"各向异性变换下坐标仍=体素 {got}")
+    v.views[1]['plane'] = saved_plane; v.update_display(); app.processEvents()
+
+
 def test_sampling_density(v):
     print("[重建采样密度]")
     import recon
@@ -742,6 +767,7 @@ def main_run():
         test_multiorgan_and_edit(v, app)
         test_roi(v, app)
         test_mpr_ruler_spacing(v, app)
+        test_mpr_aniso_aspect(v, app)
         test_sampling_density(v)
         test_compare(v, app)
         test_cine_keyboard(v, app)

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QGraphicsView, QGraphicsScene, QGraphicsPixmapIte
                                QGraphicsItem)
 from PySide6.QtCore import Qt, QPoint, QRectF, QLineF, QPointF, Signal, QTimer
 from PySide6.QtGui import (QMouseEvent, QPainter, QPen, QColor, QFont,
-                            QPolygonF, QBrush, QPainterPath, QPixmap)
+                            QPolygonF, QBrush, QPainterPath, QPixmap, QTransform)
 
 # 常量集中定义在 constants.py，此模块只需要工具 ID（鼠标事件分发用）
 from constants import (TOOL_POINTER, TOOL_RULER, TOOL_DRAW, TOOL_CROP,
@@ -232,9 +232,34 @@ class MedicalGraphicsView(QGraphicsView):
             self.mask_item.show()
         else:
             self.mask_item.hide()
-        # m11 接近 1.0 的容差 1e-6，防止浮点误差将"未缩放"状态误判为"已缩放"
-        if abs(self.transform().m11() - 1.0) < 1e-6:
-            self.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+        if abs(pixel_spacing[0] - pixel_spacing[1]) > 1e-9:
+            # 各向异性（冠/矢状面：层厚≠面内像素间距）：按物理尺寸做非均匀适配，
+            # 使显示比例符合解剖。每次都重适配（MPR 面不保留 Ctrl 缩放，可接受）。
+            self._apply_aniso_fit()
+        else:
+            # 各向同性（横断面/重建/对比）：
+            #   - m11≈1（identity/未缩放）→ 适配；
+            #   - m11≠m22（从各向异性面切回来的残留非均匀变换）→ 强制重适配，否则横断面会
+            #     带着上一帧冠/矢状面的拉伸变换显示；
+            #   - 均匀缩放（m11==m22≠1，用户 Ctrl+滚轮）→ 保留，不重置。
+            t = self.transform()
+            if abs(t.m11() - 1.0) < 1e-6 or abs(t.m11() - t.m22()) > 1e-9:
+                self.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+
+    def _apply_aniso_fit(self):
+        """各向异性像素的非均匀适配：让每个体素按 (列间距=水平, 行间距=垂直) 的真实物理
+        尺寸显示，整体等比缩放填满视口。关键：只改 View 变换，不缩放图元、不重采样，
+        故 scene 坐标仍严格等于体素索引——mapToScene 自动求逆，hover/测量/十字线坐标不受影响。"""
+        rect = self.scene.sceneRect()
+        vw, vh = self.viewport().width(), self.viewport().height()
+        sp0, sp1 = self.pixel_spacing            # (行/垂直间距, 列/水平间距)
+        aw, ah = rect.width() * sp1, rect.height() * sp0   # 物理宽、高
+        if aw <= 0 or ah <= 0 or vw <= 0 or vh <= 0:
+            return
+        f = min(vw / aw, vh / ah) * 0.98         # 0.98 留少量边距
+        # 缩放矩阵：水平 f·sp1，垂直 f·sp0；无旋转/错切
+        self.setTransform(QTransform(f * sp1, 0.0, 0.0, f * sp0, 0.0, 0.0))
+        self.centerOn(rect.center())
 
     def draw_crosshair(self, x, y, show=True):
         """在场景坐标 (x, y) 处绘制 MPR 十字准线。
@@ -274,7 +299,10 @@ class MedicalGraphicsView(QGraphicsView):
         px = self.image_item.pixmap()
         # 用户手动缩放过则保持其缩放，不因 resize 强制回到适配（与 set_image 的保留缩放一致）
         if px and not px.isNull() and not self._user_zoomed:
-            self.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+            if abs(self.pixel_spacing[0] - self.pixel_spacing[1]) > 1e-9:
+                self._apply_aniso_fit()   # 各向异性面：按物理比例重适配
+            else:
+                self.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
     def wheelEvent(self, event):
         """滚轮事件分发：
