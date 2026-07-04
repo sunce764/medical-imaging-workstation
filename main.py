@@ -1525,11 +1525,12 @@ class MedicalViewer(QMainWindow):
             self.update_display()
 
     def on_slice_changed(self, idx):
-        """切片滑动条 valueChanged 回调：更新 3D 光标 Z 轴坐标并刷新显示。"""
+        """切片滑动条 valueChanged 回调：更新 3D 光标 Z 轴坐标并刷新显示。
+        无条件 update_display：临床/对比/重建三种模式各走自己的分支，确保切片滑条在
+        重建实验室也能切换 V1 参考层（_render_recon_reference 靠 _recon_ref_z 判定是否重置流水线）。"""
         self.current_3d_pos[0] = idx
         self.lbl_slice.setText(f"{'Slice: ' if self.is_english else '层数: '}{idx + 1} / {len(self.dicom_datasets)}")
-        if not self.recon_mode_active:
-            self.update_display()
+        self.update_display()
 
     def update_display(self):
         """核心显示刷新函数：根据当前模式选择重建实验室分支或临床阅片分支。
@@ -1581,6 +1582,7 @@ class MedicalViewer(QMainWindow):
             for vid in [2, 3, 4]:
                 self.views[vid]['view'].image_item.setPixmap(QPixmap())
             self.current_sinogram = None
+            self._last_recon_img = None   # 换切片清链式源图，下次"生成弦图"从新层原图开始
             self._cached_bp = None; self._cached_bp_sino = None
             for b in [self.btn_dfr, self.btn_bp, self.btn_fbp]:
                 b.setEnabled(False)

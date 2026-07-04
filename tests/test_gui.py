@@ -82,12 +82,16 @@ def test_prior_fixes(v, app):
     v.tabs.setCurrentIndex(1); app.processEvents()
     for i in range(1, 5):
         check(v.views[i]['view'].overlay_lines == {}, "进入重建实验室清空各视图 overlay") if i == 1 else None
+    v.slider_slice.setValue(100); app.processEvents()   # 经正常路径同步 _recon_ref_z
     v.generate_sinogram(); app.processEvents()
     sino = v.current_sinogram
     v.slider_ww.setValue(2200); app.processEvents()
     check(v.current_sinogram is sino, "重建模式调窗不清弦图")
-    v.current_3d_pos[0] += 5; v.update_display(); app.processEvents()
-    check(v.current_sinogram is None, "切片改变正确重置重建流水线")
+    # 切片滑条在重建模式生效（V1 跟随）+ 换切片重置流水线并清链式源图
+    v._last_recon_img = np.zeros((64, 64), np.float32)
+    v.slider_slice.setValue(50); app.processEvents()
+    check(v._recon_ref_z == 50, "重建模式切片滑条生效，V1 跟随新层")
+    check(v.current_sinogram is None and v._last_recon_img is None, "换切片重置弦图并清链式源图")
     v.tabs.setCurrentIndex(0); app.processEvents()
     # MPR 悬停联动
     v.btn_mpr.setChecked(True); v.views[1]['plane'] = CORONAL
