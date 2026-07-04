@@ -1411,6 +1411,19 @@ class MedicalViewer(QMainWindow):
         if len(groups) > 1:
             datasets = max(groups.values(), key=len)
             print(f"检测到 {len(groups)} 个序列，选用切片最多的（{len(datasets)} 张）")
+
+        # 形状一致性过滤：即使同一 SeriesInstanceUID，个别切片的矩阵尺寸也可能不同
+        # （扫描中途换重建矩阵）；更常见的是 SeriesInstanceUID 缺失把多个真实序列混成一组。
+        # 混合形状会让后续 np.array 堆叠抛 ValueError（主路径 _build_volume_hu 崩溃、
+        # 对比路径被 try/except 误判为"无法读取"）。按 (Rows, Columns) 保留数量最多的尺寸，
+        # 与上面"选切片最多的序列"同一取舍思路。Rows/Columns 是含 PixelData 时的必填 tag。
+        shape_groups = defaultdict(list)
+        for ds in datasets:
+            shape_groups[(int(getattr(ds, 'Rows', 0)), int(getattr(ds, 'Columns', 0)))].append(ds)
+        if len(shape_groups) > 1:
+            datasets = max(shape_groups.values(), key=len)
+            r0, c0 = getattr(datasets[0], 'Rows', '?'), getattr(datasets[0], 'Columns', '?')
+            print(f"检测到 {len(shape_groups)} 种切片尺寸，选用数量最多的（{len(datasets)} 张 {r0}×{c0}）")
         self.dicom_datasets = datasets
 
         def _sort_key(ds):

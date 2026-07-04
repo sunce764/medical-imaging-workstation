@@ -268,6 +268,71 @@ def test_edge_cases(v, app):
     check("2020" not in vv.views[2]['title_label'].text(), "脱敏模式隐去对比既往检查日期")
 
 
+def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST'):
+    """写一张最小合规的 CT DICOM，供混合形状加载测试使用。"""
+    import numpy as _np
+    from pydicom.dataset import FileDataset, FileMetaDataset
+    from pydicom.uid import ExplicitVRLittleEndian, generate_uid, CTImageStorage
+    rows, cols = shape
+    meta = FileMetaDataset()
+    meta.MediaStorageSOPClassUID = CTImageStorage
+    meta.MediaStorageSOPInstanceUID = generate_uid()
+    meta.TransferSyntaxUID = ExplicitVRLittleEndian
+    ds = FileDataset(path, {}, file_meta=meta, preamble=b"\0" * 128)
+    ds.PatientID = pid
+    ds.SeriesInstanceUID = series_uid
+    ds.SOPInstanceUID = meta.MediaStorageSOPInstanceUID
+    ds.SOPClassUID = CTImageStorage
+    ds.Modality = 'CT'
+    ds.InstanceNumber = inst
+    ds.ImagePositionPatient = [0.0, 0.0, float(ipp_z)]
+    ds.PixelSpacing = [1.0, 1.0]
+    ds.SliceThickness = 1.0
+    ds.RescaleSlope = 1
+    ds.RescaleIntercept = -1024
+    ds.SamplesPerPixel = 1
+    ds.PhotometricInterpretation = 'MONOCHROME2'
+    ds.Rows, ds.Columns = rows, cols
+    ds.BitsAllocated = 16
+    ds.BitsStored = 16
+    ds.HighBit = 15
+    ds.PixelRepresentation = 1
+    ds.PixelData = _np.full((rows, cols), 100, dtype=_np.int16).tobytes()
+    ds.save_as(path, write_like_original=False)
+
+
+def test_mixed_shape_dicom(app):
+    """加载同序列/无 SeriesUID 但切片形状不一致的目录，不得崩溃（形状一致性过滤）。"""
+    print("[混合形状 DICOM 加载防护]")
+    import tempfile, shutil
+    from pydicom.uid import generate_uid
+    v2 = m.MedicalViewer(); app.processEvents()
+    if v2.ai_thread:
+        v2.ai_thread.cancel()
+    sid = generate_uid()
+    cases = [
+        ("同序列混合形状", [((512, 512), sid), ((512, 512), sid), ((512, 512), sid), ((256, 256), sid)], (512, 512), 3),
+        ("SeriesUID全空混合形状", [((256, 256), ''), ((256, 256), ''), ((256, 256), ''), ((64, 64), '')], (256, 256), 3),
+    ]
+    for label, spec, exp_yx, exp_n in cases:
+        d = tempfile.mkdtemp()
+        try:
+            for i, (shp, s) in enumerate(spec):
+                _write_min_dcm(os.path.join(d, f"s{i:03d}.dcm"), shp, s, ipp_z=i, inst=i)
+            crashed = False
+            try:
+                v2._read_dicom_dir(d)
+                v2._build_volume_hu()
+            except Exception:
+                crashed = True
+            ok = (not crashed) and v2.volume_hu.shape[1:] == exp_yx and v2.volume_hu.shape[0] == exp_n
+            check(ok, f"混合形状不崩且保留多数尺寸：{label} -> {v2.volume_hu.shape}")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+            if v2.ai_thread:
+                v2.ai_thread.cancel()
+
+
 def main_run():
     app = QApplication([])
     if not os.path.isdir(os.path.join(_ROOT, "肺癌")):
@@ -288,6 +353,7 @@ def main_run():
         test_cine_keyboard(v, app)
         test_compliance(v, app)
         test_edge_cases(v, app)
+        test_mixed_shape_dicom(app)
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0
 
