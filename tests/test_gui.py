@@ -342,6 +342,58 @@ def test_mixed_shape_dicom(app):
                 v2.ai_thread.cancel()
 
 
+def test_malformed_annotations(v, app):
+    """畸形/旧版本标注：渲染时逐条兜底不崩；加载 JSON 时过滤掉不合规条目。"""
+    print("[畸形标注容错]")
+    import json, tempfile
+    z = v.current_3d_pos[0]
+    saved = v.global_annotations
+    # 1) 渲染层兜底：各种畸形直接塞进去刷新，不得崩
+    bad_sets = [
+        [{'id': 'a', 'p1': (1, 1), 'p2': (2, 2)}],            # 缺 type
+        [{'id': 'b', 'type': 'path', 'points': []}],          # 空 points
+        [{'id': 'c', 'type': 'path'}],                        # 缺 points
+        [{'id': 'd', 'type': 'roi', 'rect': [1, 2]}],         # rect 长度错
+        [{'id': 'e', 'type': 'ruler', 'p1': (1, 1)}],         # 缺 p2
+        "not-a-list",                                         # 顶层非 list
+        ["xyz", 123],                                         # 元素非 dict
+    ]
+    crashed = False
+    for annos in bad_sets:
+        v.global_annotations = {z: annos, 'all': []}
+        try:
+            v.update_display(); app.processEvents()
+        except Exception:
+            crashed = True
+            break
+    check(not crashed, "渲染畸形标注逐条兜底不崩")
+
+    # 2) 加载层过滤：真实 JSON 落盘 -> _load_annotations_json 只留合规条目
+    ED = os.path.join(_ROOT, "Exported_Lesions"); os.makedirs(ED, exist_ok=True)
+    pid = "ANNOFILTER_TEST"
+    fp = os.path.join(ED, f"{pid}_annotations.json")
+    data = {"all": [
+        {'id': 'g1', 'type': 'ruler', 'p1': [1, 1], 'p2': [9, 9]},
+        {'id': 'b1', 'type': 'ruler', 'p1': [1, 1]},
+        {'id': 'g2', 'type': 'roi', 'rect': [3, 3, 10, 10]},
+        {'id': 'b2', 'type': 'roi', 'rect': [1, 2]},
+        {'id': 'b3', 'type': 'path', 'points': []},
+        "not-a-dict",
+    ], "7": "not-a-list"}
+    try:
+        with open(fp, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        v.global_annotations = {'all': []}
+        v._load_annotations_json(pid)
+        ids = sorted(a.get('id') for a in v.global_annotations.get('all', []))
+        ok = ids == ['g1', 'g2'] and v.global_annotations.get(7) == []
+        check(ok, f"加载期过滤畸形标注 -> 保留 {ids}")
+    finally:
+        if os.path.exists(fp):
+            os.remove(fp)
+        v.global_annotations = saved
+
+
 def test_close_cancels_ai(app):
     """关窗须取消仍在运行的后台 AI 推理并停止 Cine，避免内存滞留与回调到已拆除窗口。"""
     print("[关窗收尾]")
@@ -604,6 +656,7 @@ def main_run():
         test_compliance(v, app)
         test_edge_cases(v, app)
         test_mixed_shape_dicom(app)
+        test_malformed_annotations(v, app)
         test_close_cancels_ai(app)
         test_malformed_pixels(app)
         test_empty_dicom_tags(app)

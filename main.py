@@ -1506,17 +1506,48 @@ class MedicalViewer(QMainWindow):
         self.slider_slice.setValue(z // 2)
         return pid
 
+    @staticmethod
+    def _valid_anno(a):
+        """校验单条标注结构完整。用于加载 JSON 时过滤畸形/旧版本/被篡改的条目——
+        _render_annotations 会在每次刷新时硬取 type/p1/p2/points/rect，缺字段或类型
+        不符会让整个显示刷新崩溃（等于阅片被卡死），故在入口就挡掉不合规条目。"""
+        if not isinstance(a, dict) or 'id' not in a:
+            return False
+        def _pair(p):
+            return isinstance(p, (list, tuple)) and len(p) >= 2 \
+                and all(isinstance(c, (int, float)) for c in p[:2])
+        t = a.get('type')
+        if t == 'ruler':
+            return _pair(a.get('p1')) and _pair(a.get('p2'))
+        if t == 'path':
+            pts = a.get('points')
+            return isinstance(pts, (list, tuple)) and len(pts) >= 1 and all(_pair(p) for p in pts)
+        if t == 'roi':
+            r = a.get('rect')
+            return isinstance(r, (list, tuple)) and len(r) == 4 \
+                and all(isinstance(c, (int, float)) for c in r)
+        return False
+
     def _load_annotations_json(self, pid):
-        """尝试加载同 PatientID 命名的注解 JSON 文件，恢复历史标注。文件不存在或损坏均静默跳过。"""
+        """尝试加载同 PatientID 命名的注解 JSON 文件，恢复历史标注。
+        文件不存在/损坏静默跳过；结构畸形的单条标注被过滤（不带崩后续渲染）。"""
         af = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "Exported_Lesions", f"{self._safe_name(pid)}_annotations.json")
         if not os.path.exists(af):
             return
         try:
             with open(af, 'r', encoding='utf-8') as f:
-                for k, v in json.load(f).items():
-                    # JSON 键只能是字符串，数字键需要转回 int
-                    self.global_annotations[int(k) if k.isdigit() else k] = v
+                raw = json.load(f)
+            if not isinstance(raw, dict):
+                return
+            for k, v in raw.items():
+                # JSON 键只能是字符串，数字键需要转回 int
+                key = int(k) if isinstance(k, str) and k.isdigit() else k
+                annos = v if isinstance(v, list) else []
+                valid = [a for a in annos if self._valid_anno(a)]
+                if len(valid) != len(annos):
+                    print(f"标注键 {k!r}: 跳过 {len(annos) - len(valid)} 条畸形/旧版本条目")
+                self.global_annotations[key] = valid
         except Exception as e:
             print(f"Warning: failed to load annotations from {af}: {e}")
 
@@ -2032,6 +2063,8 @@ class MedicalViewer(QMainWindow):
         global_annos = self.global_annotations.get('all', [])
         for annos, col in ((slice_annos, col_slice), (global_annos, col_global)):
             for anno in annos:
+              # 逐条兜底：万一有畸形标注漏过加载期过滤，也只跳过这一条，绝不拖垮整次刷新
+              try:
                 if anno['type'] == 'ruler':
                     line = QGraphicsLineItem(QLineF(anno['p1'][0], anno['p1'][1], anno['p2'][0], anno['p2'][1]))
                     line.setPen(QPen(col, 2))
@@ -2088,6 +2121,9 @@ class MedicalViewer(QMainWindow):
                         ty = min(max(0.0, ry0), max(0.0, H - 46))
                         txt.setPos(tx, ty)
                         vdata['view'].scene.addItem(txt)
+              except Exception as _e:
+                  print(f"跳过畸形标注: {_e}")
+                  continue
 
     def save_project(self):
         """将当前所有标注保存为 JSON 文件（以 PatientID 命名），方便下次加载时自动恢复。
