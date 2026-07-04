@@ -227,6 +227,15 @@ def compute_dfr(sinogram, theta):
 # 辅助：小图准备 / 上采样
 # -------------------------------------------------------------------------
 
+def _finite_clip(arr, n):
+    """把重建结果整理为可显示的有限 [0,1] 图：先中和 NaN/±Inf，再 clip 到 [0,1]，reshape 成 n×n。
+    对齐 DFR 已有做法（compute_dfr 里对频域先 nan_to_num）。DMR/ART/SIRT 若遇病态/损坏输入
+    （如弦图混入非有限值）会产出 NaN，而 np.clip 对 NaN 无效——NaN 会静默变黑图并污染 RMSE。
+    此处保证任何情况下返回的都是确定、有限、可显示的图像。"""
+    a = np.nan_to_num(arr.reshape(n, n), nan=0.0, posinf=1.0, neginf=0.0)
+    return np.clip(a, 0.0, 1.0).astype(np.float32)
+
+
 def _circle_mask(n):
     """返回 n×n 的圆形掩码（内切圆内为 1，圆外为 0），float32。同 n 直接复用缓存。"""
     m = _CIRCLE_MASK_CACHE.get(n)
@@ -380,8 +389,9 @@ def compute_dmr(A, p_vec, n):
     x_recon, _, _, _ = np.linalg.lstsq(A, p_vec, rcond=None)
     elapsed_ms = (time.perf_counter() - start_t) * 1000
 
-    # clip 将可能出现的负值（最小二乘的数学解不保证非负）截断到 [0, 1]
-    img_recon = np.clip(x_recon.reshape(n, n), 0.0, 1.0).astype(np.float32)
+    # clip 将可能出现的负值（最小二乘的数学解不保证非负）截断到 [0, 1]；
+    # _finite_clip 同时中和病态输入下的 NaN/Inf，保证输出可显示。
+    img_recon = _finite_clip(x_recon, n)
     return img_recon, elapsed_ms
 
 
@@ -424,7 +434,7 @@ def compute_art(A, p_vec, n, n_iter, cancel_check=None, progress_cb=None):
             progress_cb(it)
     elapsed_ms = (time.perf_counter() - start_t) * 1000
 
-    img_recon = np.clip(x.reshape(n, n), 0.0, 1.0).astype(np.float32)
+    img_recon = _finite_clip(x, n)
     return img_recon, elapsed_ms
 
 
@@ -459,5 +469,5 @@ def compute_sirt(A, p_vec, n, n_iter, cancel_check=None, progress_cb=None):
             progress_cb(it)
     elapsed_ms = (time.perf_counter() - start_t) * 1000
 
-    img_recon = np.clip(x.reshape(n, n), 0.0, 1.0).astype(np.float32)
+    img_recon = _finite_clip(x, n)
     return img_recon, elapsed_ms

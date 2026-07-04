@@ -342,6 +342,26 @@ def test_mixed_shape_dicom(app):
                 v2.ai_thread.cancel()
 
 
+def test_recon_finite(app):
+    """重建算法对含 NaN/Inf 的病态弦图仍须输出有限可显示图（对齐 DFR 的 nan_to_num 约定）。"""
+    print("[重建数值稳定性]")
+    import recon as R
+    out = R._finite_clip(np.array([np.nan, np.inf, -np.inf, 0.5], np.float32), 2)
+    check(np.all(np.isfinite(out)) and out.shape == (2, 2), "_finite_clip 中和 NaN/Inf 为有限图")
+    A = np.eye(4, dtype=np.float32)                       # 极简 4×4 系统矩阵（免 multiprocessing 建阵）
+    p = np.array([1.0, np.nan, 0.5, np.inf], np.float32)  # 弦图混入非有限值
+    rec_dmr, _ = R.compute_dmr(A, p, 2)
+    rec_art, _ = R.compute_art(A, p, 2, 20)
+    rec_sirt, _ = R.compute_sirt(A, p, 2, 20)
+    check(np.all(np.isfinite(rec_dmr)), "DMR 对含 NaN/Inf 弦图输出有限")
+    check(np.all(np.isfinite(rec_art)), "ART 对含 NaN/Inf 弦图输出有限")
+    check(np.all(np.isfinite(rec_sirt)), "SIRT 对含 NaN/Inf 弦图输出有限")
+    # 正常有限弦图：nan_to_num 为恒等，重建结果不受影响
+    p_ok = np.array([1.0, 0.0, 0.5, 0.2], np.float32)
+    rec_ok, _ = R.compute_dmr(A, p_ok, 2)
+    check(np.allclose(rec_ok.ravel(), np.clip(p_ok, 0, 1)), "正常弦图 DMR 结果不受 finite 守卫影响")
+
+
 def test_malformed_annotations(v, app):
     """畸形/旧版本标注：渲染时逐条兜底不崩；加载 JSON 时过滤掉不合规条目。"""
     print("[畸形标注容错]")
@@ -656,6 +676,7 @@ def main_run():
         test_compliance(v, app)
         test_edge_cases(v, app)
         test_mixed_shape_dicom(app)
+        test_recon_finite(app)
         test_malformed_annotations(v, app)
         test_close_cancels_ai(app)
         test_malformed_pixels(app)
