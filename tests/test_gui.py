@@ -190,6 +190,25 @@ def test_roi(v, app):
     v.global_annotations[z] = []
 
 
+def test_mpr_ruler_spacing(v, app):
+    """冠状/矢状面测距的行/列间距不得交换：垂直=Z→SliceThickness，水平→PixelSpacing。"""
+    print("[MPR 测距间距轴向]")
+    from constants import AXIAL, CORONAL, SAGITTAL
+    ds = v.dicom_datasets[0]
+    px = v._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
+    st = v._dcm_float(ds, 'SliceThickness', 1.0)
+    saved_plane = v.views[1]['plane']
+    for plane, nm in ((CORONAL, "冠状"), (SAGITTAL, "矢状")):
+        v.views[1]['plane'] = plane
+        v.update_display(); app.processEvents()
+        ps = v.views[1]['view'].pixel_spacing
+        # ps[0]=垂直(Z)=SliceThickness, ps[1]=水平=PixelSpacing
+        check(abs(ps[0] - st) < 1e-6 and abs(ps[1] - px) < 1e-6,
+              f"{nm}面测距间距正确 ps=(ST,PS)=({ps[0]:.3f},{ps[1]:.3f})")
+    v.views[1]['plane'] = saved_plane
+    v.update_display(); app.processEvents()
+
+
 def test_sampling_density(v):
     print("[重建采样密度]")
     import recon
@@ -722,6 +741,7 @@ def main_run():
         test_prior_fixes(v, app)
         test_multiorgan_and_edit(v, app)
         test_roi(v, app)
+        test_mpr_ruler_spacing(v, app)
         test_sampling_density(v)
         test_compare(v, app)
         test_cine_keyboard(v, app)

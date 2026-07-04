@@ -1290,16 +1290,17 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin):
             ww, wl = self._WW_PRESETS.get(pre, ww_m), self._WL_PRESETS.get(pre, wl_m)
 
         # 根据平面切取对应的 2D 截面
-        # 像素间距 sp=(行间距, 列间距)，用于标注测量时的实际尺寸换算
+        # 像素间距 sp=(行间距, 列间距)=(垂直/Y轴, 水平/X轴)，供 ruler 测距按真实 mm 换算
+        # （graphics_view 里 d=√((dx·sp[1])²+(dy·sp[0])²)，故 sp[0] 配垂直、sp[1] 配水平）
         if plane == AXIAL:
             hu = self.volume_hu[z, :, :]
             sp = (px_sp, px_sp)              # 横断面：行/列均为 PixelSpacing
         elif plane == CORONAL:
-            hu = self.volume_hu[:, y, :]
-            sp = (px_sp, slice_thick)        # 冠状面：行=PixelSpacing，列=SliceThickness
+            hu = self.volume_hu[:, y, :]     # (Z, X)：垂直=Z→SliceThickness，水平=X→PixelSpacing
+            sp = (slice_thick, px_sp)
         elif plane == SAGITTAL:
-            hu = self.volume_hu[:, :, x]
-            sp = (px_sp, slice_thick)        # 矢状面：同冠状面
+            hu = self.volume_hu[:, :, x]     # (Z, Y)：垂直=Z→SliceThickness，水平=Y→PixelSpacing
+            sp = (slice_thick, px_sp)
 
         # 窗宽窗位映射：HU → [0, 255] 线性映射
         img = np.clip(hu, wl - ww / 2, wl + ww / 2)
