@@ -74,13 +74,19 @@ def test_startup(v):
     print("[启动/工具栏]")
     check(v.volume_hu is not None and v.volume_hu.shape[0] == 233, "自动加载主序列 (233 层)")
     check(len(v.tool_btns) == 9, "工具栏含 9 个工具 (指针/卡尺/画笔/矩形/套索/追踪/分割画笔/橡皮/ROI)")
-    # 结构：重建实验室逻辑经 ReconLabMixin 混入（拆分 main.py 后的架构约束）
+    # 结构：重建/对比逻辑经 Mixin 混入（拆分 main.py 后的架构约束）
     from recon_lab import ReconLabMixin
+    from compare_lab import CompareMixin
     check(isinstance(v, ReconLabMixin), "MedicalViewer 混入 ReconLabMixin")
     check(all(hasattr(v, mth) for mth in
               ("generate_sinogram", "run_bp", "run_fbp", "run_dfr", "run_dmr", "run_art_sirt",
                "display_numpy_image", "_render_recon_reference", "_enter_recon_mode")),
           "重建方法经 mixin 全部就位")
+    check(isinstance(v, CompareMixin), "MedicalViewer 混入 CompareMixin")
+    check(all(hasattr(v, mth) for mth in
+              ("toggle_compare", "_read_compare_dir", "_enter_compare_mode",
+               "_exit_compare_mode", "_render_compare", "_show_windowed")),
+          "对比方法经 mixin 全部就位")
 
 
 def test_prior_fixes(v, app):
