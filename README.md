@@ -60,6 +60,7 @@ python main.py
 main.py            主窗口 MedicalViewer + 入口（UI / 加载 / MPR / 临床阅片渲染 / 调度）
 recon_lab.py       ReconLabMixin —— 重建实验室 UI 调度（投影 / BP / FBP / DFR / DMR / ART / SIRT）
 compare_lab.py     CompareMixin —— 双序列随访对比（加载既往序列 / 解剖配准 / 联动）
+annotation_lab.py  AnnotationMixin —— 标注/分割蒙版编辑/器官定量/工程持久化
 ai_engine.py       AutoAIEngineThread —— 后台 AI 推理（滑窗 + 信号回调）
 graphics_view.py   MedicalGraphicsView —— 影像交互视图 + ROIGraphicsItem
 recon.py           纯计算重建算法（无 Qt 依赖）
