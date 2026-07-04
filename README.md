@@ -75,7 +75,8 @@ tests/test_gui.py  回归测试套件
 ## 模型说明（重要）
 
 - `models/organs.onnx`（图，已入库）+ `models/organs.onnx.data`（**119MB 外部权重，未入库，需单独放置到 `models/` 下**）。
-- **模型来源与官方标签未知**：`models/organ_labels_candidate.json` 的 25 类标签是**基于解剖位置 + HU 值推断**的候选表，**非官方**。其中胸部类（心脏 + 5 个肺叶）可靠，腹部类为低置信推断。若能获得模型出处/官方标签，应优先替换。
+- **架构已确证：nnU-Net v2 `PlainConvUNet`（3D 全分辨率）**。由 ONNX 张量命名与结构逆向确认：`decoder.encoder.stages.*` + `decoder.seg_layers.*`（nnU-Net v2 深监督头命名）、6 级编码器通道 `[32,64,128,256,320,320]`（`max_features=320` 为 nnU-Net 默认）、5 级下采样（故输入 pad 到 2⁵=32 倍数）、InstanceNorm + LeakyReLU、25 类（24 器官 + 背景）、经 PyTorch 2.11 `torch.onnx` 导出。
+- **官方标签映射仍未知**：label→器官 的对应关系存于训练时的 nnU-Net `dataset.json`，**无法从 ONNX 权重中提取**。`models/organ_labels_candidate.json` 的 25 类标签是**基于解剖位置 + HU 值推断**的候选表，**非官方**；胸部类（心脏 + 5 个肺叶）经真实数据核对较可靠，腹部类为低置信推断。若能获得原始 `dataset.json`（或该 nnU-Net 任务出处），应优先替换标签表。
 - ONNX 输入 `[1,1,D,H,W]`（每维 pad 到 32 倍数），输出 `[1,25,D,H,W]` logits，取 `argmax`。整卷推理约 **100 秒（CPU）**；如有 GPU 可为 `InferenceSession` 增加对应 ExecutionProvider 提速。
 
 ---

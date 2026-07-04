@@ -2,6 +2,7 @@
   "_meta": {
     "model": "models/organs.onnx",
     "num_classes": 25,
+    "architecture": "已确证=nnU-Net v2 PlainConvUNet(3D全分辨率): decoder.encoder.stages.* + decoder.seg_layers.* 命名, 6级编码器通道[32,64,128,256,320,320], 5级下采样(输入pad到32倍数), InstanceNorm+LeakyReLU, PyTorch2.11导出. 但label->器官映射在训练dataset.json里,ONNX权重无法提取.",
     "source": "由真实数据 肺癌/ 的整卷推理结果按解剖位置+HU+体积自动推断,非官方标签",
     "confidence_legend": "确定/高=可直接采用; 中=解剖合理待核; 低=证据薄弱需核对; 无数据=本胸部CT未覆盖该区域,无法标定",
     "caveat": "本标定数据以胸部为主,腹盆类(6,18,19,20,21,22,23及unknown)不可靠;需一套腹盆CT重新标定. 若有模型来源/官方label表应优先替换.",
