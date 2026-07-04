@@ -2080,9 +2080,14 @@ class MedicalViewer(QMainWindow):
                 prog.setValue(j)
                 QApplication.processEvents()
 
-        A, key = recon_lib.build_system_matrix(
-            n, theta, self._cached_A, self._cached_A_key, progress_cb=_progress
-        )
+        try:
+            A, key = recon_lib.build_system_matrix(
+                n, theta, self._cached_A, self._cached_A_key, progress_cb=_progress
+            )
+        except Exception as e:
+            prog.close()   # 关键：异常时也要关模态框，否则 UI 卡死
+            QMessageBox.warning(self, "Matrix Build Failed" if self.is_english else "系统矩阵构建失败", str(e))
+            return None
         prog.setValue(n_pixels)
         prog.close()
         self._cached_A = A
@@ -2135,6 +2140,8 @@ class MedicalViewer(QMainWindow):
         if img_small is None:
             return
         A = self._build_system_matrix(n, theta)
+        if A is None:
+            return   # 系统矩阵构建失败已提示，安全退出
         p_vec = sinogram.flatten().astype(np.float32)
         # lstsq 同步阻塞主线程，用忙碌对话框提示，避免 UI 看起来像卡死
         pd = QProgressDialog("Solving A·x=p (lstsq)..." if self.is_english else "正在求解 A·x=p (最小二乘)...",
@@ -2187,6 +2194,8 @@ class MedicalViewer(QMainWindow):
         if img_small is None:
             return
         A = self._build_system_matrix(n, theta)
+        if A is None:
+            return   # 系统矩阵构建失败已提示，安全退出
         p_vec = sinogram.flatten().astype(np.float32)
         method = self.cb_art_method.currentText()
         n_iter = int(self.cb_art_iter.currentText())
