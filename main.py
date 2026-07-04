@@ -1579,6 +1579,15 @@ class MedicalViewer(QMainWindow):
         if not self.recon_mode_active:
             self.update_display()
 
+    def closeEvent(self, event):
+        """关窗收尾：取消仍在运行的后台 AI 推理，停止 Cine 定时器。
+        动机：AI 单次推理约 8.8GB / ~100s，关窗若不取消，线程会继续占内存，且完成后
+        经 Qt 信号回调到已拆除的窗口（对已删除的 QLabel setText）→ RuntimeError。"""
+        if self.ai_thread is not None:
+            self.ai_thread.cancel()
+        self._stop_cine()
+        super().closeEvent(event)
+
     def on_slice_changed(self, idx):
         """切片滑动条 valueChanged 回调：更新 3D 光标 Z 轴坐标并刷新显示。
         无条件 update_display：临床/对比/重建三种模式各走自己的分支，确保切片滑条在

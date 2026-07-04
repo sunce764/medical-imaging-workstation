@@ -342,6 +342,28 @@ def test_mixed_shape_dicom(app):
                 v2.ai_thread.cancel()
 
 
+def test_close_cancels_ai(app):
+    """关窗须取消仍在运行的后台 AI 推理并停止 Cine，避免内存滞留与回调到已拆除窗口。"""
+    print("[关窗收尾]")
+    from PySide6.QtGui import QCloseEvent
+    vc = m.MedicalViewer(); app.processEvents()
+    if vc.ai_thread:
+        vc.ai_thread.cancel()
+
+    class _Stub:
+        def __init__(self): self.cancelled = False
+        def cancel(self): self.cancelled = True
+        def isRunning(self): return not self.cancelled
+    stub = _Stub()
+    vc.ai_thread = stub
+    # 同时开着 Cine，验证一并停止
+    vc.cine_timer.start(100)
+    vc.closeEvent(QCloseEvent())
+    app.processEvents()
+    check(stub.cancelled, "关窗取消后台 AI 推理")
+    check(not vc.cine_timer.isActive(), "关窗停止 Cine 定时器")
+
+
 def test_malformed_pixels(app):
     """多帧 DICOM 展开为切片；坏片跳过不带崩整卷；全坏则优雅中止并恢复原序列（状态一致）。"""
     print("[多帧 / 坏片 / 全坏防护]")
@@ -582,6 +604,7 @@ def main_run():
         test_compliance(v, app)
         test_edge_cases(v, app)
         test_mixed_shape_dicom(app)
+        test_close_cancels_ai(app)
         test_malformed_pixels(app)
         test_empty_dicom_tags(app)
         test_export_path_safety(app)
