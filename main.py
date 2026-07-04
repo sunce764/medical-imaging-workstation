@@ -1329,9 +1329,18 @@ class MedicalViewer(QMainWindow):
         self._stop_cine()               # 换病例停止 Cine 播放
         if self.compare_mode_active:
             self._exit_compare_mode()   # 新主序列作废旧的对比配对
+        # 记住加载前状态：若新目录无法解码，恢复原序列而非留下 dicom_datasets 与 volume_hu
+        # 不一致的半更新状态（否则后续按 idx 取切片会越界崩溃）。
+        prev_datasets, prev_volume = self.dicom_datasets, self.volume_hu
         if not self._read_dicom_dir(path):
             return
         pid = self._build_volume_hu()
+        if pid is None:
+            self.dicom_datasets, self.volume_hu = prev_datasets, prev_volume
+            QMessageBox.warning(self, "Load Failed" if self.is_english else "加载失败",
+                                "No decodable image slices in this series."
+                                if self.is_english else "该序列没有可解码的图像切片。")
+            return
         self._load_annotations_json(pid)
         mask_restored = self._load_saved_mask(pid)  # 在首次显示前恢复上次的分割
 
@@ -1446,7 +1455,8 @@ class MedicalViewer(QMainWindow):
         return True
 
     def _build_volume_hu(self):
-        """从 dicom_datasets 构建 3D HU 数组，初始化蒙版、3D 光标、切片滑动条。返回 PatientID。
+        """从 dicom_datasets 构建 3D HU 数组，初始化蒙版、3D 光标、切片滑动条。
+        成功返回 PatientID；无任何可解码切片时返回 None（由 load_data 提示并中止）。
 
         HU 值转换公式（DICOM 标准）：
           HU = pixel_value × RescaleSlope + RescaleIntercept
@@ -1454,15 +1464,37 @@ class MedicalViewer(QMainWindow):
         """
         ds = self.dicom_datasets[0]
         pid = str(getattr(ds, 'PatientID', 'N/A'))
-        self._refresh_patient_info()   # 按脱敏状态填患者面板
 
-        # 批量转换 HU 值：列表推导式遍历所有切片，堆叠为 3D float32 数组
-        # _dcm_float 兼容不规范 DICOM（RescaleSlope/Intercept 缺失或留空为 None 的设备/脱敏工具）
-        self.volume_hu = np.array([
-            d.pixel_array.astype(np.float32) * self._dcm_float(d, 'RescaleSlope', 1.0) +
-            self._dcm_float(d, 'RescaleIntercept', 0.0)
-            for d in self.dicom_datasets
-        ])
+        # 逐片解码并转 HU，防御式处理畸形数据（一张坏片不带崩整卷）：
+        #   - pixel_array 解码失败（PixelData 截断 / 压缩语法缺编解码器 / group 0028 非法）→ 跳过该片；
+        #   - 多帧文件（pixel_array 为 3D，NumberOfFrames>1）→ 展开为多个 2D 帧，共用该文件元数据。
+        # dicom_datasets 随之同步为实际保留/展开后的切片，保证按 idx 取元数据与体积层一一对应。
+        frames, kept = [], []
+        for d in self.dicom_datasets:
+            try:
+                arr = d.pixel_array
+            except Exception as e:
+                print(f"跳过无法解码的切片: {e}")
+                continue
+            hu = (arr.astype(np.float32) * self._dcm_float(d, 'RescaleSlope', 1.0)
+                  + self._dcm_float(d, 'RescaleIntercept', 0.0))
+            if hu.ndim == 2:
+                frames.append(hu); kept.append(d)
+            elif hu.ndim == 3:              # 多帧：逐帧展开为切片
+                for fr in hu:
+                    frames.append(fr); kept.append(d)
+            # 其余维度（异常数据）忽略
+        if not frames:
+            return None   # 无任何可解码切片
+        # 兜底：万一帧尺寸仍不齐（多帧与单帧混合的极端情形），保留数量最多的尺寸
+        shape_count = {}
+        for f in frames:
+            shape_count[f.shape] = shape_count.get(f.shape, 0) + 1
+        dom = max(shape_count, key=shape_count.get)
+        pairs = [(f, k) for f, k in zip(frames, kept) if f.shape == dom]
+        self.dicom_datasets = [k for _, k in pairs]
+        self._refresh_patient_info()   # 按脱敏状态填患者面板
+        self.volume_hu = np.array([f for f, _ in pairs])
         self.volume_mask = np.zeros_like(self.volume_hu, dtype=np.uint8)
         self.global_annotations = {'all': []}
         self._hidden_organs.clear()   # 换病例时清除上一例的图例隐藏状态

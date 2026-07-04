@@ -268,10 +268,11 @@ def test_edge_cases(v, app):
     check("2020" not in vv.views[2]['title_label'].text(), "脱敏模式隐去对比既往检查日期")
 
 
-def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_numeric=False):
+def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_numeric=False,
+                   n_frames=1, truncate=False):
     """写一张最小合规的 CT DICOM，供混合形状加载测试使用。ipp_z=None 则不写 ImagePositionPatient。
-    empty_numeric=True 时把 RescaleSlope/Intercept/PixelSpacing/SliceThickness 写成空值（None），
-    模拟畸形 DICOM（pydicom 读回 None，直接 float() 会崩）。"""
+    empty_numeric=True 时把 RescaleSlope/Intercept/PixelSpacing/SliceThickness 写成空值（None）。
+    n_frames>1 写多帧 DICOM；truncate=True 写截断的 PixelData（pixel_array 解码会抛）。"""
     import numpy as _np
     from pydicom.dataset import FileDataset, FileMetaDataset
     from pydicom.uid import ExplicitVRLittleEndian, generate_uid, CTImageStorage
@@ -300,7 +301,12 @@ def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_n
     ds.BitsStored = 16
     ds.HighBit = 15
     ds.PixelRepresentation = 1
-    ds.PixelData = _np.full((rows, cols), 100, dtype=_np.int16).tobytes()
+    if n_frames > 1:
+        ds.NumberOfFrames = n_frames
+        ds.PixelData = _np.full((n_frames, rows, cols), 100, dtype=_np.int16).tobytes()
+    else:
+        full = _np.full((rows, cols), 100, dtype=_np.int16).tobytes()
+        ds.PixelData = full[:len(full) // 3] if truncate else full
     ds.save_as(path, write_like_original=False)
 
 
@@ -334,6 +340,79 @@ def test_mixed_shape_dicom(app):
             shutil.rmtree(d, ignore_errors=True)
             if v2.ai_thread:
                 v2.ai_thread.cancel()
+
+
+def test_malformed_pixels(app):
+    """多帧 DICOM 展开为切片；坏片跳过不带崩整卷；全坏则优雅中止并恢复原序列（状态一致）。"""
+    print("[多帧 / 坏片 / 全坏防护]")
+    import tempfile, shutil
+    from pydicom.uid import generate_uid
+    vm = m.MedicalViewer(); app.processEvents()
+    if vm.ai_thread:
+        vm.ai_thread.cancel()
+
+    # 1) 多帧单文件 -> 展开为 N 层
+    d1 = tempfile.mkdtemp()
+    try:
+        _write_min_dcm(os.path.join(d1, "mf.dcm"), (16, 16), generate_uid(), ipp_z=0, inst=1, n_frames=5)
+        crashed = False
+        try:
+            vm.load_data(d1); app.processEvents()
+            if vm.ai_thread:
+                vm.ai_thread.cancel()
+        except Exception:
+            crashed = True
+        check(not crashed and vm.volume_hu.ndim == 3 and vm.volume_hu.shape[0] == 5,
+              f"多帧 DICOM 展开为 5 层 -> {None if crashed else vm.volume_hu.shape}")
+    finally:
+        shutil.rmtree(d1, ignore_errors=True)
+
+    # 2) 部分坏片被跳过，好片正常加载
+    d2 = tempfile.mkdtemp()
+    try:
+        sid = generate_uid()
+        for i in range(3):
+            _write_min_dcm(os.path.join(d2, f"g{i}.dcm"), (16, 16), sid, ipp_z=i, inst=i)
+        _write_min_dcm(os.path.join(d2, "bad.dcm"), (16, 16), sid, ipp_z=9, inst=9, truncate=True)
+        crashed = False
+        try:
+            vm.load_data(d2); app.processEvents()
+            if vm.ai_thread:
+                vm.ai_thread.cancel()
+        except Exception:
+            crashed = True
+        ok = (not crashed and vm.volume_hu.shape[0] == 3
+              and len(vm.dicom_datasets) == vm.volume_hu.shape[0])
+        check(ok, f"坏片跳过、好片加载且状态一致 -> {None if crashed else vm.volume_hu.shape}")
+    finally:
+        shutil.rmtree(d2, ignore_errors=True)
+
+    # 3) 全坏目录：优雅中止，保留上一次成功加载的序列，且 datasets 与 volume 一致
+    prev_shape = vm.volume_hu.shape
+    prev_len = len(vm.dicom_datasets)
+    d3 = tempfile.mkdtemp()
+    try:
+        _write_min_dcm(os.path.join(d3, "b.dcm"), (16, 16), generate_uid(), ipp_z=0, inst=1, truncate=True)
+        crashed = False
+        try:
+            vm.load_data(d3); app.processEvents()
+            if vm.ai_thread:
+                vm.ai_thread.cancel()
+        except Exception:
+            crashed = True
+        consistent = len(vm.dicom_datasets) == vm.volume_hu.shape[0]
+        # 试着导航，验证不越界崩
+        nav_ok = True
+        try:
+            vm.on_slice_changed(vm.slider_slice.maximum()); app.processEvents()
+        except Exception:
+            nav_ok = False
+        check(not crashed and vm.volume_hu.shape == prev_shape and consistent and nav_ok,
+              "全坏目录优雅中止并恢复原序列（状态一致、可导航）")
+    finally:
+        shutil.rmtree(d3, ignore_errors=True)
+        if vm.ai_thread:
+            vm.ai_thread.cancel()
 
 
 def test_empty_dicom_tags(app):
@@ -503,6 +582,7 @@ def main_run():
         test_compliance(v, app)
         test_edge_cases(v, app)
         test_mixed_shape_dicom(app)
+        test_malformed_pixels(app)
         test_empty_dicom_tags(app)
         test_export_path_safety(app)
         test_dicom_sort_consistency(app)
