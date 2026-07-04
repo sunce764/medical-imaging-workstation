@@ -87,6 +87,13 @@ def test_startup(v):
               ("toggle_compare", "_read_compare_dir", "_enter_compare_mode",
                "_exit_compare_mode", "_render_compare", "_show_windowed")),
           "对比方法经 mixin 全部就位")
+    from annotation_lab import AnnotationMixin
+    check(isinstance(v, AnnotationMixin), "MedicalViewer 混入 AnnotationMixin")
+    check(all(hasattr(v, mth) for mth in
+              ("handle_seg_paint", "_undo_mask_edit", "handle_annotation_added",
+               "_render_annotations", "_compute_organ_stats", "_update_legend",
+               "save_project", "_load_annotations_json", "_load_saved_mask")),
+          "标注/分割方法经 mixin 全部就位")
 
 
 def test_prior_fixes(v, app):
