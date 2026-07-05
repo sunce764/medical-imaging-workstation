@@ -23,6 +23,7 @@ from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox
 
 # 子模块导入
+import mpr_geometry
 from ai_engine import AutoAIEngineThread
 from annotation_lab import AnnotationMixin
 from compare_lab import CompareMixin
@@ -889,9 +890,8 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
 
         # MPR 十字准线：联动开启时各平面投影不同的坐标轴对
         if self.btn_mpr.isChecked():
-            if plane == AXIAL:      vdata['view'].draw_crosshair(x, y)
-            elif plane == CORONAL:  vdata['view'].draw_crosshair(x, z)
-            elif plane == SAGITTAL: vdata['view'].draw_crosshair(y, z)
+            cx, cy = mpr_geometry.voxel_to_crosshair(plane, z, y, x)
+            vdata['view'].draw_crosshair(cx, cy)
         else:
             vdata['view'].draw_crosshair(0, 0, show=False)
 

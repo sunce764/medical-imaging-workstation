@@ -12,6 +12,7 @@
 
 from PySide6.QtCore import Qt, QTimer
 
+import mpr_geometry
 from constants import AXIAL, CORONAL, SAGITTAL, TOOL_POINTER
 
 
@@ -51,20 +52,10 @@ class InteractionMixin:
         if self.volume_hu is None or self.recon_mode_active or self.compare_mode_active:
             return
         source_plane = self.views[vid]['plane']
-        z, y, x = self.current_3d_pos
         pos_x, pos_y = int(scene_pos.x()), int(scene_pos.y())
-        Z_MAX, Y_MAX, X_MAX = self.volume_hu.shape
-        # 先算悬停对应的完整 3D 坐标（非 source 平面的轴沿用当前光标值）
-        if source_plane == AXIAL:
-            x, y = pos_x, pos_y
-        elif source_plane == CORONAL:
-            x, z = pos_x, pos_y
-        elif source_plane == SAGITTAL:
-            y, z = pos_x, pos_y
-        # 限制在体积范围内，防止越界
-        x = max(0, min(x, X_MAX - 1))
-        y = max(0, min(y, Y_MAX - 1))
-        z = max(0, min(z, Z_MAX - 1))
+        # 悬停像素 → 完整 3D 体素（非 source 平面轴沿用当前光标），并裁剪到体积范围
+        z, y, x = mpr_geometry.hover_to_voxel(source_plane, pos_x, pos_y,
+                                              tuple(self.current_3d_pos), self.volume_hu.shape)
         self._update_hud(z, y, x)  # HUD 实时更新，不依赖 MPR 联动开关
         if not self.btn_mpr.isChecked():
             return
@@ -81,13 +72,8 @@ class InteractionMixin:
         for vdata in self.views.values():
             if vdata['container'].isHidden():
                 continue
-            p = vdata['plane']
-            if p == AXIAL:
-                vdata['view'].draw_crosshair(x, y)
-            elif p == CORONAL:
-                vdata['view'].draw_crosshair(x, z)
-            elif p == SAGITTAL:
-                vdata['view'].draw_crosshair(y, z)
+            cx, cy = mpr_geometry.voxel_to_crosshair(vdata['plane'], z, y, x)
+            vdata['view'].draw_crosshair(cx, cy)
 
     def _update_hud(self, z, y, x):
         """更新光标 HUD：显示 (x,y,z) 坐标、该体素 HU 值、以及所在器官（若有分割）。"""

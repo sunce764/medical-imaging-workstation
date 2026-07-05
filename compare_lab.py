@@ -16,6 +16,8 @@ import numpy as np
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
+import mpr_geometry
+
 
 class CompareMixin:
     """双序列随访对比相关方法集合，混入 MedicalViewer。"""
@@ -100,7 +102,7 @@ class CompareMixin:
         Z2 = self.compare_volume.shape[0]
         # 优先按解剖 z 坐标配准（同一解剖层面），缺位置信息才回退到索引比例
         if self._primary_zpos is not None and self._compare_zpos is not None and len(self._primary_zpos) > z:
-            z2 = int(np.argmin(np.abs(self._compare_zpos - self._primary_zpos[z])))
+            z2 = mpr_geometry.nearest_slice(self._compare_zpos, self._primary_zpos[z])
             reg = "配准" if not self.is_english else "reg"
         else:
             z2 = min(Z2 - 1, max(0, int(round(z / max(1, Z1 - 1) * (Z2 - 1)))))

@@ -814,6 +814,25 @@ def test_lung_fallback():
           "无空气体积返回全零")
 
 
+def test_mpr_geometry():
+    """MPR 坐标几何纯函数直接单测——纯整数/数组运算，无 Qt / MedicalViewer。"""
+    print("[MPR 坐标几何纯函数 mpr_geometry]")
+    import mpr_geometry as g
+    from constants import AXIAL, CORONAL, SAGITTAL
+    shape = (40, 200, 300)   # (Z, Y, X)
+    cur = (10, 20, 30)       # (z, y, x)
+    check(g.hover_to_voxel(AXIAL, 50, 60, cur, shape) == (10, 60, 50), "Axial 悬停 (px,py)->(x,y)，z 不变")
+    check(g.hover_to_voxel(CORONAL, 50, 15, cur, shape) == (15, 20, 50), "Coronal 悬停 (px,py)->(x,z)，y 不变")
+    check(g.hover_to_voxel(SAGITTAL, 70, 15, cur, shape) == (15, 70, 30), "Sagittal 悬停 (px,py)->(y,z)，x 不变")
+    check(g.hover_to_voxel(AXIAL, 999, 999, cur, shape) == (10, 199, 299), "越界裁剪到体积上界")
+    check(g.hover_to_voxel(AXIAL, -5, -5, cur, shape) == (10, 0, 0), "负坐标裁剪到 0")
+    check(g.voxel_to_crosshair(AXIAL, 10, 20, 30) == (30, 20), "Axial 十字线 (x,y)")
+    check(g.voxel_to_crosshair(CORONAL, 10, 20, 30) == (30, 10), "Coronal 十字线 (x,z)")
+    check(g.voxel_to_crosshair(SAGITTAL, 10, 20, 30) == (20, 10), "Sagittal 十字线 (y,z)")
+    check(g.nearest_slice([0, 5, 10, 15, 20], 12) == 2, "最近解剖切片 = 索引2 (z=10)")
+    check(g.nearest_slice([0, 5, 10, 15, 20], 100) == 4, "超出范围取最末切片")
+
+
 def main_run():
     app = QApplication([])
     # 有真实数据（本地开发）跑全套；无数据或 CI（SKIP_REAL_DATA=1）只跑数据无关的自包含测试。
@@ -828,6 +847,7 @@ def main_run():
             t(app)
         test_quantify()      # 纯函数单测，无需 app / 真实数据
         test_lung_fallback()
+        test_mpr_geometry()
     else:
         v = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌"))
         app.processEvents()
@@ -857,6 +877,7 @@ def main_run():
         test_i18n_persistent(app)
         test_quantify()
         test_lung_fallback()
+        test_mpr_geometry()
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0
 
