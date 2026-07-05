@@ -11,7 +11,7 @@
 3. **回归固化**：每个问题写进 `tests/test_gui.py`，防止回潮。
 4. **一问题一提交**：提交前核对无 PHI / 大文件混入（`肺癌/`、`*.dcm`、`organs.onnx.data` 均 .gitignore）。
 
-回归套件从最初约 10 项增长到 **64 项检查（20 个测试函数）**，`python tests/test_gui.py` 退出码 0 = 全过。
+回归套件从最初约 10 项增长到 **64 项检查（20 个测试函数）**，`python tests/test_gui.py` 退出码 0 = 全过（后续工程化再增至 **102 项**，见下节）。
 
 ---
 
@@ -64,6 +64,36 @@
 - **`_valid_anno(a)`** —— 按类型校验标注结构，加载期过滤畸形/旧版本条目。
 
 `_read_dicom_dir` 读盘三重加固：选切片最多的序列 → 按 `(Rows,Columns)` 保留多数形状 → 序列级排序键。
+
+---
+
+## 工程化与架构解耦（2026-07）
+
+在缺陷排查之外做的一轮工程成熟度与架构提升。每步保持**零行为回归**（完整回归全过 + CI 数据无关子集），一步一提交，提交前核对无 PHI。
+
+### 工程化（5 项）
+
+| 项 | 内容 | 提交 |
+|------|------|------|
+| CI + 打包 | 新增 `pyproject.toml`（元数据/依赖/工具配置）+ GitHub Actions（push/PR 跑 ruff + 数据无关测试子集，离屏 Qt，无需真实数据或 119MB 权重）；测试拆出 `SKIP_REAL_DATA` 子集使 CI 可跑 | `887e2f2` |
+| ruff + 类型注解 | 配置 ruff（忽略刻意的紧凑单行风格，专注真问题）+ 修全部真 lint；`recon.py`/`ai_engine.py` 加完整类型注解 | `029b572` |
+| i18n 表驱动 | `update_language` 由 ~110 行 `setText` 三元墙改为 `(控件, 英文, 中文)` 表 + `_retranslate_combo` 辅助，根治漏译风险 | `6b0530b` |
+| 入口去硬编码 | 删除启动硬编码自动加载 `肺癌/`（PHI 泄漏面）；改 `--data DIR` CLI 参数 + console 入口点，默认空载 | `9d4ff0b` |
+| 覆盖率量化 | coverage 接入 pyproject + CI；完整套件覆盖率 **≈66%** | `1486efb` |
+
+### 架构解耦（3 块，累计 4 个无 Qt 纯计算模块）
+
+针对「计算核心缠在 God object 里、无法独立单测」的短板，按同一模式抽出：**纯逻辑 → 无 Qt 独立模块 → mixin/线程退化成薄包装 → 加合成数据的独立单测（进 CI 子集）**。
+
+| 模块 | 从哪抽出 | 逻辑 | 独立单测 | 提交 |
+|------|----------|------|----------|------|
+| `quantify.py` | `AnnotationMixin` | 器官定量（体积 mL / 平均 HU） | `test_quantify`（覆盖率 100%） | `ed47ab6` |
+| `segmentation.py` | `AutoAIEngineThread` | AI 数学降级（肺连通域分割） | `test_lung_fallback` | `e2a9857` |
+| `mpr_geometry.py` | 收拢原散落三处的坐标约定 | MPR 坐标换算（hover↔voxel↔crosshair）+ 双序列 z 配准 | `test_mpr_geometry` | `33fec02` |
+
+（`recon.py` 是最早的先例：重建算法本就无 Qt 依赖，实验室脚本可直接 `import`。）
+
+回归套件 **64 → 102 项检查**；GitHub CI 连续 9 次全绿。
 
 ---
 
