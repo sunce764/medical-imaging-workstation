@@ -94,6 +94,12 @@ def test_startup(v):
                "_render_annotations", "_compute_organ_stats", "_update_legend",
                "save_project", "_load_annotations_json", "_load_saved_mask")),
           "标注/分割方法经 mixin 全部就位")
+    from ui_builder import UiBuilderMixin
+    check(isinstance(v, UiBuilderMixin), "MedicalViewer 混入 UiBuilderMixin")
+    check(all(hasattr(v, w) for w in
+              ("left_toolbar", "main_splitter", "right_panel", "tabs", "tool_btns",
+               "slider_ww", "btn_dfr", "combo_layout")) and len(v.views) == 4,
+          "UI 经 mixin 完整构建（4 视图 + 关键控件就位）")
 
 
 def test_prior_fixes(v, app):
