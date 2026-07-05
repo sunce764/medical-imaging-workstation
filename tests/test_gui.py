@@ -767,9 +767,16 @@ def test_i18n_persistent(app):
 
 def main_run():
     app = QApplication([])
-    if not os.path.isdir(os.path.join(_ROOT, "肺癌")):
-        print("WARN: 缺少 ../肺癌 真实数据，仅运行 AI 引擎单元测试")
-        test_ai_engine(app)
+    # 有真实数据（本地开发）跑全套；无数据或 CI（SKIP_REAL_DATA=1）只跑数据无关的自包含测试。
+    has_data = (os.path.isdir(os.path.join(_ROOT, "肺癌"))
+                and not os.environ.get("SKIP_REAL_DATA"))
+    if not has_data:
+        print("WARN: 无 ../肺癌 真实数据（或 SKIP_REAL_DATA=1），仅运行数据无关的自包含测试")
+        # 这些测试自建合成 DICOM / 用 /nonexistent.onnx 走数学降级，不依赖真实数据或 119MB 权重
+        for t in (test_ai_engine, test_mixed_shape_dicom, test_recon_finite,
+                  test_close_cancels_ai, test_malformed_pixels, test_empty_dicom_tags,
+                  test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent):
+            t(app)
     else:
         v = m.MedicalViewer()
         app.processEvents()

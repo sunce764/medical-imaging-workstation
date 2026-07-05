@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "medical-imaging-workstation"
+version = "0.1.0"
+description = "Desktop CT imaging workstation (PySide6): clinical MPR viewer, from-scratch tomographic reconstruction lab, and AI multi-organ segmentation."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary — All rights reserved" }
+authors = [{ name = "Sheng Chao" }]
+keywords = ["medical-imaging", "ct", "tomography", "reconstruction", "segmentation", "dicom", "pyside6"]
+
+dependencies = [
+    "PySide6>=6.11",
+    "pydicom>=3.0",
+    "numpy>=2.2",
+    "scipy>=1.15",
+    "scikit-image>=0.25",
+    "onnxruntime>=1.23",
+]
+
+[project.optional-dependencies]
+# 量化研究复现（App 运行不需要）
+experiments = ["matplotlib>=3.8", "nibabel>=5.0", "remotezip>=0.12"]
+# 开发工具链
+dev = ["ruff>=0.6", "coverage>=7.0"]
+
+[tool.setuptools]
+# 扁平模块布局（非 src/ 包）；显式列出以便 setuptools 正确打包
+py-modules = [
+    "main", "recon", "ai_engine", "constants", "graphics_view",
+    "annotation_lab", "compare_lab", "interaction", "recon_lab", "ui_builder",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+# 实验脚本与测试沿用较宽松风格；核心模块从严
+extend-exclude = [".matrix_cache"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+# E402: 部分脚本需在 sys.path 注入后再 import（experiments）；B008/E741 个别处有意为之
+ignore = ["E741"]
+
+[tool.ruff.lint.per-file-ignores]
+"experiments/*.py" = ["E402"]  # sys.path.insert 后再 import 项目模块
+"tests/*.py" = ["E402"]
+
+[tool.coverage.run]
+source = ["."]
+omit = ["tests/*", "experiments/*", "*/site-packages/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
