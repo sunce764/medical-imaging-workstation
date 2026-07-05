@@ -158,17 +158,79 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.is_english = not self.is_english
         self.update_language()
 
+    @staticmethod
+    def _retranslate_combo(combo, en_items, cn_items, e, idx=None):
+        """重译纯文本下拉框，保留选中项（blockSignals 防止触发回调）。
+        idx=None 时沿用下拉框当前索引；显式传入用于按外部状态（如视图 plane）恢复。"""
+        if idx is None:
+            idx = combo.currentIndex()
+        idx = max(0, idx)
+        combo.blockSignals(True); combo.clear()
+        combo.addItems(en_items if e else cn_items)
+        combo.setCurrentIndex(idx); combo.blockSignals(False)
+
     def update_language(self):
-        e = self.is_english; self.btn_lang.setText("中" if e else "EN")
-        self.tool_btns['btn_ptr'].setText("Pan\nProbe" if e else "探针\n拖拽")
-        self.tool_btns['btn_rul'].setText("Ruler\nDist" if e else "测距\n卡尺")
-        self.tool_btns['btn_drw'].setText("Draw\nPath" if e else "自由\n画笔")
-        self.tool_btns['btn_rec'].setText("Rect\nCrop" if e else "矩形\n截取")
-        self.tool_btns['btn_las'].setText("Lasso\nMask" if e else "套索\n抠图")
-        self.tool_btns['btn_trk'].setText("3D\nTrack" if e else "3D\n追踪")
-        self.tool_btns['btn_brush'].setText("Seg\nBrush" if e else "分割\n画笔")
-        self.tool_btns['btn_erase'].setText("Seg\nErase" if e else "分割\n橡皮")
-        self.tool_btns['btn_roi'].setText("ROI\nStats" if e else "ROI\n密度")
+        """按当前语言(self.is_english)重译所有常驻控件文字。
+        绝大多数静态文案集中在下面的 (控件, 英文, 中文) 表里——增/改一条字符串只需
+        在表中加一行，避免逐行 setText 那样容易漏译（历史上曾漏译 chk_global_scope）。
+        含状态/索引逻辑的控件（下拉框、播放/对比/AI 状态等）在表后单列处理。"""
+        e = self.is_english
+        self.btn_lang.setText("中" if e else "EN")
+
+        # 静态文案表：(控件, 英文, 中文) —— setText 类
+        for w, en, cn in (
+            (self.tool_btns['btn_ptr'], "Pan\nProbe", "探针\n拖拽"),
+            (self.tool_btns['btn_rul'], "Ruler\nDist", "测距\n卡尺"),
+            (self.tool_btns['btn_drw'], "Draw\nPath", "自由\n画笔"),
+            (self.tool_btns['btn_rec'], "Rect\nCrop", "矩形\n截取"),
+            (self.tool_btns['btn_las'], "Lasso\nMask", "套索\n抠图"),
+            (self.tool_btns['btn_trk'], "3D\nTrack", "3D\n追踪"),
+            (self.tool_btns['btn_brush'], "Seg\nBrush", "分割\n画笔"),
+            (self.tool_btns['btn_erase'], "Seg\nErase", "分割\n橡皮"),
+            (self.tool_btns['btn_roi'], "ROI\nStats", "ROI\n密度"),
+            (self.btn_import, "Load DICOM Folder", "加载 DICOM 目录"),
+            (self.btn_save_proj, "Save Project", "保存标注工程"),
+            (self.btn_gen_sino, "Generate Sinogram", "发射射线生成弦图"),
+            (self.lbl_oversample, "Sampling:", "采样密度:"),
+            (self.btn_dfr, "Direct Fourier (DFR)", "直接傅里叶重建 (DFR)"),
+            (self.btn_bp, "Back Projection (BP)", "反投影法 (BP - 未滤波)"),
+            (self.lbl_filter_text, "Filter:", "选择滤波器:"),
+            (self.btn_fbp, "Filtered BP (FBP)", "滤波反投影 (FBP) 对比"),
+            (self.lbl_matrix_size, "Image Size:", "图像尺寸:"),
+            (self.lbl_art_method, "Method:", "迭代方法:"),
+            (self.lbl_art_iter, "Iterations:", "迭代次数:"),
+            (self.btn_dmr, "Direct Matrix Recon (DMR)", "直接矩阵重建 (DMR)"),
+            (self.btn_art, "ART / SIRT Iterative", "ART / SIRT 迭代重建"),
+            (self.lbl_brush, "Brush R:", "画笔半径:"),
+            (self.lbl_paint_target, "Paint as:", "画笔目标:"),
+            (self.btn_export_stats, "Export Stats CSV", "导出定量 CSV"),
+            (self.lbl_disclaimer,
+             "⚠ AI results & organ labels are auto-inferred — for reference only, not for diagnosis.",
+             "⚠ AI 结果与器官标签为自动推断，仅供参考，非诊断依据。"),
+            (self.btn_clear_anno, "Clear Mask", "清空蒙版与标注"),
+            (self.btn_reset, "Reset Workspace", "重置工作区"),
+            (self.lbl_ww_hint, "Right-drag on image to adjust WW/WL", "在图像上右键拖拽可快速调节窗宽/窗位"),
+            (self.chk_overlay, "Overlay", "信息叠加"),
+            (self.chk_invert, "Invert", "反色"),
+            (self.chk_anon, "De-ID", "脱敏"),
+            (self.chk_global_scope, "New anno → all slices", "新标注穿透所有切片"),
+        ):
+            w.setText(en if e else cn)
+
+        # 分组框标题表：(分组框, 英文, 中文) —— setTitle 类
+        for g, en, cn in (
+            (self.grp_proj, "Projection Generation", "X射线投影生成"),
+            (self.grp_algo, "Reconstruction Algorithms", "图像重建算法"),
+            (self.grp_matrix, "Matrix Recon & ART / SIRT", "直接矩阵重建 & ART / SIRT"),
+            (self.grp_mon, "Performance Monitor", "算法性能监控"),
+            (self.grp_patient, "PATIENT INFO", "患者信息"),
+            (self.grp_display, "DISPLAY CONTROL", "显示控制"),
+            (self.grp_measure, "MEASURE & CLEAN", "测量与清理"),
+            (self.grp_ai, "Automated AI Engine", "自动化 AI 引擎"),
+        ):
+            g.setTitle(en if e else cn)
+
+        # 工具按钮悬停提示（表驱动）
         _tips = {
             'btn_ptr': ("Pan & probe — drag to pan, click to measure HU, right-drag to adjust WW/WL",
                         "探针/拖拽 — 拖动平移 | 点击测量HU值 | 右键拖拽调节窗宽窗位"),
@@ -186,46 +248,23 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         }
         for key, (tip_en, tip_cn) in _tips.items():
             self.tool_btns[key].setToolTip(tip_en if e else tip_cn)
-        self.btn_import.setText("Load DICOM Folder" if e else "加载 DICOM 目录")
-        self.btn_save_proj.setText("Save Project" if e else "保存标注工程")
 
         self.tabs.setTabText(0, "Clinical Mode" if e else "临床阅片")
         self.tabs.setTabText(1, "Recon Lab" if e else "重建实验室")
 
-        self.grp_proj.setTitle("Projection Generation" if e else "X射线投影生成")
-        self.btn_gen_sino.setText("Generate Sinogram" if e else "发射射线生成弦图")
-        self.lbl_oversample.setText("Sampling:" if e else "采样密度:")
-        di = max(0, self.combo_oversample.currentIndex())
-        self.combo_oversample.blockSignals(True); self.combo_oversample.clear()
-        self.combo_oversample.addItems(["Std 1×", "High 2×", "Ultra 4×"] if e else ["标准 1×", "高 2×", "超高 4×"])
-        self.combo_oversample.setCurrentIndex(di); self.combo_oversample.blockSignals(False)
-        self.grp_algo.setTitle("Reconstruction Algorithms" if e else "图像重建算法")
-        self.btn_dfr.setText("Direct Fourier (DFR)" if e else "直接傅里叶重建 (DFR)")
-        self.btn_bp.setText("Back Projection (BP)" if e else "反投影法 (BP - 未滤波)")
-        self.lbl_filter_text.setText("Filter:" if e else "选择滤波器:")
-        self.btn_fbp.setText("Filtered BP (FBP)" if e else "滤波反投影 (FBP) 对比")
-        self.grp_matrix.setTitle("Matrix Recon & ART / SIRT" if e else "直接矩阵重建 & ART / SIRT")
-        self.lbl_matrix_size.setText("Image Size:" if e else "图像尺寸:")
-        self.lbl_art_method.setText("Method:" if e else "迭代方法:")
-        self.lbl_art_iter.setText("Iterations:" if e else "迭代次数:")
-        self.btn_dmr.setText("Direct Matrix Recon (DMR)" if e else "直接矩阵重建 (DMR)")
-        self.btn_art.setText("ART / SIRT Iterative" if e else "ART / SIRT 迭代重建")
-        self.grp_mon.setTitle("Performance Monitor" if e else "算法性能监控")
+        # 保留选中索引的纯文本下拉框
+        self._retranslate_combo(self.combo_oversample,
+                                ["Std 1×", "High 2×", "Ultra 4×"], ["标准 1×", "高 2×", "超高 4×"], e)
+        self._retranslate_combo(self.combo_layout,
+                                ["1x1 Single", "1x2 Dual", "2x2 Grid"],
+                                ["单窗模式 (1x1)", "双窗对比 (1x2)", "四窗矩阵 (2x2)"], e)
 
+        # 运行耗时占位（仅占位态需重译，已有结果不动）
         if "耗时: --" in self.lbl_time.text() or "Time: --" in self.lbl_time.text():
             self.lbl_time.setText("Run Time: -- ms" if e else "运行耗时: -- ms")
-
-        self.grp_patient.setTitle("PATIENT INFO" if e else "患者信息")
-        self.grp_display.setTitle("DISPLAY CONTROL" if e else "显示控制")
-        self.grp_measure.setTitle("MEASURE & CLEAN" if e else "测量与清理")
-        self.lbl_brush.setText("Brush R:" if e else "画笔半径:")
-        self.lbl_paint_target.setText("Paint as:" if e else "画笔目标:")
-        self.grp_ai.setTitle("Automated AI Engine" if e else "自动化 AI 引擎")
-        self.btn_export_stats.setText("Export Stats CSV" if e else "导出定量 CSV")
-        self.lbl_disclaimer.setText("⚠ AI results & organ labels are auto-inferred — for reference only, not for diagnosis."
-                                    if e else "⚠ AI 结果与器官标签为自动推断，仅供参考，非诊断依据。")
         self._update_organ_stats()  # 语言切换后按新语言重渲染定量面板
 
+        # AI 状态文案随状态机
         if self._ai_state == 'standby':
             self.lbl_ai_status.setText("Status: Standby" if e else "状态: 待机中")
         elif self._ai_state == 'running':
@@ -233,41 +272,36 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         elif self._ai_state == 'done':
             self.lbl_ai_status.setText(self._ai_done_text())
 
+        # 状态相关按钮
         mpr_on = self.btn_mpr.isChecked()
-        self.btn_mpr.setText(("MPR Link: ON" if mpr_on else "MPR Link: OFF") if e else ("MPR 联动: 开启" if mpr_on else "MPR 联动: 关"))
-        opts = ["1x1 Single", "1x2 Dual", "2x2 Grid"] if e else ["单窗模式 (1x1)", "双窗对比 (1x2)", "四窗矩阵 (2x2)"]
-        ci = max(0, self.combo_layout.currentIndex()); self.combo_layout.blockSignals(True); self.combo_layout.clear(); self.combo_layout.addItems(opts); self.combo_layout.setCurrentIndex(ci); self.combo_layout.blockSignals(False)
-        p_en, p_cn = ["Lung","Medi","Bone","Vasc","Abdo","Brain"], ["肺窗","纵隔","骨窗","血管","腹部","脑窗"]
-        for b, n in zip(self.preset_btns, p_en if e else p_cn, strict=False): b.setText(n)
-        self.btn_clear_anno.setText("Clear Mask" if e else "清空蒙版与标注")
-        self.btn_reset.setText("Reset Workspace" if e else "重置工作区")
+        self.btn_mpr.setText(("MPR Link: ON" if mpr_on else "MPR Link: OFF") if e
+                             else ("MPR 联动: 开启" if mpr_on else "MPR 联动: 关"))
+        for b, n in zip(self.preset_btns,
+                        (["Lung", "Medi", "Bone", "Vasc", "Abdo", "Brain"] if e
+                         else ["肺窗", "纵隔", "骨窗", "血管", "腹部", "脑窗"]), strict=False):
+            b.setText(n)
         self.btn_compare.setText(("Exit Compare" if self.compare_mode_active else "Load Comparison") if e
                                  else ("退出对比" if self.compare_mode_active else "加载对比序列"))
         self.btn_cine.setText(("⏸ Pause" if self.cine_timer.isActive() else "▶ Play") if e
                               else ("⏸ 暂停" if self.cine_timer.isActive() else "▶ 播放"))
+        # Cine 速度下拉（item 带 ms 数据，单列处理）
         cs = max(0, self.cb_cine_speed.currentIndex())
         self.cb_cine_speed.blockSignals(True); self.cb_cine_speed.clear()
         for _nm, _ms in ((("Slow" if e else "慢"), 250), (("Med" if e else "中"), 120), (("Fast" if e else "快"), 50)):
             self.cb_cine_speed.addItem(_nm, _ms)
         self.cb_cine_speed.setCurrentIndex(cs); self.cb_cine_speed.blockSignals(False)
 
+        # 每视图的平面/窗位下拉 + 显示/锁定复选（cb_plane 按 vdata['plane'] 恢复，非下拉当前索引）
         v_en = ["Global", "Lung", "Medi", "Bone", "Vasc", "Abdo", "Brain"]
         v_cn = ["跟随", "肺窗", "纵隔", "骨窗", "血管", "腹部", "脑窗"]
         plane_en = ["Axial", "Coronal", "Sagittal"]
         plane_cn = ["横断面", "冠状面", "矢状面"]
-
         for vdata in self.views.values():
-            curr_p = max(0, vdata['plane'])
-            vdata['cb_plane'].blockSignals(True); vdata['cb_plane'].clear(); vdata['cb_plane'].addItems(plane_en if e else plane_cn); vdata['cb_plane'].setCurrentIndex(curr_p); vdata['cb_plane'].blockSignals(False)
-            curr_preset = max(0, vdata['preset'].currentIndex())
-            vdata['preset'].blockSignals(True); vdata['preset'].clear(); vdata['preset'].addItems(v_en if e else v_cn); vdata['preset'].setCurrentIndex(curr_preset); vdata['preset'].blockSignals(False)
+            self._retranslate_combo(vdata['cb_plane'], plane_en, plane_cn, e, idx=vdata['plane'])
+            self._retranslate_combo(vdata['preset'], v_en, v_cn, e)
             vdata['chk_anno'].setText("Anno" if e else "显示")
             vdata['lock'].setText("Lock" if e else "锁定")
-        self.lbl_ww_hint.setText("Right-drag on image to adjust WW/WL" if e else "在图像上右键拖拽可快速调节窗宽/窗位")
-        self.chk_overlay.setText("Overlay" if e else "信息叠加")
-        self.chk_invert.setText("Invert" if e else "反色")
-        self.chk_anon.setText("De-ID" if e else "脱敏")
-        self.chk_global_scope.setText("New anno → all slices" if e else "新标注穿透所有切片")
+
         self._refresh_patient_info()   # 脱敏占位文字随语言刷新
         self.on_slice_changed(self.slider_slice.value())
 
