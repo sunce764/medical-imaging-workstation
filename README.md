@@ -57,8 +57,9 @@ python main.py
 ## 目录结构
 
 ```
-main.py            主窗口 MedicalViewer + 入口（加载 / MPR / 临床阅片渲染 / 窗位·工具·布局·Cine·AI 调度 / i18n）
+main.py            主窗口 MedicalViewer + 入口（加载 / 临床阅片渲染 / 窗位·工具·布局·AI 调度 / i18n / 键盘导航）
 ui_builder.py      UiBuilderMixin —— 主窗口三栏布局与全部控件构建（左栏 / 视图栅格 / 右面板 / 两 Tab）
+interaction.py     InteractionMixin —— Cine 电影播放 + MPR 联动/导航（十字线同步 / 换层换面 / HU 探针）
 recon_lab.py       ReconLabMixin —— 重建实验室 UI 调度（投影 / BP / FBP / DFR / DMR / ART / SIRT）
 compare_lab.py     CompareMixin —— 双序列随访对比（加载既往序列 / 解剖配准 / 联动）
 annotation_lab.py  AnnotationMixin —— 标注/分割蒙版编辑/器官定量/工程持久化
