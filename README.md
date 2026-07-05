@@ -19,6 +19,16 @@ Beyond the application, the repository contains **two reproducible quantitative 
 
 Highlights: mixin-decomposed architecture (6 cohesive modules), an 80-check offscreen-Qt regression suite, defensive DICOM handling, and reconstruction algorithms (Radon / FBP / DFR / ART / SIRT) implemented from first principles.
 
+## 界面 · Screenshots
+
+> 演示数据为公开的 **TotalSegmentator-CT-Lite**（CC-BY-4.0），**非患者数据、无 PHI**（患者栏已标注）。
+
+**AI 多器官分割 · 轴位叠加**（右侧图例含各器官体积/HU 与免责声明）
+![Axial view with AI multi-organ overlay](docs/img/gui_axial_segmentation.png)
+
+**三平面 MPR · 十字线联动**（肺窗，5 个肺叶彩色叠加）
+![Tri-planar MPR with linked cross-hairs](docs/img/gui_mpr_triplanar.png)
+
 ---
 
 ## 功能概览
@@ -144,6 +154,6 @@ python tests/test_gui.py
 
 ## 版权 · Copyright
 
-© 2026 仓库所有者（sunce764）。**保留所有权利 / All rights reserved.**
+© 2026 盛超 (Sheng Chao)。**保留所有权利 / All rights reserved.**
 
 本仓库为个人教学/科研与作品集用途，**未授予**任何开源复制、修改或再分发许可；如需使用请联系作者。第三方组件依其各自许可。
