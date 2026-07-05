@@ -12,20 +12,28 @@
 #       对 _render_annotations、update_display 对 _update_legend 的调用留在 main。
 # =============================================================================
 
-import os
 import csv
 import json
 import math
+import os
 from datetime import datetime
+
 import numpy as np
 import scipy.ndimage as ndimage
-from PySide6.QtWidgets import (QApplication, QMessageBox, QProgressDialog, QFileDialog,
-                               QGraphicsLineItem, QGraphicsTextItem, QGraphicsPathItem)
-from PySide6.QtCore import Qt, QPointF, QLineF
-from PySide6.QtGui import QImage, QPainter, QPen, QPainterPath, QPolygonF, QColor, QFont
+from PySide6.QtCore import QLineF, QPointF, Qt
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QGraphicsLineItem,
+    QGraphicsPathItem,
+    QGraphicsTextItem,
+    QMessageBox,
+    QProgressDialog,
+)
 
+from constants import AXIAL, LABEL_LUT, MANUAL_TRACK_LABEL
 from graphics_view import ROIGraphicsItem
-from constants import LABEL_LUT, MANUAL_TRACK_LABEL, AXIAL
 
 
 class AnnotationMixin:
@@ -173,7 +181,7 @@ class AnnotationMixin:
                                   newline='', encoding='utf-8-sig') as f:
                             writer = csv.writer(f)
                             writer.writerow([os.path.basename(s_p), idx + 1, round(area, 2), round(np.mean(rh), 2)])
-                    except IOError as e:
+                    except OSError as e:
                         QMessageBox.warning(self, "Export Warning", f"Image saved but log write failed:\n{e}")
 
     # =========================================================================
@@ -249,7 +257,7 @@ class AnnotationMixin:
         if not os.path.exists(af):
             return
         try:
-            with open(af, 'r', encoding='utf-8') as f:
+            with open(af, encoding='utf-8') as f:
                 raw = json.load(f)
             if not isinstance(raw, dict):
                 return

@@ -13,8 +13,8 @@
 # =============================================================================
 
 import numpy as np
-from PySide6.QtWidgets import QMessageBox, QFileDialog
 from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 
 class CompareMixin:

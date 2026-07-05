@@ -10,13 +10,31 @@
 # =============================================================================
 
 import os
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-                               QSlider, QSpinBox, QLabel, QGroupBox, QFormLayout,
-                               QSplitter, QCheckBox, QComboBox, QFrame, QGridLayout,
-                               QButtonGroup, QTabWidget, QRadioButton, QSizePolicy)
+
 from PySide6.QtCore import Qt
-from graphics_view import MedicalGraphicsView
+from PySide6.QtWidgets import (
+    QButtonGroup,
+    QCheckBox,
+    QComboBox,
+    QFormLayout,
+    QFrame,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QRadioButton,
+    QSizePolicy,
+    QSlider,
+    QSpinBox,
+    QSplitter,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
 from constants import AXIAL, MANUAL_TRACK_LABEL
+from graphics_view import MedicalGraphicsView
 
 
 class UiBuilderMixin:
@@ -26,9 +44,9 @@ class UiBuilderMixin:
         """从 style.qss 加载暗色主题样式表；文件缺失时静默跳过，UI 仍可用 Qt 默认样式渲染。"""
         qss_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "style.qss")
         try:
-            with open(qss_path, 'r', encoding='utf-8') as f:
+            with open(qss_path, encoding='utf-8') as f:
                 self.setStyleSheet(f.read())
-        except IOError as e:
+        except OSError as e:
             print(f"Warning: failed to load style.qss: {e}")
 
 
@@ -354,7 +372,7 @@ class UiBuilderMixin:
 
     def create_independent_view(self, vid, plane=AXIAL):
         c = QFrame(); c.setObjectName("ViewContainer"); lay = QVBoxLayout(c); lay.setContentsMargins(0,0,0,0); lay.setSpacing(0)
-        t = QFrame(); t.setObjectName("ViewToolbar"); t.setFixedHeight(32) 
+        t = QFrame(); t.setObjectName("ViewToolbar"); t.setFixedHeight(32)
         tl = QHBoxLayout(t); tl.setContentsMargins(8,2,8,2); tl.setSpacing(6)
         lt = QLabel(f"V{vid}"); lt.setStyleSheet("color: #C9D1D9; font-weight: bold; min-width: 20px;")
         cb_plane = QComboBox(); cb_plane.setFixedWidth(80)
@@ -364,7 +382,7 @@ class UiBuilderMixin:
         tl.addWidget(lt); tl.addWidget(cb_plane); tl.addWidget(ps); tl.addStretch(); tl.addWidget(an); tl.addWidget(lk)
         v = MedicalGraphicsView(vid)
         v.clicked_pos.connect(lambda p, id=vid: self.measure_hu(p, id))
-        v.wheel_scrolled.connect(lambda d, id=vid: self.on_wheel_mpr(d, id)) 
+        v.wheel_scrolled.connect(lambda d, id=vid: self.on_wheel_mpr(d, id))
         v.annotation_added.connect(self.handle_annotation_added)
         v.annotation_deleted.connect(self.handle_annotation_deleted)
         v.crop_requested.connect(lambda pts, id=vid: self.handle_crop_requested(id, pts))

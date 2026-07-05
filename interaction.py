@@ -11,6 +11,7 @@
 # =============================================================================
 
 from PySide6.QtCore import Qt, QTimer
+
 from constants import AXIAL, CORONAL, SAGITTAL, TOOL_POINTER
 
 
@@ -18,7 +19,7 @@ class InteractionMixin:
     """Cine 播放与 MPR 联动 / 导航交互方法集合，混入 MedicalViewer。"""
 
     def on_mpr_toggled(self, checked):
-        self.update_language() 
+        self.update_language()
         if checked:
             default_planes = [0, AXIAL, CORONAL, SAGITTAL, AXIAL]
             for vid, v in self.views.items(): v['cb_plane'].setCurrentIndex(default_planes[vid])
@@ -77,7 +78,7 @@ class InteractionMixin:
         # 刷新所有平面图像到新光标位置（真正的 MPR 联动，而非仅移动十字线）
         self.update_display()
         # 十字线须在 update_display 之后重画（set_image 会重置线段坐标）
-        for v_id, vdata in self.views.items():
+        for vdata in self.views.values():
             if vdata['container'].isHidden():
                 continue
             p = vdata['plane']
@@ -149,7 +150,7 @@ class InteractionMixin:
     def measure_hu(self, p, vid):
         if self.active_tool == TOOL_POINTER and self.volume_hu is not None and not self.recon_mode_active and not self.compare_mode_active:
             vd = self.views.get(vid); c = vd['view'].get_real_coordinates(p); plane = vd['plane']
-            if c: 
+            if c:
                 try:
                     if plane == AXIAL: val = self.volume_hu[self.current_3d_pos[0], c[1], c[0]]
                     elif plane == CORONAL: val = self.volume_hu[c[1], self.current_3d_pos[1], c[0]]

@@ -5,13 +5,18 @@
 #       完成/进度经 Qt 信号（QueuedConnection）投递回主线程更新 UI
 # =============================================================================
 
+from __future__ import annotations
+
 import os
-import time
 import threading
+import time
+from collections.abc import Callable
+
 import numpy as np
 import scipy.ndimage as ndimage
 from PySide6.QtCore import QObject, Signal
-from constants import MODEL_PATH, LUNG_FALLBACK_LABEL
+
+from constants import LUNG_FALLBACK_LABEL, MODEL_PATH
 
 
 class _AISignals(QObject):
@@ -34,7 +39,7 @@ except ImportError:
 _SESSION_CACHE = {}
 
 
-def _get_session(model_path):
+def _get_session(model_path: str):
     sess = _SESSION_CACHE.get(model_path)
     if sess is None:
         so = ort.SessionOptions()
@@ -48,7 +53,10 @@ def _get_session(model_path):
 class AutoAIEngineThread:
     """在后台线程中执行 AI 多器官分割推理，完成后通过 Qt 信号安全回调主线程。"""
 
-    def __init__(self, volume_hu, callback, model_path=MODEL_PATH, progress_callback=None):
+    def __init__(self, volume_hu: np.ndarray,
+                 callback: Callable[[np.ndarray, float], None],
+                 model_path: str = MODEL_PATH,
+                 progress_callback: Callable[[int, int], None] | None = None) -> None:
         # volume_hu: 完整的 3D HU 值体素数组，shape=(Z, H, W)，float32
         # callback: 推理完成后调用，签名为 callback(label_map, elapsed_ms)
         #           label_map 为 uint8 多类标签图（0=背景，1-24=器官类别）
@@ -70,19 +78,19 @@ class AutoAIEngineThread:
         # 滑窗循环在下一个 z 块边界提前退出并放弃回调，及时释放内存。
         self._cancelled = False
 
-    def start(self):
+    def start(self) -> None:
         # daemon=True 确保主窗口关闭后不会因后台线程阻塞进程退出
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
-    def cancel(self):
+    def cancel(self) -> None:
         """作废本次推理：滑窗循环会在下一个 z 块边界停止，且不再触发完成回调。"""
         self._cancelled = True
 
-    def isRunning(self):
+    def isRunning(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
-    def _run(self):
+    def _run(self) -> None:
         """推理主体，运行在后台线程，严禁在此处操作任何 Qt 对象（非线程安全）。"""
         start_t = time.perf_counter()
 
@@ -154,7 +162,7 @@ class AutoAIEngineThread:
         # 经信号跨线程投递到主线程（QueuedConnection），安全更新 Qt UI
         self._signals.finished.emit(final_mask, (end_t - start_t) * 1000)
 
-    def _run_onnx_multiorgan(self, norm_vol):
+    def _run_onnx_multiorgan(self, norm_vol: np.ndarray) -> np.ndarray | None:
         """ONNX 多器官分割推理，返回 uint8 标签图（0=背景，1-24=器官类别）。
 
         关键约束（均由对 organs.onnx 的实测确定）：

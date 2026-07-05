@@ -18,14 +18,15 @@
 # 产出：experiments/results/ 下的 PNG 图与 CSV 表（可直接放进技术报告）。
 # =============================================================================
 
+import csv
 import os
 import sys
-import csv
 import warnings
 
+import matplotlib
 import numpy as np
 import scipy.ndimage as ndimage
-import matplotlib
+
 matplotlib.use("Agg")  # 无显示环境，仅出图片文件
 
 # 图表文字统一用英文：一来 matplotlib 默认字体（DejaVu Sans）无中文字形，
@@ -35,7 +36,7 @@ warnings.filterwarnings("ignore")
 np.seterr(all="ignore")
 import matplotlib.pyplot as plt
 from skimage.data import shepp_logan_phantom
-from skimage.metrics import structural_similarity, peak_signal_noise_ratio
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 # 让脚本能从 experiments/ 子目录导入项目根的 recon.py
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -219,7 +220,7 @@ def experiment_c(n=64, angle_range=180.0, n_projs=(30, 60, 90),
         art, _ = recon.compute_art(A, p_vec, n, art_iter)
         sirt, _ = recon.compute_sirt(A, p_vec, n, sirt_iter)
 
-        for m, img in zip(methods, [fbp, dmr, art, sirt]):
+        for m, img in zip(methods, [fbp, dmr, art, sirt], strict=False):
             rmse, *_ = roi_metrics(gt, img)
             results[m].append(rmse)
             recon_gallery[(m, npj)] = np.clip(img, 0, 1)
@@ -251,7 +252,7 @@ def experiment_c(n=64, angle_range=180.0, n_projs=(30, 60, 90),
     npj0 = n_projs[0]
     fig, axes = plt.subplots(1, 5, figsize=(13, 3))
     axes[0].imshow(gt, cmap="gray", vmin=0, vmax=1); axes[0].set_title("Ground truth")
-    for ax, m in zip(axes[1:], methods):
+    for ax, m in zip(axes[1:], methods, strict=False):
         img = recon_gallery[(m, npj0)]
         rmse = results[m][n_projs.index(npj0)]
         ax.imshow(img, cmap="gray", vmin=0, vmax=1)

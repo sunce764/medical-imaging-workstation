@@ -17,13 +17,14 @@
 # 产出：experiments/results/ 下 seg_confusion.png + seg_dice.csv + seg_mapping.md
 # =============================================================================
 
+import csv
 import os
 import sys
-import csv
 
-import numpy as np
-import nibabel as nib
 import matplotlib
+import nibabel as nib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -161,8 +162,8 @@ def main():
     good = [m for m in mapping if m[2] >= 0.2]
     with open(os.path.join(RESULTS, "seg_mapping.md"), "w") as f:
         f.write("# organs.onnx 标签映射（由 TotalSegmentator 真值实测恢复）\n\n")
-        f.write(f"数据: 单例 TotalSegmentator-CT-Lite（1.5mm 各向同性，thorax-abdomen-pelvis）。\n")
-        f.write(f"方法: GUI 同款滑窗推理 → 与真值逐标签 Dice，取每个输出标签重叠最大的真值器官。\n\n")
+        f.write("数据: 单例 TotalSegmentator-CT-Lite（1.5mm 各向同性，thorax-abdomen-pelvis）。\n")
+        f.write("方法: GUI 同款滑窗推理 → 与真值逐标签 Dice，取每个输出标签重叠最大的真值器官。\n\n")
         f.write("| our label | 实测器官 | Dice |\n|---|---|---|\n")
         for u, name, d in mapping:
             flag = "" if d >= 0.2 else "  ·低置信"

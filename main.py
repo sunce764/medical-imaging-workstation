@@ -10,27 +10,35 @@
 #   main.py         — MedicalViewer 主窗口 + 入口
 # =============================================================================
 
-import sys
+import json
 import os
 import re
-import json
-import time
-import pydicom           # 读取 DICOM 医学影像文件格式
-import numpy as np
+import sys
 from concurrent.futures import ThreadPoolExecutor
-from PySide6.QtWidgets import QApplication, QMainWindow, QFileDialog, QMessageBox
+
+import numpy as np
+import pydicom  # 读取 DICOM 医学影像文件格式
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox
 
 # 子模块导入
 from ai_engine import AutoAIEngineThread
-from recon_lab import ReconLabMixin
-from compare_lab import CompareMixin
 from annotation_lab import AnnotationMixin
-from ui_builder import UiBuilderMixin
+from compare_lab import CompareMixin
+from constants import (
+    AXIAL,
+    CORONAL,
+    LABEL_LUT,
+    LABELS_JSON,
+    MANUAL_TRACK_LABEL,
+    SAGITTAL,
+    TOOL_POINTER,
+)
 from interaction import InteractionMixin
-from constants import (TOOL_POINTER, AXIAL, CORONAL, SAGITTAL,
-                       LABEL_LUT, LABELS_JSON, MANUAL_TRACK_LABEL)
+from recon_lab import ReconLabMixin
+from ui_builder import UiBuilderMixin
+
 
 # AutoAIEngineThread → 已移至 ai_engine.py
 # =========================================================================
@@ -136,7 +144,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
                     14: ("右肺下叶", "Lung LL (R)"),
                     MANUAL_TRACK_LABEL: ("手动追踪", "Manual")}
         try:
-            with open(LABELS_JSON, 'r', encoding='utf-8') as f:
+            with open(LABELS_JSON, encoding='utf-8') as f:
                 data = json.load(f)
             names = {int(k): (v.get("name_zh", f"类{k}"), v.get("name_en", f"cls{k}"))
                      for k, v in data.get("labels", {}).items()}
@@ -180,7 +188,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             self.tool_btns[key].setToolTip(tip_en if e else tip_cn)
         self.btn_import.setText("Load DICOM Folder" if e else "加载 DICOM 目录")
         self.btn_save_proj.setText("Save Project" if e else "保存标注工程")
-        
+
         self.tabs.setTabText(0, "Clinical Mode" if e else "临床阅片")
         self.tabs.setTabText(1, "Recon Lab" if e else "重建实验室")
 
@@ -203,7 +211,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.btn_dmr.setText("Direct Matrix Recon (DMR)" if e else "直接矩阵重建 (DMR)")
         self.btn_art.setText("ART / SIRT Iterative" if e else "ART / SIRT 迭代重建")
         self.grp_mon.setTitle("Performance Monitor" if e else "算法性能监控")
-        
+
         if "耗时: --" in self.lbl_time.text() or "Time: --" in self.lbl_time.text():
             self.lbl_time.setText("Run Time: -- ms" if e else "运行耗时: -- ms")
 
@@ -217,20 +225,20 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.lbl_disclaimer.setText("⚠ AI results & organ labels are auto-inferred — for reference only, not for diagnosis."
                                     if e else "⚠ AI 结果与器官标签为自动推断，仅供参考，非诊断依据。")
         self._update_organ_stats()  # 语言切换后按新语言重渲染定量面板
-        
+
         if self._ai_state == 'standby':
             self.lbl_ai_status.setText("Status: Standby" if e else "状态: 待机中")
         elif self._ai_state == 'running':
             self.lbl_ai_status.setText("Processing AI Pipeline..." if e else "状态: AI 引擎自动运算中...")
         elif self._ai_state == 'done':
             self.lbl_ai_status.setText(self._ai_done_text())
-            
+
         mpr_on = self.btn_mpr.isChecked()
         self.btn_mpr.setText(("MPR Link: ON" if mpr_on else "MPR Link: OFF") if e else ("MPR 联动: 开启" if mpr_on else "MPR 联动: 关"))
         opts = ["1x1 Single", "1x2 Dual", "2x2 Grid"] if e else ["单窗模式 (1x1)", "双窗对比 (1x2)", "四窗矩阵 (2x2)"]
         ci = max(0, self.combo_layout.currentIndex()); self.combo_layout.blockSignals(True); self.combo_layout.clear(); self.combo_layout.addItems(opts); self.combo_layout.setCurrentIndex(ci); self.combo_layout.blockSignals(False)
         p_en, p_cn = ["Lung","Medi","Bone","Vasc","Abdo","Brain"], ["肺窗","纵隔","骨窗","血管","腹部","脑窗"]
-        for b, n in zip(self.preset_btns, p_en if e else p_cn): b.setText(n)
+        for b, n in zip(self.preset_btns, p_en if e else p_cn, strict=False): b.setText(n)
         self.btn_clear_anno.setText("Clear Mask" if e else "清空蒙版与标注")
         self.btn_reset.setText("Reset Workspace" if e else "重置工作区")
         self.btn_compare.setText(("Exit Compare" if self.compare_mode_active else "Load Comparison") if e
@@ -242,12 +250,12 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         for _nm, _ms in ((("Slow" if e else "慢"), 250), (("Med" if e else "中"), 120), (("Fast" if e else "快"), 50)):
             self.cb_cine_speed.addItem(_nm, _ms)
         self.cb_cine_speed.setCurrentIndex(cs); self.cb_cine_speed.blockSignals(False)
-        
+
         v_en = ["Global", "Lung", "Medi", "Bone", "Vasc", "Abdo", "Brain"]
         v_cn = ["跟随", "肺窗", "纵隔", "骨窗", "血管", "腹部", "脑窗"]
         plane_en = ["Axial", "Coronal", "Sagittal"]
         plane_cn = ["横断面", "冠状面", "矢状面"]
-        
+
         for vdata in self.views.values():
             curr_p = max(0, vdata['plane'])
             vdata['cb_plane'].blockSignals(True); vdata['cb_plane'].clear(); vdata['cb_plane'].addItems(plane_en if e else plane_cn); vdata['cb_plane'].setCurrentIndex(curr_p); vdata['cb_plane'].blockSignals(False)
@@ -387,7 +395,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # DMR/ART 只要有 DICOM 数据就可以运行（不依赖弦图）
         has_data = self.volume_hu is not None
         for b in [self.btn_dmr, self.btn_art]: b.setEnabled(has_data)
-        for vid, v in self.views.items():
+        for v in self.views.values():
             v['cb_plane'].setCurrentIndex(AXIAL)
             v['preset'].setCurrentIndex(0); v['lock'].setChecked(False)
             v['chk_anno'].setChecked(True)
@@ -566,7 +574,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         for f in frames:
             shape_count[f.shape] = shape_count.get(f.shape, 0) + 1
         dom = max(shape_count, key=shape_count.get)
-        pairs = [(f, k) for f, k in zip(frames, kept) if f.shape == dom]
+        pairs = [(f, k) for f, k in zip(frames, kept, strict=False) if f.shape == dom]
         self.dicom_datasets = [k for _, k in pairs]
         self._refresh_patient_info()   # 按脱敏状态填患者面板
         self.volume_hu = np.array([f for f, _ in pairs])
@@ -683,7 +691,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # SliceThickness 用于冠/矢状面像素宽高比计算；若缺失/为空则估算为 px_sp×3（典型螺旋 CT 值）
         slice_thick = self._dcm_float(ds, 'SliceThickness', px_sp * 3)
 
-        for vid, vdata in self.views.items():
+        for vdata in self.views.values():
             if vdata['container'].isHidden():
                 continue
             self._render_clinical_plane(vdata, z, y, x, ww_m, wl_m, px_sp, slice_thick)
@@ -871,4 +879,3 @@ if __name__ == "__main__":
     window = MedicalViewer()
     window.show()
     sys.exit(app.exec())
-    

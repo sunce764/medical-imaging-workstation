@@ -6,6 +6,18 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Ruff lint
+        run: |
+          python -m pip install --upgrade pip ruff
+          ruff check .
+
   test:
     runs-on: ubuntu-latest
     steps:
@@ -26,7 +38,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install coverage
+          pip install 'coverage[toml]'   # [toml] extra：Python 3.10 无 tomllib，读 pyproject 的 [tool.coverage] 需要它
 
       # CI 无真实患者数据 / 无 119MB 权重：SKIP_REAL_DATA=1 只跑数据无关的自包含测试
       # （合成 DICOM + /nonexistent.onnx 数学降级路径）。同时用 coverage 量化覆盖率。

@@ -6,17 +6,44 @@
 import math
 import uuid
 
-from PySide6.QtWidgets import (QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
-                               QGraphicsLineItem, QGraphicsTextItem, QGraphicsPolygonItem,
-                               QGraphicsRectItem, QGraphicsPathItem, QGraphicsEllipseItem,
-                               QGraphicsItem)
-from PySide6.QtCore import Qt, QPoint, QRectF, QLineF, QPointF, Signal, QTimer
-from PySide6.QtGui import (QMouseEvent, QPainter, QPen, QColor, QFont,
-                            QPolygonF, QBrush, QPainterPath, QPixmap, QTransform)
+from PySide6.QtCore import QLineF, QPoint, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QPolygonF,
+    QTransform,
+)
+from PySide6.QtWidgets import (
+    QGraphicsEllipseItem,
+    QGraphicsItem,
+    QGraphicsLineItem,
+    QGraphicsPathItem,
+    QGraphicsPixmapItem,
+    QGraphicsPolygonItem,
+    QGraphicsRectItem,
+    QGraphicsScene,
+    QGraphicsTextItem,
+    QGraphicsView,
+)
 
 # 常量集中定义在 constants.py，此模块只需要工具 ID（鼠标事件分发用）
-from constants import (TOOL_POINTER, TOOL_RULER, TOOL_DRAW, TOOL_CROP,
-                       TOOL_RECT_CROP, TOOL_AI_TRACK, TOOL_SEG_BRUSH, TOOL_SEG_ERASE, TOOL_ROI)
+from constants import (
+    TOOL_AI_TRACK,
+    TOOL_CROP,
+    TOOL_DRAW,
+    TOOL_POINTER,
+    TOOL_RECT_CROP,
+    TOOL_ROI,
+    TOOL_RULER,
+    TOOL_SEG_BRUSH,
+    TOOL_SEG_ERASE,
+)
 
 
 class ROIGraphicsItem(QGraphicsEllipseItem):

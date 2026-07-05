@@ -6,6 +6,10 @@
 #           让两侧都从中性模块导入，解开耦合。
 # =============================================================================
 
+import os as _os
+
+import numpy as _np
+
 # 工具栏工具 ID 枚举（用整数而非 Enum 方便与 QButtonGroup.idClicked 直接对接）
 # 前 6 个为原有工具；6/7=分割修正（画笔/橡皮）；8=椭圆 ROI 密度测量
 (TOOL_POINTER, TOOL_RULER, TOOL_DRAW, TOOL_CROP, TOOL_RECT_CROP, TOOL_AI_TRACK,
@@ -19,9 +23,6 @@ SAGITTAL = 2   # 矢状面：沿 X 轴切片，左右方向
 # =============================================================================
 # AI 多器官分割相关常量
 # =============================================================================
-import os as _os
-import numpy as _np
-
 # organs.onnx：25 类胸腹多器官分割模型（含 5 个肺叶类）。
 # 外部权重 organs.onnx.data 必须与 .onnx 同目录（ONNX 相对 onnx 文件路径解析）。
 MODEL_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "models", "organs.onnx")

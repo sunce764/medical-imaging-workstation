@@ -42,8 +42,12 @@ extend-exclude = [".matrix_cache"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
-# E402: 部分脚本需在 sys.path 注入后再 import（experiments）；B008/E741 个别处有意为之
-ignore = ["E741"]
+# 本库刻意采用紧凑单行风格（分号多语句、密集长行），非缺陷；故忽略纯排版类规则，
+# 让 ruff 专注真问题（未用导入 F、bug 模式 B、导入排序 I 等）。
+#   E501 长行 / E701,E702 一行多语句 —— 全库贯穿的既定风格
+#   E741 单字母变量名（如 l）/ E731 lambda 赋值（测试里作事件工厂）—— 局部有意为之
+#   UP031 printf 风格 %s —— 现存 %-格式化可用，不做机械现代化
+ignore = ["E501", "E701", "E702", "E741", "E731", "UP031"]
 
 [tool.ruff.lint.per-file-ignores]
 "experiments/*.py" = ["E402"]  # sys.path.insert 后再 import 项目模块
@@ -51,8 +55,11 @@ ignore = ["E741"]
 
 [tool.coverage.run]
 source = ["."]
-omit = ["tests/*", "experiments/*", "*/site-packages/*"]
+# 排除测试/实验，以及 PySide6/shiboken 注入进程、伪装成 CWD 下路径的虚拟模块
+omit = ["tests/*", "experiments/*", "*/site-packages/*", "pyscript", "shibokensupport/*"]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
+# 忽略多进程 spawn 子进程等留下的、无法定位源文件的幽灵条目（如 recon 的矩阵并行 worker）
+ignore_errors = true

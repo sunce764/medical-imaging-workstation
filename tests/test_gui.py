@@ -19,16 +19,14 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
 import numpy as np
-from PySide6.QtWidgets import QApplication, QMessageBox, QGraphicsView, QGraphicsTextItem
+from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QKeyEvent, QMouseEvent
-from PySide6.QtCore import Qt, QEvent, QPointF
+from PySide6.QtWidgets import QApplication, QGraphicsTextItem, QGraphicsView, QMessageBox
 
-import main as m
 import ai_engine
-import graphics_view as gv
+import main as m
+from constants import AXIAL, CORONAL, MANUAL_TRACK_LABEL, TOOL_POINTER
 from graphics_view import ROIGraphicsItem
-from constants import (AXIAL, CORONAL, MANUAL_TRACK_LABEL, TOOL_SEG_BRUSH,
-                       TOOL_ROI, TOOL_POINTER)
 
 # 静音弹窗，避免离屏阻塞
 QMessageBox.information = staticmethod(lambda *a, **k: None)
@@ -75,8 +73,8 @@ def test_startup(v):
     check(v.volume_hu is not None and v.volume_hu.shape[0] == 233, "自动加载主序列 (233 层)")
     check(len(v.tool_btns) == 9, "工具栏含 9 个工具 (指针/卡尺/画笔/矩形/套索/追踪/分割画笔/橡皮/ROI)")
     # 结构：重建/对比逻辑经 Mixin 混入（拆分 main.py 后的架构约束）
-    from recon_lab import ReconLabMixin
     from compare_lab import CompareMixin
+    from recon_lab import ReconLabMixin
     check(isinstance(v, ReconLabMixin), "MedicalViewer 混入 ReconLabMixin")
     check(all(hasattr(v, mth) for mth in
               ("generate_sinogram", "run_bp", "run_fbp", "run_dfr", "run_dmr", "run_art_sirt",
@@ -139,8 +137,8 @@ def test_prior_fixes(v, app):
     check(v._hidden_organs == set(), "加载后图例隐藏集合为空")
     # resize 不再 AttributeError（既有崩溃修复）
     try:
-        from PySide6.QtGui import QResizeEvent
         from PySide6.QtCore import QSize
+        from PySide6.QtGui import QResizeEvent
         v.views[1]['view'].resizeEvent(QResizeEvent(QSize(400, 400), QSize(300, 300)))
         check(True, "有图像时 resize 不崩 (_user_zoomed 已初始化)")
     except AttributeError as ex:
@@ -207,7 +205,7 @@ def test_roi(v, app):
 def test_mpr_ruler_spacing(v, app):
     """冠状/矢状面测距的行/列间距不得交换：垂直=Z→SliceThickness，水平→PixelSpacing。"""
     print("[MPR 测距间距轴向]")
-    from constants import AXIAL, CORONAL, SAGITTAL
+    from constants import CORONAL, SAGITTAL
     ds = v.dicom_datasets[0]
     px = v._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
     st = v._dcm_float(ds, 'SliceThickness', 1.0)
@@ -227,6 +225,7 @@ def test_mpr_aniso_aspect(v, app):
     """各向异性面按物理比例显示：Axial 变换均匀；Coronal 变换比例=ST/PS；坐标仍=体素。"""
     print("[MPR 各向异性显示比例]")
     from PySide6.QtCore import QPointF
+
     from constants import AXIAL, CORONAL
     ds = v.dicom_datasets[0]
     px = v._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
@@ -313,7 +312,6 @@ def test_compliance(v, app):
 
 def test_edge_cases(v, app):
     print("[边界/崩溃防护]")
-    z = v.current_3d_pos[0]
     v.volume_mask = np.zeros(v.volume_hu.shape, np.uint8)
     v.handle_seg_paint(1, [(200, 200)], False)
     # 换病例清撤销栈
@@ -353,7 +351,7 @@ def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_n
     n_frames>1 写多帧 DICOM；truncate=True 写截断的 PixelData（pixel_array 解码会抛）。"""
     import numpy as _np
     from pydicom.dataset import FileDataset, FileMetaDataset
-    from pydicom.uid import ExplicitVRLittleEndian, generate_uid, CTImageStorage
+    from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, generate_uid
     rows, cols = shape
     meta = FileMetaDataset()
     meta.MediaStorageSOPClassUID = CTImageStorage
@@ -391,7 +389,9 @@ def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_n
 def test_mixed_shape_dicom(app):
     """加载同序列/无 SeriesUID 但切片形状不一致的目录，不得崩溃（形状一致性过滤）。"""
     print("[混合形状 DICOM 加载防护]")
-    import tempfile, shutil
+    import shutil
+    import tempfile
+
     from pydicom.uid import generate_uid
     v2 = m.MedicalViewer(); app.processEvents()
     if v2.ai_thread:
@@ -475,7 +475,7 @@ def test_recon_finite(app):
 def test_malformed_annotations(v, app):
     """畸形/旧版本标注：渲染时逐条兜底不崩；加载 JSON 时过滤掉不合规条目。"""
     print("[畸形标注容错]")
-    import json, tempfile
+    import json
     z = v.current_3d_pos[0]
     saved = v.global_annotations
     # 1) 渲染层兜底：各种畸形直接塞进去刷新，不得崩
@@ -549,7 +549,9 @@ def test_close_cancels_ai(app):
 def test_malformed_pixels(app):
     """多帧 DICOM 展开为切片；坏片跳过不带崩整卷；全坏则优雅中止并恢复原序列（状态一致）。"""
     print("[多帧 / 坏片 / 全坏防护]")
-    import tempfile, shutil
+    import shutil
+    import tempfile
+
     from pydicom.uid import generate_uid
     vm = m.MedicalViewer(); app.processEvents()
     if vm.ai_thread:
@@ -593,7 +595,6 @@ def test_malformed_pixels(app):
 
     # 3) 全坏目录：优雅中止，保留上一次成功加载的序列，且 datasets 与 volume 一致
     prev_shape = vm.volume_hu.shape
-    prev_len = len(vm.dicom_datasets)
     d3 = tempfile.mkdtemp()
     try:
         _write_min_dcm(os.path.join(d3, "b.dcm"), (16, 16), generate_uid(), ipp_z=0, inst=1, truncate=True)
@@ -623,7 +624,9 @@ def test_empty_dicom_tags(app):
     """RescaleSlope/Intercept/PixelSpacing/SliceThickness 存在但为空(None)时，
     加载/定量不得因 float(None) 崩溃。"""
     print("[空数值标签 DICOM 防护]")
-    import tempfile, shutil
+    import shutil
+    import tempfile
+
     from pydicom.uid import generate_uid
     ve = m.MedicalViewer(); app.processEvents()
     if ve.ai_thread:
@@ -707,7 +710,9 @@ def test_export_path_safety(app):
 def test_dicom_sort_consistency(app):
     """部分切片缺 ImagePositionPatient 时，排序键须序列级统一，不得 z/InstanceNumber 混排。"""
     print("[DICOM 排序键一致性]")
-    import tempfile, shutil
+    import shutil
+    import tempfile
+
     from pydicom.uid import generate_uid
     vs = m.MedicalViewer(); app.processEvents()
     if vs.ai_thread:
@@ -734,7 +739,8 @@ def test_i18n_persistent(app):
     用独立 viewer，避免继承其它用例故意制造的越界状态。"""
     print("[i18n 持久控件完整性]")
     import re
-    from PySide6.QtWidgets import QLabel, QPushButton, QGroupBox, QCheckBox, QComboBox
+
+    from PySide6.QtWidgets import QCheckBox, QComboBox, QGroupBox, QLabel, QPushButton
     CJK = re.compile(r'[一-鿿]')
     vi = m.MedicalViewer(); app.processEvents()
     if vi.ai_thread:

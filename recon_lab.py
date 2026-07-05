@@ -12,10 +12,11 @@
 # =============================================================================
 
 import time
+
 import numpy as np
-from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QImage, QPixmap, QPainter
+from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 import recon as recon_lib
 

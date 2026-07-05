@@ -4,16 +4,20 @@
 # 调用方：MedicalViewer 的方法作为薄包装层，负责读取 UI 状态并展示结果
 # =============================================================================
 
-import os
-import time
+from __future__ import annotations
+
 import hashlib
 import inspect
 import multiprocessing as _mp
+import os
+import time
+from collections.abc import Callable
+
 import numpy as np
 import scipy.ndimage as ndimage
 from scipy.interpolate import LinearNDInterpolator
 from scipy.spatial import Delaunay
-from skimage.transform import radon, iradon
+from skimage.transform import iradon, radon
 
 # -------------------------------------------------------------------------
 # 模块级缓存（顶部集中声明，便于阅读时一眼看清全局可变状态）
@@ -39,13 +43,13 @@ _DFR_TRI_CACHE = {}
 # 系统矩阵并行 worker（必须是模块顶层函数，multiprocessing 才能 pickle）
 # -------------------------------------------------------------------------
 
-def _matrix_worker(args):
+def _matrix_worker(args: tuple) -> tuple[int, int, np.ndarray]:
     """计算系统矩阵 A 中 [start_j, end_j) 列对应像素的 Radon 贡献。
     子进程独立导入 skimage，避免父进程 Qt 状态被复制到子进程。
     """
     start_j, end_j, n, theta = args
-    from skimage.transform import radon as _radon
     import numpy as _np
+    from skimage.transform import radon as _radon
 
     # 先跑一次空图确定探测器数量
     n_rays = _radon(_np.zeros((n, n), dtype=_np.float32), theta=theta, circle=True).size
@@ -66,7 +70,7 @@ _WORKER_HASH = hashlib.sha1(
 ).hexdigest()[:8]
 
 
-def _purge_stale_matrix_cache():
+def _purge_stale_matrix_cache() -> None:
     """启动时清理 .matrix_cache/ 中哈希与当前 _WORKER_HASH 不匹配的过期文件。
 
     文件名规范：A_n{n}_na{na}_t{ts}_{te}_{hash8}.npy，其中 hash8 必须是 8 位十六进制；
@@ -101,7 +105,7 @@ _purge_stale_matrix_cache()
 # 正向投影
 # -------------------------------------------------------------------------
 
-def compute_sinogram(img_norm, theta):
+def compute_sinogram(img_norm: np.ndarray, theta: np.ndarray) -> np.ndarray:
     """对归一化图像执行 Radon 变换，返回弦图。
 
     img_norm: 归一化到 [0,1] 的 2D 浮点数组
@@ -112,7 +116,7 @@ def compute_sinogram(img_norm, theta):
     return radon(img_norm, theta=theta, circle=True)
 
 
-def make_theta(angle_range, n_proj=None):
+def make_theta(angle_range: float, n_proj: int | None = None) -> np.ndarray:
     """在 [0, angle_range) 度范围内均匀生成 n_proj 个投影角度。
 
     angle_range: 角度覆盖范围（度）。180 为 CT 完整半圈（对径投影冗余，覆盖完整）。
@@ -130,7 +134,7 @@ def make_theta(angle_range, n_proj=None):
 # BP / FBP
 # -------------------------------------------------------------------------
 
-def compute_bp(sinogram, theta):
+def compute_bp(sinogram: np.ndarray, theta: np.ndarray) -> np.ndarray:
     """纯反投影（不滤波），返回重建图像。
 
     缺陷：低频分量被过度叠加，边缘极度模糊（星形伪影）。
@@ -140,7 +144,7 @@ def compute_bp(sinogram, theta):
     return iradon(sinogram, theta=theta, filter_name=None, circle=True)
 
 
-def compute_fbp(sinogram, theta, filter_name):
+def compute_fbp(sinogram: np.ndarray, theta: np.ndarray, filter_name: str) -> tuple[np.ndarray, np.ndarray]:
     """滤波反投影（FBP），返回 (recon_bp_unfiltered, recon_fbp)。
 
     同时返回未滤波结果供对比展示，避免调用方重复计算。
@@ -159,7 +163,7 @@ def compute_fbp(sinogram, theta, filter_name):
 # DFR（直接傅里叶重建）
 # -------------------------------------------------------------------------
 
-def compute_dfr(sinogram, theta):
+def compute_dfr(sinogram: np.ndarray, theta: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """直接傅里叶重建法（DFR），基于傅里叶中心切片定理。
 
     返回: (freq_domain_2d, fft_1d_display, recon_dfr)
@@ -227,7 +231,7 @@ def compute_dfr(sinogram, theta):
 # 辅助：小图准备 / 上采样
 # -------------------------------------------------------------------------
 
-def _finite_clip(arr, n):
+def _finite_clip(arr: np.ndarray, n: int) -> np.ndarray:
     """把重建结果整理为可显示的有限 [0,1] 图：先中和 NaN/±Inf，再 clip 到 [0,1]，reshape 成 n×n。
     对齐 DFR 已有做法（compute_dfr 里对频域先 nan_to_num）。DMR/ART/SIRT 若遇病态/损坏输入
     （如弦图混入非有限值）会产出 NaN，而 np.clip 对 NaN 无效——NaN 会静默变黑图并污染 RMSE。
@@ -236,7 +240,7 @@ def _finite_clip(arr, n):
     return np.clip(a, 0.0, 1.0).astype(np.float32)
 
 
-def _circle_mask(n):
+def _circle_mask(n: int) -> np.ndarray:
     """返回 n×n 的圆形掩码（内切圆内为 1，圆外为 0），float32。同 n 直接复用缓存。"""
     m = _CIRCLE_MASK_CACHE.get(n)
     if m is None:
@@ -247,7 +251,8 @@ def _circle_mask(n):
     return m
 
 
-def prepare_small_image(img_norm, n, angle_range, n_proj=None):
+def prepare_small_image(img_norm: np.ndarray, n: int, angle_range: float,
+                        n_proj: int | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """将归一化图像缩小为 n×n，施加圆形掩码后执行 Radon 变换。
 
     img_norm:    归一化到 [0,1] 的 2D 浮点数组（原始切片）
@@ -279,7 +284,7 @@ def prepare_small_image(img_norm, n, angle_range, n_proj=None):
     return img_small, sinogram, theta
 
 
-def upscale_recon(arr, n):
+def upscale_recon(arr: np.ndarray, n: int) -> np.ndarray:
     """用 np.kron 做最近邻整数倍上采样，将小图放大到至少 256×256 显示。
 
     选择 kron 而非 zoom/resize 的原因：
@@ -298,7 +303,10 @@ def upscale_recon(arr, n):
 # 系统矩阵构建
 # -------------------------------------------------------------------------
 
-def build_system_matrix(n, theta, cached_A, cached_A_key, progress_cb=None):
+def build_system_matrix(n: int, theta: np.ndarray, cached_A: np.ndarray | None,
+                        cached_A_key: tuple | None,
+                        progress_cb: Callable[[int, int], None] | None = None
+                        ) -> tuple[np.ndarray, tuple]:
     """逐像素构建系统矩阵 A，用于 DMR 和 ART/SIRT。
 
     n:          图像边长（A 的列数 = n²）
@@ -370,7 +378,7 @@ def build_system_matrix(n, theta, cached_A, cached_A_key, progress_cb=None):
 # DMR（直接矩阵重建）
 # -------------------------------------------------------------------------
 
-def compute_dmr(A, p_vec, n):
+def compute_dmr(A: np.ndarray, p_vec: np.ndarray, n: int) -> tuple[np.ndarray, float]:
     """用最小二乘法求解 A·x = p，返回 (img_recon, error_time_ms)。
 
     A:     系统矩阵，shape=(n_rays, n²)
@@ -399,7 +407,9 @@ def compute_dmr(A, p_vec, n):
 # ART / SIRT 迭代重建
 # -------------------------------------------------------------------------
 
-def compute_art(A, p_vec, n, n_iter, cancel_check=None, progress_cb=None):
+def compute_art(A: np.ndarray, p_vec: np.ndarray, n: int, n_iter: int,
+                cancel_check: Callable[[], bool] | None = None,
+                progress_cb: Callable[[int], None] | None = None) -> tuple[np.ndarray, float]:
     """ART（Kaczmarz 迭代）重建，返回 (img_recon, elapsed_ms)。
 
     A:           系统矩阵，shape=(n_rays, n²)
@@ -438,7 +448,9 @@ def compute_art(A, p_vec, n, n_iter, cancel_check=None, progress_cb=None):
     return img_recon, elapsed_ms
 
 
-def compute_sirt(A, p_vec, n, n_iter, cancel_check=None, progress_cb=None):
+def compute_sirt(A: np.ndarray, p_vec: np.ndarray, n: int, n_iter: int,
+                 cancel_check: Callable[[], bool] | None = None,
+                 progress_cb: Callable[[int], None] | None = None) -> tuple[np.ndarray, float]:
     """SIRT（同步迭代重建）重建，返回 (img_recon, elapsed_ms)。
 
     SIRT 更新公式（批量全射线更新）：
