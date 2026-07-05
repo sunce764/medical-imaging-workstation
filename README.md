@@ -1,5 +1,7 @@
 # 医学影像工作站 Pro + 重建实验室
 
+[![CI](https://github.com/sunce764/medical-imaging-workstation/actions/workflows/ci.yml/badge.svg)](https://github.com/sunce764/medical-imaging-workstation/actions/workflows/ci.yml)
+
 基于 **PySide6 (Qt6)** 的桌面 CT 影像工作站，集成 **AI 多器官分割**、临床阅片工具与 **CT 断层重建教学实验室**。
 
 > **定位声明**：本软件是**影像教学 / 科研工具**，**不是经认证的医疗器械，不得用于临床诊断**。AI 分割结果与器官定量为自动推断，仅供参考。
@@ -110,13 +112,19 @@ experiments/       量化研究（重建剂量-质量权衡 + AI 分割 Dice 验
 
 ---
 
-## 测试
+## 测试与质量
 
 ```bash
-python tests/test_gui.py
+python tests/test_gui.py                     # 完整回归（80 项，需同目录 肺癌/ 真实数据）
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 仅数据无关子集（CI 用，无需真实数据/权重）
+ruff check .                                 # 静态检查
+coverage run tests/test_gui.py && coverage report   # 覆盖率
 ```
 
-离屏 Qt 运行，覆盖 AI 引擎、历次修复、多器官分割/编辑、ROI 拖缩、双序列配准、Cine、合规等。退出码 0 = 全部通过。
+- 离屏 Qt 运行，覆盖 AI 引擎、历次修复、多器官分割/编辑、ROI 拖缩、双序列配准、Cine、合规等。退出码 0 = 全部通过。
+- **CI**（`.github/workflows/ci.yml`）：每次 push/PR 在 Ubuntu 跑 `ruff` + 数据无关测试子集（离屏 Qt，无需真实数据或 119MB 权重）。
+- **覆盖率**：完整套件 **≈66%**（`constants`/`ui_builder` 99–100%，`main`/`ai_engine` 81%；交互/图形/重建类含大量鼠标事件与算法路径，`recon.py` 的完整 FBP/DFR 由 [`experiments/`](experiments/README.md) 另行覆盖）。
+- `recon.py`/`ai_engine.py` 为纯计算/无 Qt 模块，已加完整类型注解。
 
 ---
 
