@@ -106,6 +106,11 @@ python tests/test_gui.py
 
 ---
 
+## 技术报告与量化研究
+
+- **技术报告**（英文）：[docs/technical_report.md](docs/technical_report.md) —— 两组量化研究（低剂量重建剂量-质量权衡 / AI 分割 Dice 验证与出处确证）的方法、图表、结论。
+- **可复现实验**：[experiments/](experiments/README.md) —— 脚本 + 图表 + CSV。
+
 ## 变更记录
 
 历次缺陷排查与修复的审查小结见 [CHANGELOG.md](CHANGELOG.md)。
