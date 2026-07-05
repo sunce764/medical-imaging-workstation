@@ -6,6 +6,21 @@
 
 ---
 
+## Overview (English)
+
+A desktop **CT imaging workstation** (PySide6/Qt6, ~4,700 lines of Python) that combines a clinical DICOM reader, a **from-scratch tomographic reconstruction laboratory**, and an **AI multi-organ segmentation** pipeline — built as a teaching/research tool (not a certified medical device).
+
+Beyond the application, the repository contains **two reproducible quantitative studies** that turn the built-in algorithms into measured findings:
+
+- **Low-dose reconstruction — dose–quality tradeoffs.** On the Shepp-Logan phantom, reconstruction error saturates beyond ≈180 views; the optimal FBP filter *inverts* with dose (smoothing filters win at sparse angles, the sharp Ram-Lak wins at dense angles); and under Poisson photon noise a constrained iterative solver (ART) is most robust while naive least-squares inversion becomes unstable near the square-system regime.
+- **AI segmentation — provenance recovery & Dice validation.** By running the shipped ONNX model on one ground-truth-labelled public CT and computing a label-overlap confusion matrix, the undocumented model is identified as **TotalSegmentator v2 `class_map_part_organs`** (nnU-Net v2), with **mean Dice ≈ 0.92** over 21 organs — simultaneously validating the inference pipeline and correcting two label errors.
+
+📄 **Read the [technical report](docs/technical_report.md)** (methods, figures, results) · 🧪 **Reproduce via [`experiments/`](experiments/README.md)**.
+
+Highlights: mixin-decomposed architecture (6 cohesive modules), an 80-check offscreen-Qt regression suite, defensive DICOM handling, and reconstruction algorithms (Radon / FBP / DFR / ART / SIRT) implemented from first principles.
+
+---
+
 ## 功能概览
 
 ### 临床阅片
@@ -114,3 +129,21 @@ python tests/test_gui.py
 ## 变更记录
 
 历次缺陷排查与修复的审查小结见 [CHANGELOG.md](CHANGELOG.md)。
+
+---
+
+## 第三方组件 · Acknowledgements
+
+本项目在自研代码之外集成了以下第三方成果，其著作权/许可归各自作者所有：
+
+- **AI 分割模型**：`models/organs.onnx` 为 **TotalSegmentator v2**（Wasserthal et al., *Radiology: AI*, 2023；基于 **nnU-Net v2**，Isensee et al., *Nature Methods*, 2021）的 `class_map_part_organs` 导出图。**模型权重（`organs.onnx.data`）未随本仓库分发**，其许可以 TotalSegmentator 官方为准。
+- **验证数据**：分割验证使用公开的 **TotalSegmentator-CT-Lite**（CC-BY-4.0）单例，**未随本仓库分发**。
+- **框架/库**：PySide6 (Qt for Python, LGPL)、pydicom、NumPy、SciPy、scikit-image、ONNX Runtime、nibabel。
+
+自研代码（`main.py`、`recon.py`、`graphics_view.py`、`ai_engine.py`、各 `*_lab.py`、`ui_builder.py`、`interaction.py`、`experiments/` 等）为本人独立编写。
+
+## 版权 · Copyright
+
+© 2026 仓库所有者（sunce764）。**保留所有权利 / All rights reserved.**
+
+本仓库为个人教学/科研与作品集用途，**未授予**任何开源复制、修改或再分发许可；如需使用请联系作者。第三方组件依其各自许可。

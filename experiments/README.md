@@ -17,6 +17,8 @@ python experiments/recon_study.py a b c      # 全跑
 
 产出写入 `experiments/results/`：每个实验一张 PNG 图 + 一份 CSV 原始数据。
 
+> 复现依赖（App 之外）：`pip install -r experiments/requirements-experiments.txt`（matplotlib / nibabel / remotezip）。
+
 ## 方法
 
 - **体模**：`skimage` Shepp-Logan，缩放至目标边长、归一化 `[0,1]`、施加与 `radon(circle=True)` 对齐的圆形掩码。掩码后的图即真值(GT)——正弦图只编码内切圆内信息，故仅在圆内比较。

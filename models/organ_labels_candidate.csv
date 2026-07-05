@@ -1,26 +1,26 @@
-class_id,name_zh,name_en,confidence,evidence
-0,背景,background,确定,-
-1,主动脉/大血管,aorta_great_vessel,低,"胸部背侧脊柱旁,HU~89血液密度,体素少"
-2,未知,unknown_02,无数据,本胸部数据未出现
-3,未知,unknown_03,无数据,本胸部数据未出现
-4,未知,unknown_04,无数据,本胸部数据未出现
-5,心脏,heart,高,"胸中部·前·中央,HU~59,大体积562k"
-6,肠道/直肠气体,bowel_gas,低,"盆腔·纯气HU-972,体素少(扫描边缘)"
-7,未知,unknown_07,无数据,本胸部数据未出现
-8,未知,unknown_08,无数据,本胸部数据未出现
-9,未知,unknown_09,无数据,本胸部数据未出现
-10,右肺叶,right_lung_lobe,高,"胸部·解剖右,HU-872,体积1.98M"
-11,右肺叶,right_lung_lobe,高,"胸部·解剖右,HU-895,体积0.92M"
-12,左肺叶,left_lung_lobe,高,"胸部·解剖左,HU-873,体积1.47M"
-13,左肺叶,left_lung_lobe,高,"胸部·解剖左,HU-896,体积0.76M"
-14,左肺叶,left_lung_lobe,高,"胸部·解剖左,HU-890,体积1.39M"
-15,颈部/胸廓入口软组织(甲状腺?),neck_soft_tissue,低,"最头侧·前中央,HU-23,体素少"
-16,气管,trachea,中,"头侧·中央·纯气HU-1024,细长管道"
-17,未知,unknown_17,无数据,本胸部数据未出现
-18,脾,spleen,中,"上腹·解剖左,HU~45软组织"
-19,膀胱?,urinary_bladder,低,"盆腔·前中央,HU~14,体素少"
-20,胃,stomach,中,上腹·中央·含气HU-676
-21,肝,liver,中,"上腹·解剖右,大器官但HU跨度大(含气混入)"
-22,骨/乙状结肠?,bone_or_colon,低,"盆腔·背侧解剖左,体素极少"
-23,肾/肾上腺?,kidney_or_adrenal,低,"上腹·解剖右,HU~75,体素极少"
-24,未知,unknown_24,无数据,本胸部数据未出现
+class_id,name_zh,name_en,confidence,dice,evidence
+0,背景,Background,确证,,-
+1,脾,Spleen,确证,0.966,TS 真值实测 Dice 0.966
+2,右肾,Kidney (R),确证,0.985,TS 真值实测 Dice 0.985
+3,左肾,Kidney (L),确证,0.977,TS 真值实测 Dice 0.977
+4,胆囊,Gallbladder,确证,0.818,TS 真值实测 Dice 0.818
+5,肝,Liver,确证,0.945,TS 真值实测 Dice 0.945（纠正旧误标『心脏』）
+6,胃,Stomach,确证,0.84,TS 真值实测 Dice 0.840
+7,胰腺,Pancreas,确证,0.859,TS 真值实测 Dice 0.859
+8,右肾上腺,Adrenal (R),确证,0.938,TS 真值实测 Dice 0.938
+9,左肾上腺,Adrenal (L),确证,0.924,TS 真值实测 Dice 0.924
+10,左肺上叶,Lung UL (L),确证,0.991,TS 真值实测 Dice 0.991
+11,左肺下叶,Lung LL (L),确证,0.991,TS 真值实测 Dice 0.991
+12,右肺上叶,Lung UL (R),确证,0.967,TS 真值实测 Dice 0.967
+13,右肺中叶,Lung ML (R),确证,0.956,TS 真值实测 Dice 0.956
+14,右肺下叶,Lung LL (R),确证,0.99,TS 真值实测 Dice 0.990
+15,食管,Esophagus,确证,0.933,TS 真值实测 Dice 0.933
+16,气管,Trachea,确证,0.955,TS 真值实测 Dice 0.955
+17,甲状腺,Thyroid,确证,0.794,TS 真值实测 Dice 0.794
+18,小肠,Small Bowel,确证,0.91,TS 真值实测 Dice 0.910
+19,十二指肠,Duodenum,确证,0.895,TS 真值实测 Dice 0.895
+20,结肠,Colon,确证,0.855,TS 真值实测 Dice 0.855
+21,膀胱,Bladder,确证,0.871,TS 真值实测 Dice 0.871（纠正旧误标『肝』）
+22,前列腺,Prostate,确证(方案),,class_map_part_organs #22；本例真值无前列腺，身份由已证方案确定
+23,左肾囊肿,Kidney Cyst (L),确证(方案),,class_map_part_organs #23；本例真值无，身份由已证方案确定
+24,右肾囊肿,Kidney Cyst (R),确证(方案),,class_map_part_organs #24；本例真值无，身份由已证方案确定
