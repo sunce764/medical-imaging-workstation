@@ -21,9 +21,6 @@ dependencies = [
     "onnxruntime>=1.23",
 ]
 
-[project.scripts]
-medical-imaging-workstation = "main:main"
-
 [project.optional-dependencies]
 # 量化研究复现（App 运行不需要）
 experiments = ["matplotlib>=3.8", "nibabel>=5.0", "remotezip>=0.12"]
@@ -31,10 +28,13 @@ experiments = ["matplotlib>=3.8", "nibabel>=5.0", "remotezip>=0.12"]
 dev = ["ruff>=0.6", "coverage>=7.0"]
 
 [tool.setuptools]
-# 扁平模块布局（非 src/ 包）；显式列出以便 setuptools 正确打包
+# 扁平模块布局。本 pyproject 用于项目元数据、依赖声明与工具配置（ruff/coverage）。
+# 应用以脚本方式运行：`python main.py`（见 README）——非 pip 安装型 CLI：
+# style.qss / models / 标签 JSON 等资源按源码树相对路径定位，未打进 wheel。
 py-modules = [
     "main", "recon", "ai_engine", "constants", "graphics_view",
     "annotation_lab", "compare_lab", "interaction", "recon_lab", "ui_builder",
+    "quantify", "segmentation", "mpr_geometry",
 ]
 
 [tool.ruff]

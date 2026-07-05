@@ -78,7 +78,7 @@
 | CI + 打包 | 新增 `pyproject.toml`（元数据/依赖/工具配置）+ GitHub Actions（push/PR 跑 ruff + 数据无关测试子集，离屏 Qt，无需真实数据或 119MB 权重）；测试拆出 `SKIP_REAL_DATA` 子集使 CI 可跑 | `887e2f2` |
 | ruff + 类型注解 | 配置 ruff（忽略刻意的紧凑单行风格，专注真问题）+ 修全部真 lint；`recon.py`/`ai_engine.py` 加完整类型注解 | `029b572` |
 | i18n 表驱动 | `update_language` 由 ~110 行 `setText` 三元墙改为 `(控件, 英文, 中文)` 表 + `_retranslate_combo` 辅助，根治漏译风险 | `6b0530b` |
-| 入口去硬编码 | 删除启动硬编码自动加载 `肺癌/`（PHI 泄漏面）；改 `--data DIR` CLI 参数 + console 入口点，默认空载 | `9d4ff0b` |
+| 入口去硬编码 | 删除启动硬编码自动加载 `肺癌/`（PHI 泄漏面）；改 `--data DIR` CLI 参数（argparse 入口 `main()`），默认空载 | `9d4ff0b` |
 | 覆盖率量化 | coverage 接入 pyproject + CI；完整套件覆盖率 **≈66%** | `1486efb` |
 
 ### 架构解耦（3 块，累计 4 个无 Qt 纯计算模块）

@@ -10,7 +10,7 @@
 
 ## Overview (English)
 
-A desktop **CT imaging workstation** (PySide6/Qt6, ~4,700 lines of Python) that combines a clinical DICOM reader, a **from-scratch tomographic reconstruction laboratory**, and an **AI multi-organ segmentation** pipeline — built as a teaching/research tool (not a certified medical device).
+A desktop **CT imaging workstation** (PySide6/Qt6, ~4,100 lines of application Python across 13 modules) that combines a clinical DICOM reader, a **from-scratch tomographic reconstruction laboratory**, and an **AI multi-organ segmentation** pipeline — built as a teaching/research tool (not a certified medical device).
 
 Beyond the application, the repository contains **two reproducible quantitative studies** that turn the built-in algorithms into measured findings:
 
@@ -19,7 +19,7 @@ Beyond the application, the repository contains **two reproducible quantitative 
 
 📄 **Read the [technical report](docs/technical_report.md)** (methods, figures, results) · 🧪 **Reproduce via [`experiments/`](experiments/README.md)**.
 
-Highlights: mixin-decomposed architecture (6 cohesive modules), an 80-check offscreen-Qt regression suite, defensive DICOM handling, and reconstruction algorithms (Radon / FBP / DFR / ART / SIRT) implemented from first principles.
+Highlights: modular architecture (God-object decomposed into 5 UI mixins + 4 Qt-free compute modules that are unit-tested in isolation), a **102-check** offscreen-Qt regression suite with CI, defensive DICOM handling, and reconstruction algorithms (Radon / FBP / DFR / ART / SIRT) implemented from first principles.
 
 ## 界面 · Screenshots
 
@@ -85,20 +85,25 @@ python main.py --data /path/to/dicom_dir   # 启动即加载指定 DICOM 目录�
 ## 目录结构
 
 ```
-main.py            主窗口 MedicalViewer + 入口（加载 / 临床阅片渲染 / 窗位·工具·布局·AI 调度 / i18n / 键盘导航）
-ui_builder.py      UiBuilderMixin —— 主窗口三栏布局与全部控件构建（左栏 / 视图栅格 / 右面板 / 两 Tab）
-interaction.py     InteractionMixin —— Cine 电影播放 + MPR 联动/导航（十字线同步 / 换层换面 / HU 探针）
+—— 主窗口与 UI 层（God object 拆分为 MedicalViewer 本体 + 5 个 Mixin）——
+main.py            主窗口 MedicalViewer + 入口（--data 加载 / 临床渲染 / 窗位·工具·布局·AI 调度 / i18n / 键盘导航）
+ui_builder.py      UiBuilderMixin —— 三栏布局与全部控件构建
+interaction.py     InteractionMixin —— Cine 播放 + MPR 联动/导航
 recon_lab.py       ReconLabMixin —— 重建实验室 UI 调度（投影 / BP / FBP / DFR / DMR / ART / SIRT）
-compare_lab.py     CompareMixin —— 双序列随访对比（加载既往序列 / 解剖配准 / 联动）
-annotation_lab.py  AnnotationMixin —— 标注/分割蒙版编辑/器官定量/工程持久化
+compare_lab.py     CompareMixin —— 双序列随访对比（解剖配准 / 联动）
+annotation_lab.py  AnnotationMixin —— 标注 / 分割蒙版编辑 / 器官定量 / 工程持久化
 ai_engine.py       AutoAIEngineThread —— 后台 AI 推理（滑窗 + 信号回调）
 graphics_view.py   MedicalGraphicsView —— 影像交互视图 + ROIGraphicsItem
-recon.py           纯计算重建算法（无 Qt 依赖）
+—— 无 Qt 依赖的纯计算模块（可脱离主窗口独立单测）——
+recon.py           重建算法（Radon / BP / FBP / DFR / DMR / ART / SIRT）
+quantify.py        器官定量（体积 mL / 平均 HU）
+segmentation.py    AI 数学降级（肺连通域分割）
+mpr_geometry.py    MPR 坐标换算 + 双序列 z 配准
 constants.py       工具/平面常量 + 多器官调色板
-style.qss          暗色主题
-models/organs.onnx 分割模型（外部权重 organs.onnx.data 需单独放置，见下）
-tests/test_gui.py  回归测试套件
-experiments/       量化研究（重建剂量-质量权衡 + AI 分割 Dice 验证），产出图表/CSV，见其 README
+—— 资源 / 工程化 ——
+style.qss          暗色主题　·　models/organs.onnx 分割模型图（外部权重未入库，见「模型说明」）
+tests/test_gui.py  回归测试套件（102 项）　·　experiments/ 量化研究 + 复现脚本/图表/CSV
+docs/              技术报告 + 预印本稿 + 截图　·　pyproject.toml 打包/工具配置　·　.github/workflows/ci.yml CI
 ```
 
 ---
@@ -115,7 +120,7 @@ experiments/       量化研究（重建剂量-质量权衡 + AI 分割 Dice 验
 ## 测试与质量
 
 ```bash
-python tests/test_gui.py                     # 完整回归（80 项，需同目录 肺癌/ 真实数据）
+python tests/test_gui.py                     # 完整回归（102 项，需同目录 肺癌/ 真实数据）
 SKIP_REAL_DATA=1 python tests/test_gui.py    # 仅数据无关子集（CI 用，无需真实数据/权重）
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report   # 覆盖率
@@ -123,7 +128,7 @@ coverage run tests/test_gui.py && coverage report   # 覆盖率
 
 - 离屏 Qt 运行，覆盖 AI 引擎、历次修复、多器官分割/编辑、ROI 拖缩、双序列配准、Cine、合规等。退出码 0 = 全部通过。
 - **CI**（`.github/workflows/ci.yml`）：每次 push/PR 在 Ubuntu 跑 `ruff` + 数据无关测试子集（离屏 Qt，无需真实数据或 119MB 权重）。
-- **覆盖率**：完整套件 **≈66%**（`constants`/`ui_builder` 99–100%，`main`/`ai_engine` 81%；交互/图形/重建类含大量鼠标事件与算法路径，`recon.py` 的完整 FBP/DFR 由 [`experiments/`](experiments/README.md) 另行覆盖）。
+- **覆盖率**：完整套件 **≈67%**（`constants`/`ui_builder` 99–100%，`main` 82% / `ai_engine` 87%；交互/图形/重建类含大量鼠标事件与算法路径覆盖较低，`recon.py` 的完整 FBP/DFR 由 [`experiments/`](experiments/README.md) 另行覆盖）。四个无 Qt 纯计算模块（`recon`/`quantify`/`segmentation`/`mpr_geometry`）均有脱离主窗口的独立单测。
 - `recon.py`/`ai_engine.py` 为纯计算/无 Qt 模块，已加完整类型注解。
 
 ---
@@ -160,7 +165,7 @@ coverage run tests/test_gui.py && coverage report   # 覆盖率
 - **验证数据**：分割验证使用公开的 **TotalSegmentator-CT-Lite**（CC-BY-4.0）单例，**未随本仓库分发**。
 - **框架/库**：PySide6 (Qt for Python, LGPL)、pydicom、NumPy、SciPy、scikit-image、ONNX Runtime、nibabel。
 
-自研代码（`main.py`、`recon.py`、`graphics_view.py`、`ai_engine.py`、各 `*_lab.py`、`ui_builder.py`、`interaction.py`、`experiments/` 等）为本人独立编写。
+自研代码（`main.py`、`recon.py`、`graphics_view.py`、`ai_engine.py`、各 `*_lab.py`、`ui_builder.py`、`interaction.py`、`quantify.py`、`segmentation.py`、`mpr_geometry.py`、`experiments/` 等）由本人设计、主导开发与验证。
 
 ## 版权 · Copyright
 
