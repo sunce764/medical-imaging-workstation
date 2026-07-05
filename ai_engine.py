@@ -13,10 +13,10 @@ import time
 from collections.abc import Callable
 
 import numpy as np
-import scipy.ndimage as ndimage
 from PySide6.QtCore import QObject, Signal
 
-from constants import LUNG_FALLBACK_LABEL, MODEL_PATH
+import segmentation
+from constants import MODEL_PATH
 
 
 class _AISignals(QObject):
@@ -114,46 +114,11 @@ class AutoAIEngineThread:
             return
 
         # === 路径2：纯数学算法降级（无模型文件或推理失败时自动启用）===
-        # 算法原理：肺部在 CT 中为低密度空气区域（HU < -300）
-        # 先找所有空气区域，剔除与图像边界相连的"体外空气"（背景），
-        # 剩余的内部空气连通域即为左右肺，取体积最大的两个。
+        # 逻辑已抽到 segmentation.segment_lungs_fallback（无 Qt，可独立单测）：
+        # 阈值取低密度空气 → 3D 连通域 → 剔除体表边界相连的体外空气 → 剩余内部空气取
+        # 最大(及≥其5%的次大)连通域为双肺。
         if final_mask is None:
-            try:
-                # 步骤1：阈值分割，提取所有低密度区域（空气 + 肺部）
-                air_mask = (self.volume_hu < -300).astype(np.uint8)
-
-                # 步骤2：3D 连通域标记，把相互接触的空气体素归为同一组
-                labels, _ = ndimage.label(air_mask)
-
-                # 步骤3：找出与六个边界面相交的连通域标签——这些是体外背景
-                border_labels = set(labels[0,:,:].flatten()) | set(labels[-1,:,:].flatten()) | \
-                                set(labels[:,0,:].flatten()) | set(labels[:,-1,:].flatten()) | \
-                                set(labels[:,:,0].flatten()) | set(labels[:,:,-1].flatten())
-
-                # 步骤4：从空气掩码中剔除所有边界连通域，留下纯内部空气（即肺）
-                internal_air = np.copy(air_mask)
-                for bl in border_labels:
-                    if bl != 0:
-                        internal_air[labels == bl] = 0
-
-                # 步骤5：对内部空气再次连通域标记，分离左右肺
-                labels_int, _ = ndimage.label(internal_air)
-                counts = np.bincount(labels_int.flatten())
-                counts[0] = 0  # 标签0是背景，排除在外
-
-                # 步骤6：取体积最大的连通域为主肺叶，若第二大超过主肺的 5% 则一并纳入（双肺）
-                final_mask = np.zeros_like(internal_air)
-                if len(counts) > 1:
-                    l1 = counts.argmax()
-                    final_mask[labels_int == l1] = LUNG_FALLBACK_LABEL
-                    max_vol = counts[l1]
-                    counts[l1] = 0
-                    if counts.max() > max_vol * 0.05:
-                        l2 = counts.argmax()
-                        final_mask[labels_int == l2] = LUNG_FALLBACK_LABEL
-            except Exception:
-                # 任何异常均返回全零掩码，保证 UI 不崩溃
-                final_mask = np.zeros_like(self.volume_hu, dtype=np.uint8)
+            final_mask = segmentation.segment_lungs_fallback(self.volume_hu)
 
         if self._cancelled:
             return  # 数学降级期间也可能被作废，退出前再确认一次

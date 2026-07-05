@@ -797,6 +797,23 @@ def test_quantify():
           "空蒙版返回空列表")
 
 
+def test_lung_fallback():
+    """AI 数学降级纯函数直接单测——合成体积，不构造推理线程/MedicalViewer。"""
+    print("[AI 数学降级纯函数 segmentation.segment_lungs_fallback]")
+    import segmentation
+    from constants import LUNG_FALLBACK_LABEL
+    vol = np.zeros((6, 12, 12), np.float32)   # 全软组织 HU=0（非空气）
+    vol[2:4, 4:8, 4:8] = -900.0               # 内部肺区（不触边界）：2×4×4=32 体素空气
+    vol[0, 0, 0] = -1000.0                     # 体外空气（触边界角）：应被剔除
+    mask = segmentation.segment_lungs_fallback(vol)
+    check(mask.dtype == np.uint8 and mask.shape == vol.shape, "返回 uint8 同形状蒙版")
+    got = int((mask == LUNG_FALLBACK_LABEL).sum())
+    check(got == 32, f"内部肺区被标 32 体素 (得 {got})")
+    check(mask[0, 0, 0] == 0, "体外空气（触边界）被剔除")
+    check(int(segmentation.segment_lungs_fallback(np.zeros((4, 8, 8), np.float32)).sum()) == 0,
+          "无空气体积返回全零")
+
+
 def main_run():
     app = QApplication([])
     # 有真实数据（本地开发）跑全套；无数据或 CI（SKIP_REAL_DATA=1）只跑数据无关的自包含测试。
@@ -809,7 +826,8 @@ def main_run():
                   test_close_cancels_ai, test_malformed_pixels, test_empty_dicom_tags,
                   test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent):
             t(app)
-        test_quantify()   # 纯函数单测，无需 app / 真实数据
+        test_quantify()      # 纯函数单测，无需 app / 真实数据
+        test_lung_fallback()
     else:
         v = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌"))
         app.processEvents()
@@ -838,6 +856,7 @@ def main_run():
         test_dicom_sort_consistency(app)
         test_i18n_persistent(app)
         test_quantify()
+        test_lung_fallback()
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0
 
