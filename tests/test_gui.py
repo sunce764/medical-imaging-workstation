@@ -771,6 +771,32 @@ def test_i18n_persistent(app):
     check(not residue, "英文模式无中文残留常驻控件" + (f" — 残留: {residue}" if residue else ""))
 
 
+def test_quantify():
+    """器官定量纯函数直接单测——用合成数组，不构造 MedicalViewer，证明逻辑已解耦。"""
+    print("[器官定量纯函数 quantify.compute_organ_stats]")
+    import quantify
+    vol = np.zeros((4, 4, 4), np.float32)
+    mask = np.zeros((4, 4, 4), np.uint8)
+    for z, y, x in [(0, 0, 0), (0, 0, 1), (0, 0, 2), (0, 0, 3), (0, 1, 0)]:  # 器官2：5 体素 HU=50
+        mask[z, y, x] = 2; vol[z, y, x] = 50.0
+    for z, y, x in [(1, 0, 0), (1, 0, 1), (1, 0, 2)]:                        # 器官5：3 体素 HU=100
+        mask[z, y, x] = 5; vol[z, y, x] = 100.0
+    spacing = (2.0, 2.0, 3.0)            # 单体素 vox_ml = 2*2*3/1000 = 0.012 mL
+    names = {2: ("肾", "Kidney")}        # 5 号故意不登记，测回退命名
+    rows = quantify.compute_organ_stats(vol, mask, spacing, names)
+    check(len(rows) == 2, f"检出 2 个器官 (得 {len(rows)})")
+    check(rows[0]['id'] == 2 and rows[1]['id'] == 5, "按体积降序（器官2 5体素在前）")
+    r2, r5 = rows[0], rows[1]
+    check(r2['voxels'] == 5 and abs(r2['volume_ml'] - 5 * 0.012) < 1e-9,
+          f"器官2 体积 = 5×0.012 mL (得 {r2['volume_ml']:.4f})")
+    check(abs(r2['mean_hu'] - 50.0) < 1e-6, f"器官2 平均 HU=50 (得 {r2['mean_hu']})")
+    check(r2['name_zh'] == "肾" and r2['name_en'] == "Kidney", "器官2 名称查表命中")
+    check(r5['name_zh'] == "类5" and r5['name_en'] == "cls5", "器官5 未登记 → 回退名 类5/cls5")
+    check(abs(r5['mean_hu'] - 100.0) < 1e-6, "器官5 平均 HU=100")
+    check(quantify.compute_organ_stats(vol, np.zeros((4, 4, 4), np.uint8), spacing, names) == [],
+          "空蒙版返回空列表")
+
+
 def main_run():
     app = QApplication([])
     # 有真实数据（本地开发）跑全套；无数据或 CI（SKIP_REAL_DATA=1）只跑数据无关的自包含测试。
@@ -783,6 +809,7 @@ def main_run():
                   test_close_cancels_ai, test_malformed_pixels, test_empty_dicom_tags,
                   test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent):
             t(app)
+        test_quantify()   # 纯函数单测，无需 app / 真实数据
     else:
         v = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌"))
         app.processEvents()
@@ -810,6 +837,7 @@ def main_run():
         test_export_path_safety(app)
         test_dicom_sort_consistency(app)
         test_i18n_persistent(app)
+        test_quantify()
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0
 

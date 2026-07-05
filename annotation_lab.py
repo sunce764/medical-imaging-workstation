@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QProgressDialog,
 )
 
+import quantify
 from constants import AXIAL, LABEL_LUT, MANUAL_TRACK_LABEL
 from graphics_view import ROIGraphicsItem
 
@@ -310,27 +311,15 @@ class AnnotationMixin:
     # 器官定量 / 图例
     # =========================================================================
     def _compute_organ_stats(self):
-        """统计 volume_mask 中各标签的体积(mL)与平均 HU。返回按体积降序的列表。"""
+        """器官定量薄包装：读取 self 的体积/蒙版/spacing 后调用纯函数
+        quantify.compute_organ_stats（无 Qt，可独立单测）。返回按体积降序的列表。"""
         if self.volume_mask is None or self.volume_hu is None or not self.dicom_datasets:
             return []
         ds = self.dicom_datasets[0]
-        ps0 = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
-        ps1 = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=1)
-        st = self._dcm_float(ds, 'SliceThickness', 1.0)
-        vox_ml = ps0 * ps1 * st / 1000.0  # 单体素体积，mm³→mL
-        counts = np.bincount(self.volume_mask.ravel(), minlength=256)
-        present = [i for i in range(1, 256) if counts[i] > 0]
-        if not present:
-            return []
-        # ndimage.mean 一次性算出所有标签区域的平均 HU，避免逐类布尔索引
-        means = np.atleast_1d(ndimage.mean(self.volume_hu, labels=self.volume_mask, index=present))
-        rows = []
-        for i, lid in enumerate(present):
-            zh, en = self.organ_names.get(lid, (f"类{lid}", f"cls{lid}"))
-            rows.append({'id': lid, 'name_zh': zh, 'name_en': en, 'voxels': int(counts[lid]),
-                         'volume_ml': counts[lid] * vox_ml, 'mean_hu': float(means[i])})
-        rows.sort(key=lambda r: -r['volume_ml'])
-        return rows
+        spacing = (self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0),
+                   self._dcm_float(ds, 'PixelSpacing', 1.0, idx=1),
+                   self._dcm_float(ds, 'SliceThickness', 1.0))
+        return quantify.compute_organ_stats(self.volume_hu, self.volume_mask, spacing, self.organ_names)
 
     def _update_organ_stats(self):
         """刷新器官定量面板；无分割结果时清空并禁用导出按钮。"""
