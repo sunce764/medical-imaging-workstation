@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/sunce764/medical-imaging-workstation/actions/workflows/ci.yml/badge.svg)](https://github.com/sunce764/medical-imaging-workstation/actions/workflows/ci.yml)
 
+**[English overview ↓](#overview-english)** · 中文说明见下 · 界面与文档中英双语
+
 基于 **PySide6 (Qt6)** 的桌面 CT 影像工作站，集成 **AI 多器官分割**、临床阅片工具与 **CT 断层重建教学实验室**。
 
 > **定位声明**：本软件是**影像教学 / 科研工具**，**不是经认证的医疗器械，不得用于临床诊断**。AI 分割结果与器官定量为自动推断，仅供参考。
