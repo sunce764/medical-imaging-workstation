@@ -100,6 +100,14 @@ def test_startup(v):
               ("left_toolbar", "main_splitter", "right_panel", "tabs", "tool_btns",
                "slider_ww", "btn_dfr", "combo_layout")) and len(v.views) == 4,
           "UI 经 mixin 完整构建（4 视图 + 关键控件就位）")
+    from interaction import InteractionMixin
+    check(isinstance(v, InteractionMixin), "MedicalViewer 混入 InteractionMixin")
+    check(all(hasattr(v, mth) for mth in
+              ("on_mpr_toggled", "sync_crosshair", "on_wheel_mpr", "measure_hu",
+               "toggle_cine", "_cine_step", "_stop_cine")),
+          "Cine/MPR 交互方法经 mixin 全部就位")
+    # keyPressEvent 是 Qt 重写，必须在本体（MRO 中 QMainWindow 先于 Mixin，否则被遮蔽）
+    check("keyPressEvent" in m.MedicalViewer.__dict__, "keyPressEvent 保留在 MedicalViewer 本体")
 
 
 def test_prior_fixes(v, app):
