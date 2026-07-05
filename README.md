@@ -70,6 +70,7 @@ constants.py       工具/平面常量 + 多器官调色板
 style.qss          暗色主题
 models/organs.onnx 分割模型（外部权重 organs.onnx.data 需单独放置，见下）
 tests/test_gui.py  回归测试套件
+experiments/       量化研究（重建剂量-质量权衡 + AI 分割 Dice 验证），产出图表/CSV，见其 README
 ```
 
 ---
@@ -78,7 +79,7 @@ tests/test_gui.py  回归测试套件
 
 - `models/organs.onnx`（图，已入库）+ `models/organs.onnx.data`（**119MB 外部权重，未入库，需单独放置到 `models/` 下**）。
 - **架构已确证：nnU-Net v2 `PlainConvUNet`（3D 全分辨率）**。由 ONNX 张量命名与结构逆向确认：`decoder.encoder.stages.*` + `decoder.seg_layers.*`（nnU-Net v2 深监督头命名）、6 级编码器通道 `[32,64,128,256,320,320]`（`max_features=320` 为 nnU-Net 默认）、5 级下采样（故输入 pad 到 2⁵=32 倍数）、InstanceNorm + LeakyReLU、25 类（24 器官 + 背景）、经 PyTorch 2.11 `torch.onnx` 导出。
-- **官方标签映射仍未知**：label→器官 的对应关系存于训练时的 nnU-Net `dataset.json`，**无法从 ONNX 权重中提取**。`models/organ_labels_candidate.json` 的 25 类标签是**基于解剖位置 + HU 值推断**的候选表，**非官方**；胸部类（心脏 + 5 个肺叶）经真实数据核对较可靠，腹部类为低置信推断。若能获得原始 `dataset.json`（或该 nnU-Net 任务出处），应优先替换标签表。
+- **出处与标签映射已确证（实测，非推断）**：模型 = **TotalSegmentator v2 `class_map_part_organs`**（24 器官 + 背景）。用一例带真值的公开 CT（TotalSegmentator-CT-Lite，1.5mm 各向同性）跑 GUI 同款推理并与真值逐标签算重叠，得到**完美恒等对角线**：our#k → 第 k 个器官，21 个在场器官**平均 Dice≈0.92**（肾/肺叶 0.97–0.99）。`models/organ_labels_candidate.json` 已改写为该确证映射。此举同时**验证了 GUI 推理管线正确**，并纠正旧推断的错标（`5`=肝非心脏；肺叶 `10,11`=左、`12,13,14`=右）。复现见 [`experiments/`](experiments/README.md) 的 `seg_validate.py`。
 - ONNX 输入 `[1,1,D,H,W]`（每维 pad 到 32 倍数），输出 `[1,25,D,H,W]` logits，取 `argmax`。整卷推理约 **100 秒（CPU）**；如有 GPU 可为 `InferenceSession` 增加对应 ExecutionProvider 提速。
 
 ---
@@ -97,7 +98,7 @@ python tests/test_gui.py
 
 - **非临床器械**：无监管认证、无算法验证文档、无审计/访问控制。
 - **脱敏为显示层**：隐去屏幕与导出文件名中的 PHI，但**不清洗底层 DICOM 标签与烧录文字**——非完整去标识。
-- **AI 标签为推断**：定量数值的器官归属依赖候选标签表，需人工核对。
+- **AI 标签已确证**：映射经 TotalSegmentator 真值实测（平均 Dice≈0.92），器官归属可信；但定量数值仍受单序列分辨率与分割边界误差影响。
 - 矩阵重建（DMR/ART）受 `lstsq` 限制，实用上限 64×64（教学用途）。
 - 单体数据模型：AI/重建/标注默认作用于当前主序列。
 - **AI 蒙版叠加仅横断面**：冠状/矢状面不显示器官分割叠加。

@@ -128,9 +128,12 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             self.load_data(dp)
 
     def _load_organ_labels(self):
-        """加载器官名候选表 organ_labels_candidate.json；缺失时回退到内置高置信名称。"""
-        fallback = {5: ("心脏", "Heart"), 10: ("右肺叶", "R-Lung"), 11: ("右肺叶", "R-Lung"),
-                    12: ("左肺叶", "L-Lung"), 13: ("左肺叶", "L-Lung"), 14: ("左肺叶", "L-Lung"),
+        """加载器官名表 organ_labels_candidate.json；缺失时回退到内置高置信名称。
+        映射已确证=TotalSegmentator class_map_part_organs（见该 JSON 的 _meta 与 experiments/）。"""
+        fallback = {5: ("肝", "Liver"),
+                    10: ("左肺上叶", "Lung UL (L)"), 11: ("左肺下叶", "Lung LL (L)"),
+                    12: ("右肺上叶", "Lung UL (R)"), 13: ("右肺中叶", "Lung ML (R)"),
+                    14: ("右肺下叶", "Lung LL (R)"),
                     MANUAL_TRACK_LABEL: ("手动追踪", "Manual")}
         try:
             with open(LABELS_JSON, 'r', encoding='utf-8') as f:
