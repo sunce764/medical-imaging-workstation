@@ -21,6 +21,9 @@ dependencies = [
     "onnxruntime>=1.23",
 ]
 
+[project.scripts]
+medical-imaging-workstation = "main:main"
+
 [project.optional-dependencies]
 # 量化研究复现（App 运行不需要）
 experiments = ["matplotlib>=3.8", "nibabel>=5.0", "remotezip>=0.12"]

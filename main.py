@@ -58,7 +58,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
     _WL_PRESETS = {"Lung": -500, "Medi": 40, "Bone": 400, "Vasc": 150, "Abdo": 30, "Brain": 40,
                    "肺窗": -500, "纵隔": 40, "骨窗": 400, "血管": 150, "腹部": 30, "脑窗": 40}
 
-    def __init__(self):
+    def __init__(self, data_dir=None):
         super().__init__()
         self.setWindowTitle("Medical Imaging Workstation Pro + Recon Lab")
         self.resize(1600, 950)
@@ -130,10 +130,10 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # 延迟 50ms 执行布局切换，确保 Qt 窗口几何完成初始化再设置 splitter 尺寸
         QTimer.singleShot(50, lambda: self.switch_layout(0))
 
-        # 启动时自动加载同目录下的"肺癌"文件夹（开发调试用，生产环境可删除）
-        dp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "肺癌")
-        if os.path.exists(dp):
-            self.load_data(dp)
+        # 可选：启动时加载指定 DICOM 目录（由入口 --data 传入或测试显式指定）；默认不加载。
+        # 不再硬编码自动加载本地"肺癌"目录——避免开发便利泄进产品入口，也避免误加载患者数据。
+        if data_dir and os.path.isdir(data_dir):
+            self.load_data(data_dir)
 
     def _load_organ_labels(self):
         """加载器官名表 organ_labels_candidate.json；缺失时回退到内置高置信名称。
@@ -904,12 +904,23 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
     # =========================================================================
     # 矩阵重建共用工具
     # =========================================================================
-if __name__ == "__main__":
+def main():
+    """程序入口。可选 --data DIR：启动即加载该 DICOM 目录（默认不加载任何数据）。"""
+    import argparse
+    import multiprocessing
+
     # freeze_support：多进程 'spawn' 模式在 macOS/Windows 打包环境中必须调用，
     # 防止子进程重入主程序逻辑导致无限递归启动
-    import multiprocessing
     multiprocessing.freeze_support()
-    app = QApplication(sys.argv)
-    window = MedicalViewer()
+    parser = argparse.ArgumentParser(description="医学影像工作站 Pro + 重建实验室")
+    parser.add_argument("--data", metavar="DIR", default=None,
+                        help="启动时加载的 DICOM 目录（可选，默认不加载任何数据）")
+    args, qt_args = parser.parse_known_args()
+    app = QApplication(sys.argv[:1] + qt_args)
+    window = MedicalViewer(data_dir=args.data)
     window.show()
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

@@ -70,12 +70,13 @@ Highlights: mixin-decomposed architecture (6 cohesive modules), an 80-check offs
 
 ```bash
 conda activate dicom_gui        # 或 conda env create -f environment.yml
-python main.py
+python main.py                  # 空载启动
+python main.py --data /path/to/dicom_dir   # 启动即加载指定 DICOM 目录（可选）
 ```
 
 依赖：PySide6 · pydicom · numpy · scipy · scikit-image · onnxruntime（见 `requirements.txt` / `environment.yml`）。
 
-首次启动会自动加载同目录 `肺癌/`（若存在，开发调试用）。生产可删除 `main.py` 中的自动加载逻辑。
+启动默认**不加载任何数据**；用 `--data DIR` 指定 DICOM 目录，或运行后从界面「加载 DICOM 目录」选择。
 
 ---
 

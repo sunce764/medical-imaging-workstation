@@ -330,7 +330,7 @@ def test_edge_cases(v, app):
         crashed = True
     check(not crashed, "换病例后撤销不越界崩溃")
     # 脱敏隐去对比既往日期（PHI）
-    vv = m.MedicalViewer(); app.processEvents()
+    vv = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌")); app.processEvents()
     if vv.ai_thread:
         vv.ai_thread.cancel()
     vv.anonymize = True
@@ -784,7 +784,7 @@ def main_run():
                   test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent):
             t(app)
     else:
-        v = m.MedicalViewer()
+        v = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌"))
         app.processEvents()
         if v.ai_thread:
             v.ai_thread.cancel()
