@@ -26,6 +26,8 @@ dependencies = [
 experiments = ["matplotlib>=3.8", "nibabel>=5.0", "remotezip>=0.12"]
 # 开发工具链
 dev = ["ruff>=0.6", "coverage>=7.0"]
+# 从 docs/manual_zh.md 生成说明书 PDF（另需本机 Google Chrome，见 docs/build_manual_pdf.py）
+docs = ["markdown>=3"]
 
 [tool.setuptools]
 # 扁平模块布局。本 pyproject 用于项目元数据、依赖声明与工具配置（ruff/coverage）。
