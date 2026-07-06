@@ -149,6 +149,7 @@ coverage run tests/test_gui.py && coverage report   # 覆盖率
 
 ## 技术报告与量化研究
 
+- **软件说明书**（中文）：[docs/manual_zh.md](docs/manual_zh.md) —— 按功能组织的完整用户手册，从启动到各功能逐一图文说明（含界面截图）。
 - **技术报告**（英文）：[docs/technical_report.md](docs/technical_report.md) —— 两组量化研究（低剂量重建剂量-质量权衡 / AI 分割 Dice 验证与出处确证）的方法、图表、结论。
 - **预印本稿**（英文，研究一）：[docs/preprint_recon.md](docs/preprint_recon.md) —— 稀疏视角/低剂量 CT 重建权衡的可复现体模研究，学术格式（摘要/相关工作/方法/实验/讨论/复现/参考文献）。
 - **可复现实验**：[experiments/](experiments/README.md) —— 脚本 + 图表 + CSV。
