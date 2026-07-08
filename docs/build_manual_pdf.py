@@ -71,7 +71,7 @@ COVER = """
   <div class="t">医学影像工作站软件</div>
   <div class="s">Medical Imaging Workstation Software</div>
   <div class="s">软件说明书</div>
-  <div class="meta">软件版本：V1.0<br>著作权人：盛超（Sheng Chao）<br>编写日期：2026 年 7 月</div>
+  <div class="meta">软件版本：V1.0<br>著作权人：盛超、赖胜圣<br>编写日期：2026 年 7 月</div>
   <div class="note">本说明书文中截图均使用<b>公开数据集 TotalSegmentator-CT-Lite（CC-BY-4.0）</b>演示，
   <b>非患者数据、不含个人隐私信息（PHI）</b>，患者信息栏已明确标注为公开数据。</div>
 </div>
