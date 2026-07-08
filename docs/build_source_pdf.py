@@ -17,7 +17,7 @@ DOCS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(DOCS)
 BUILD_HTML = os.path.join(DOCS, "_source_build.html")
 PDF = os.path.join(DOCS, "source_code_zh.pdf")
-TITLE = "医学影像工作站 Pro + 重建实验室 V1.0"
+TITLE = "医学影像工作站软件 V1.0"
 
 # 拼接顺序：入口 main.py 在前，UI 层 Mixin，随后引擎/视图，最后纯计算模块与常量。
 ORDER = ["main.py", "ui_builder.py", "interaction.py", "recon_lab.py", "compare_lab.py",

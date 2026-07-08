@@ -68,8 +68,8 @@ hr { display: none; }
 
 COVER = """
 <div class="cover">
-  <div class="t">医学影像工作站 Pro + 重建实验室</div>
-  <div class="s">Medical Imaging Workstation Pro + Recon Lab</div>
+  <div class="t">医学影像工作站软件</div>
+  <div class="s">Medical Imaging Workstation Software</div>
   <div class="s">软件说明书</div>
   <div class="meta">软件版本：V1.0<br>著作权人：盛超（Sheng Chao）<br>编写日期：2026 年 7 月</div>
   <div class="note">本说明书文中截图均使用<b>公开数据集 TotalSegmentator-CT-Lite（CC-BY-4.0）</b>演示，

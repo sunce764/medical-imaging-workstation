@@ -1,4 +1,4 @@
-# 医学影像工作站 Pro + 重建实验室 · 软件说明书
+# 医学影像工作站软件 · 软件说明书
 
 > 本说明书随软件版本 V1.0 编写。文中截图均使用**公开数据集 TotalSegmentator-CT-Lite（CC-BY-4.0）**演示，**非患者数据、不含个人隐私信息（PHI）**，患者信息栏已明确标注为公开数据。
 
@@ -6,7 +6,7 @@
 
 ## 一、软件概述
 
-**软件名称**：医学影像工作站 Pro + 重建实验室（Medical Imaging Workstation Pro + Recon Lab）
+**软件名称**：医学影像工作站软件（Medical Imaging Workstation Software）
 **软件版本**：V1.0
 **软件简介**：本软件是一款基于 PySide6（Qt6）的桌面端 CT 医学影像工作站，面向影像教学与科研，集成三大部分——**临床阅片工具**、**AI 多器官分割**、以及**CT 断层重建教学实验室**。软件支持 DICOM 影像的加载、多平面重组（MPR）阅片、窗宽窗位调节、测量与标注、AI 自动器官分割与定量、双序列随访对比，以及从投影到重建的完整教学演示。
 **运行环境**：Windows / macOS / Linux 桌面系统，Python 3.10；依赖 PySide6、pydicom、NumPy、SciPy、scikit-image、ONNX Runtime。
