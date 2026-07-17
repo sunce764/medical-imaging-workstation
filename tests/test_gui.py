@@ -345,10 +345,11 @@ def test_edge_cases(v, app):
 
 
 def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_numeric=False,
-                   n_frames=1, truncate=False):
+                   n_frames=1, truncate=False, pix=100, slope=1, intercept=-1024):
     """写一张最小合规的 CT DICOM，供混合形状加载测试使用。ipp_z=None 则不写 ImagePositionPatient。
     empty_numeric=True 时把 RescaleSlope/Intercept/PixelSpacing/SliceThickness 写成空值（None）。
-    n_frames>1 写多帧 DICOM；truncate=True 写截断的 PixelData（pixel_array 解码会抛）。"""
+    n_frames>1 写多帧 DICOM；truncate=True 写截断的 PixelData（pixel_array 解码会抛）。
+    pix/slope/intercept 给定已知像素值与线性变换，供 HU 转换正确性测试断言 HU=pix*slope+intercept。"""
     import numpy as _np
     from pydicom.dataset import FileDataset, FileMetaDataset
     from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, generate_uid
@@ -368,8 +369,8 @@ def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_n
         ds.ImagePositionPatient = [0.0, 0.0, float(ipp_z)]
     ds.PixelSpacing = None if empty_numeric else [1.0, 1.0]
     ds.SliceThickness = None if empty_numeric else 1.0
-    ds.RescaleSlope = None if empty_numeric else 1
-    ds.RescaleIntercept = None if empty_numeric else -1024
+    ds.RescaleSlope = None if empty_numeric else slope
+    ds.RescaleIntercept = None if empty_numeric else intercept
     ds.SamplesPerPixel = 1
     ds.PhotometricInterpretation = 'MONOCHROME2'
     ds.Rows, ds.Columns = rows, cols
@@ -379,9 +380,9 @@ def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_n
     ds.PixelRepresentation = 1
     if n_frames > 1:
         ds.NumberOfFrames = n_frames
-        ds.PixelData = _np.full((n_frames, rows, cols), 100, dtype=_np.int16).tobytes()
+        ds.PixelData = _np.full((n_frames, rows, cols), pix, dtype=_np.int16).tobytes()
     else:
-        full = _np.full((rows, cols), 100, dtype=_np.int16).tobytes()
+        full = _np.full((rows, cols), pix, dtype=_np.int16).tobytes()
         ds.PixelData = full[:len(full) // 3] if truncate else full
     ds.save_as(path, write_like_original=False)
 
@@ -668,7 +669,10 @@ def test_export_path_safety(app):
         vp.ai_thread.cancel()
 
     class _DS:
-        def __init__(self, pid): self.PatientID = pid; self.PatientName = pid
+        # SeriesInstanceUID 在真实 DICOM 中是 Type 1 必填；蒙版缓存据它校验序列身份
+        # （防止把同患者另一序列的蒙版张冠李戴），故此桩必须带上才具代表性。
+        def __init__(self, pid, uid="1.2.826.0.1.3680043.2.1125.1.PATHSAFE"):
+            self.PatientID = pid; self.PatientName = pid; self.SeriesInstanceUID = uid
 
     made = []
     try:
@@ -833,6 +837,119 @@ def test_mpr_geometry():
     check(g.nearest_slice([0, 5, 10, 15, 20], 100) == 4, "超出范围取最末切片")
 
 
+def test_mask_cache_guard():
+    """分割蒙版磁盘缓存的恢复守卫纯函数直接单测——无 Qt / 真实数据。
+
+    缓存按 PatientID 命名，只比 shape 会把同一患者另一序列（随访/复扫，常同为 512²）
+    的蒙版静默套到当前序列上，器官定量随之给出错误体积。故必须 UID+shape 双匹配。"""
+    print("[分割蒙版缓存守卫纯函数 annotation_lab.mask_cache_matches]")
+    import annotation_lab as al
+    shp = (233, 512, 512)
+    ok, why = al.mask_cache_matches("1.2.840.A", shp, "1.2.840.A", shp)
+    check(ok and why == "", "同一序列（UID 与 shape 皆同）→ 恢复缓存")
+    ok, why = al.mask_cache_matches("1.2.840.A", shp, "1.2.840.B", shp)
+    check(not ok and "SeriesInstanceUID" in why,
+          "同患者另一序列（shape 相同、UID 不同）→ 拒绝套用（核心回归：防串序列）")
+    ok, why = al.mask_cache_matches("1.2.840.A", (233, 512, 512), "1.2.840.A", (200, 512, 512))
+    check(not ok and "shape" in why, "shape 不匹配 → 拒绝")
+    ok, why = al.mask_cache_matches("", shp, "1.2.840.A", shp)
+    check(not ok, "缓存缺 UID（旧版本产物）→ 拒绝，宁可重跑 AI")
+    ok, why = al.mask_cache_matches("1.2.840.A", shp, "", shp)
+    check(not ok, "当前序列缺 UID → 拒绝")
+
+
+def test_mask_cache_roundtrip(app):
+    """蒙版缓存 save→reload 往返：同序列恢复、同患者另一序列拒绝（合成 DICOM，无真实数据）。"""
+    print("[蒙版缓存 save→reload 往返]")
+    import glob
+    import shutil
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    ed = os.path.join(_ROOT, "Exported_Lesions")
+    pid = "RID_CACHE_TEST"
+    made = []
+
+    def _mkdir_series(uid, z=3):
+        d = tempfile.mkdtemp()
+        for i in range(z):
+            _write_min_dcm(os.path.join(d, f"s{i}.dcm"), (16, 16), uid, ipp_z=i, inst=i + 1, pid=pid)
+        return d
+
+    uid_a, uid_b = generate_uid(), generate_uid()
+    da, db = _mkdir_series(uid_a), _mkdir_series(uid_b)
+    try:
+        vc = m.MedicalViewer(); app.processEvents()
+        if vc.ai_thread:
+            vc.ai_thread.cancel()
+        # 序列 A：造一个非空蒙版并保存
+        vc.load_data(da); app.processEvents()
+        if vc.ai_thread:
+            vc.ai_thread.cancel()
+        vc.volume_mask = np.zeros_like(vc.volume_hu, dtype=np.uint8)
+        vc.volume_mask[0, :4, :4] = 5          # 标记为器官5，便于区分
+        vc.save_project()
+        made = glob.glob(os.path.join(ed, f"{pid}_*"))
+        check(any(f.endswith("_mask.npz") for f in made), "save_project 落盘 _mask.npz")
+
+        # 重开序列 A（同 UID 同 shape）→ 应恢复
+        vc.volume_mask = None
+        restored_a = vc._load_saved_mask(pid)
+        check(restored_a and vc.volume_mask is not None and int(vc.volume_mask[0, 0, 0]) == 5,
+              "重开同一序列 → 缓存被恢复（省掉 ~100s 重算）")
+
+        # 切到序列 B（同 PatientID、同 shape、不同 SeriesInstanceUID）→ 必须拒绝
+        vc.load_data(db); app.processEvents()
+        if vc.ai_thread:
+            vc.ai_thread.cancel()
+        vc.volume_mask = None
+        restored_b = vc._load_saved_mask(pid)
+        check(not restored_b and vc.volume_mask is None,
+              "切到同患者另一序列（同 shape 不同 UID）→ 拒绝套用旧蒙版（核心回归）")
+    finally:
+        for f in made:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        shutil.rmtree(da, ignore_errors=True); shutil.rmtree(db, ignore_errors=True)
+
+
+def test_hu_conversion(app):
+    """DICOM 像素 → HU 的数值正确性：HU = pixel × RescaleSlope + RescaleIntercept。
+
+    这是探针 HU / ROI 统计 / 器官定量 / AI 归一化的共同地基，此前只被“不崩溃”覆盖，
+    从未断言过算得对（test_quantify 直接喂合成 HU，绕过了本转换）。"""
+    print("[DICOM→HU 转换正确性]")
+    import shutil
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    vh = m.MedicalViewer(); app.processEvents()
+    if vh.ai_thread:
+        vh.ai_thread.cancel()
+    # (像素值, slope, intercept, 期望 HU)
+    cases = [(100, 1, -1024, -924.0),     # GE 典型：空气≈-1000 附近
+             (500, 2, -1000, 0.0),        # 非 1 的 slope，验证真在乘
+             (0, 1, -1024, -1024.0),      # 像素 0 → 纯 intercept
+             (1200, 1, 0, 1200.0)]        # intercept=0 → 原值
+    for pix, slope, icpt, want in cases:
+        d = tempfile.mkdtemp()
+        try:
+            uid = generate_uid()
+            for i in range(3):
+                _write_min_dcm(os.path.join(d, f"s{i}.dcm"), (8, 8), uid, ipp_z=i, inst=i + 1,
+                               pix=pix, slope=slope, intercept=icpt)
+            vh.load_data(d); app.processEvents()
+            if vh.ai_thread:
+                vh.ai_thread.cancel()
+            got = float(vh.volume_hu[0, 0, 0])
+            check(abs(got - want) < 1e-3 and bool(np.allclose(vh.volume_hu, want)),
+                  f"pix={pix} slope={slope} intercept={icpt} → HU={want}（得 {got}）")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 def main_run():
     app = QApplication([])
     # 有真实数据（本地开发）跑全套；无数据或 CI（SKIP_REAL_DATA=1）只跑数据无关的自包含测试。
@@ -843,11 +960,13 @@ def main_run():
         # 这些测试自建合成 DICOM / 用 /nonexistent.onnx 走数学降级，不依赖真实数据或 119MB 权重
         for t in (test_ai_engine, test_mixed_shape_dicom, test_recon_finite,
                   test_close_cancels_ai, test_malformed_pixels, test_empty_dicom_tags,
-                  test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent):
+                  test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent,
+                  test_hu_conversion, test_mask_cache_roundtrip):
             t(app)
         test_quantify()      # 纯函数单测，无需 app / 真实数据
         test_lung_fallback()
         test_mpr_geometry()
+        test_mask_cache_guard()
     else:
         v = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌"))
         app.processEvents()
@@ -875,9 +994,12 @@ def main_run():
         test_export_path_safety(app)
         test_dicom_sort_consistency(app)
         test_i18n_persistent(app)
+        test_hu_conversion(app)
+        test_mask_cache_roundtrip(app)
         test_quantify()
         test_lung_fallback()
         test_mpr_geometry()
+        test_mask_cache_guard()
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0
 

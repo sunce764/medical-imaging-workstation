@@ -12,7 +12,7 @@
 
 ## Overview (English)
 
-A desktop **CT imaging workstation** (PySide6/Qt6, ~4,100 lines of application Python across 13 modules) that combines a clinical DICOM reader, a **from-scratch tomographic reconstruction laboratory**, and an **AI multi-organ segmentation** pipeline — built as a teaching/research tool (not a certified medical device).
+A desktop **CT imaging workstation** (PySide6/Qt6, ~4,100 lines of application Python across 13 modules) that combines a clinical DICOM reader, a **tomographic reconstruction laboratory**, and an **AI multi-organ segmentation** pipeline — built as a teaching/research tool (not a certified medical device).
 
 Beyond the application, the repository contains **two reproducible quantitative studies** that turn the built-in algorithms into measured findings:
 
@@ -21,7 +21,7 @@ Beyond the application, the repository contains **two reproducible quantitative 
 
 📄 **Read the [technical report](docs/technical_report.md)** (methods, figures, results) · 🧪 **Reproduce via [`experiments/`](experiments/README.md)**.
 
-Highlights: modular architecture (God-object decomposed into 5 UI mixins + 4 Qt-free compute modules that are unit-tested in isolation), a **102-check** offscreen-Qt regression suite with CI, defensive DICOM handling, and reconstruction algorithms (Radon / FBP / DFR / ART / SIRT) implemented from first principles.
+Highlights: modular architecture (God-object decomposed into 5 UI mixins + 4 Qt-free compute modules that are unit-tested in isolation), a **111-check** offscreen-Qt regression suite with CI, defensive DICOM handling, and a reconstruction stack (Radon / BP / FBP / DFR / DMR / ART / SIRT) whose DFR, DMR, ART and SIRT inverse solvers are written from first principles on top of scikit-image's `radon`/`iradon` projector.
 
 ## 界面 · Screenshots
 
@@ -104,7 +104,7 @@ mpr_geometry.py    MPR 坐标换算 + 双序列 z 配准
 constants.py       工具/平面常量 + 多器官调色板
 —— 资源 / 工程化 ——
 style.qss          暗色主题　·　models/organs.onnx 分割模型图（外部权重未入库，见「模型说明」）
-tests/test_gui.py  回归测试套件（102 项）　·　experiments/ 量化研究 + 复现脚本/图表/CSV
+tests/test_gui.py  回归测试套件（111 项）　·　experiments/ 量化研究 + 复现脚本/图表/CSV
 docs/              技术报告 + 预印本稿 + 截图　·　pyproject.toml 打包/工具配置　·　.github/workflows/ci.yml CI
 ```
 
@@ -113,8 +113,9 @@ docs/              技术报告 + 预印本稿 + 截图　·　pyproject.toml �
 ## 模型说明（重要）
 
 - `models/organs.onnx`（图，已入库）+ `models/organs.onnx.data`（**119MB 外部权重，未入库，需单独放置到 `models/` 下**）。
+- **如何获得 `organs.onnx.data`**：本仓库只含 45KB 计算图，**缺权重则 `onnxruntime` 无法加载该图，AI 分割不可用**（此时程序自动降级为纯数学的肺分割，见 `segmentation.py`）。权重需自行从上游取得：安装 [TotalSegmentator](https://github.com/wasserth/TotalSegmentator)（v2，`class_map_part_organs` 任务）取其 nnU-Net 权重，用 `torch.onnx` 以 external-data 格式导出，产出的 `.data` 与 `.onnx` **必须同目录**。上游模型与权重的许可以 TotalSegmentator 官方仓库为准，请在再分发前自行核实。
 - **架构已确证：nnU-Net v2 `PlainConvUNet`（3D 全分辨率）**。由 ONNX 张量命名与结构逆向确认：`decoder.encoder.stages.*` + `decoder.seg_layers.*`（nnU-Net v2 深监督头命名）、6 级编码器通道 `[32,64,128,256,320,320]`（`max_features=320` 为 nnU-Net 默认）、5 级下采样（故输入 pad 到 2⁵=32 倍数）、InstanceNorm + LeakyReLU、25 类（24 器官 + 背景）、经 PyTorch 2.11 `torch.onnx` 导出。
-- **出处与标签映射已确证（实测，非推断）**：模型 = **TotalSegmentator v2 `class_map_part_organs`**（24 器官 + 背景）。用一例带真值的公开 CT（TotalSegmentator-CT-Lite，1.5mm 各向同性）跑 GUI 同款推理并与真值逐标签算重叠，得到**完美恒等对角线**：our#k → 第 k 个器官，21 个在场器官**平均 Dice≈0.92**（肾/肺叶 0.97–0.99）。`models/organ_labels_candidate.json` 已改写为该确证映射。此举同时**验证了 GUI 推理管线正确**，并纠正旧推断的错标（`5`=肝非心脏；肺叶 `10,11`=左、`12,13,14`=右）。复现见 [`experiments/`](experiments/README.md) 的 `seg_validate.py`。
+- **出处与标签映射已确证（实测，非推断）**：模型 = **TotalSegmentator v2 `class_map_part_organs`**（24 器官 + 背景）。用一例带真值的公开 CT（TotalSegmentator-CT-Lite，1.5mm 各向同性）跑 GUI 同款推理并与真值逐标签算重叠，得到**恒等对角线**：our#k → 第 k 个器官，21 个在场器官**平均 Dice≈0.92**（肾 0.98 / 肺叶 0.96–0.99）。另 2 个输出标签（22=前列腺、23=左肾囊肿）本例真值中不存在，其身份由已确证的映射方案确定、非实测 Dice。`models/organ_labels_candidate.json` 已改写为该确证映射。此举同时**验证了 GUI 推理管线正确**，并纠正旧推断的错标（`5`=肝非心脏；肺叶 `10,11`=左、`12,13,14`=右）。复现见 [`experiments/`](experiments/README.md) 的 `seg_validate.py`。
 - ONNX 输入 `[1,1,D,H,W]`（每维 pad 到 32 倍数），输出 `[1,25,D,H,W]` logits，取 `argmax`。整卷推理约 **100 秒（CPU）**；如有 GPU 可为 `InferenceSession` 增加对应 ExecutionProvider 提速。
 
 ---
@@ -122,14 +123,15 @@ docs/              技术报告 + 预印本稿 + 截图　·　pyproject.toml �
 ## 测试与质量
 
 ```bash
-python tests/test_gui.py                     # 完整回归（102 项，需同目录 肺癌/ 真实数据）
+python tests/test_gui.py                     # 完整回归（111 项，需同目录 肺癌/ 真实数据）
 SKIP_REAL_DATA=1 python tests/test_gui.py    # 仅数据无关子集（CI 用，无需真实数据/权重）
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report   # 覆盖率
 ```
 
 - 离屏 Qt 运行，覆盖 AI 引擎、历次修复、多器官分割/编辑、ROI 拖缩、双序列配准、Cine、合规等。退出码 0 = 全部通过。
-- **CI**（`.github/workflows/ci.yml`）：每次 push/PR 在 Ubuntu 跑 `ruff` + 数据无关测试子集（离屏 Qt，无需真实数据或 119MB 权重）。
+- **CI**（`.github/workflows/ci.yml`）：每次 push/PR 在 Ubuntu 跑 `ruff` + 数据无关测试子集（离屏 Qt，无需真实数据或 119MB 权重）。CI 跑的是子集而非全套——交互层（重建实验室 / 双序列对比 / ROI 拖缩 / Cine）需本地真实数据才会执行，故「CI 全绿」不等于全部 111 项都跑过。
+- **`肺癌/` 是什么**：完整回归所需的本地测试数据为 **RIDER Lung CT**（[TCIA](https://www.cancerimagingarchive.net/) 公开数据集，单序列 233 层 / 1.25mm / 512²），已由 **CTP 去标识**（`PatientIdentityRemoved=YES`、`DeidentificationMethod=CTP`）。**本仓库不转载该数据**，需自行从 TCIA 获取并置于仓库同级目录；无此数据时用上面的 `SKIP_REAL_DATA=1` 子集。
 - **覆盖率**：完整套件 **≈67%**（`constants`/`ui_builder` 99–100%，`main` 82% / `ai_engine` 87%；交互/图形/重建类含大量鼠标事件与算法路径覆盖较低，`recon.py` 的完整 FBP/DFR 由 [`experiments/`](experiments/README.md) 另行覆盖）。四个无 Qt 纯计算模块（`recon`/`quantify`/`segmentation`/`mpr_geometry`）均有脱离主窗口的独立单测。
 - `recon.py`/`ai_engine.py` 为纯计算/无 Qt 模块，已加完整类型注解。
 
@@ -172,6 +174,8 @@ coverage run tests/test_gui.py && coverage report   # 覆盖率
 
 ## 版权 · Copyright
 
-© 2026 盛超 (Sheng Chao)。**保留所有权利 / All rights reserved.**
+© 2026 **盛超 (Sheng Chao)、赖胜圣 (Lai Shengsheng)**。**保留所有权利 / All rights reserved.**
 
-本仓库为个人教学/科研与作品集用途，**未授予**任何开源复制、修改或再分发许可；如需使用请联系作者。第三方组件依其各自许可。
+本软件为**两位共同著作权人共有**（已按此向中国版权保护中心申请软件著作权登记）。
+
+本仓库为教学/科研与作品集用途，**未授予**任何开源复制、修改或再分发许可；如需使用请联系著作权人。第三方组件依其各自许可。
