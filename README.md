@@ -21,7 +21,7 @@ Beyond the application, the repository contains **two reproducible quantitative 
 
 📄 **Read the [technical report](docs/technical_report.md)** (methods, figures, results) · 🧪 **Reproduce via [`experiments/`](experiments/README.md)**.
 
-Highlights: modular architecture (God-object decomposed into 5 UI mixins + 4 Qt-free compute modules that are unit-tested in isolation), a **111-check** offscreen-Qt regression suite with CI, defensive DICOM handling, and a reconstruction stack (Radon / BP / FBP / DFR / DMR / ART / SIRT) whose DFR, DMR, ART and SIRT inverse solvers are written from first principles on top of scikit-image's `radon`/`iradon` projector.
+Highlights: modular architecture (God-object decomposed into 5 UI mixins + 4 Qt-free compute modules that are unit-tested in isolation), a **154-check** offscreen-Qt regression suite with CI, defensive DICOM handling, and a reconstruction stack (Radon / BP / FBP / DFR / DMR / ART / SIRT) whose DFR, DMR, ART and SIRT inverse solvers are written from first principles on top of scikit-image's `radon`/`iradon` projector.
 
 ## 界面 · Screenshots
 
@@ -104,7 +104,7 @@ mpr_geometry.py    MPR 坐标换算 + 双序列 z 配准
 constants.py       工具/平面常量 + 多器官调色板
 —— 资源 / 工程化 ——
 style.qss          暗色主题　·　models/organs.onnx 分割模型图（外部权重未入库，见「模型说明」）
-tests/test_gui.py  回归测试套件（111 项）　·　experiments/ 量化研究 + 复现脚本/图表/CSV
+tests/test_gui.py  回归测试套件（154 项）　·　experiments/ 量化研究 + 复现脚本/图表/CSV
 docs/              技术报告 + 预印本稿 + 截图　·　pyproject.toml 打包/工具配置　·　.github/workflows/ci.yml CI
 ```
 
@@ -123,16 +123,17 @@ docs/              技术报告 + 预印本稿 + 截图　·　pyproject.toml �
 ## 测试与质量
 
 ```bash
-python tests/test_gui.py                     # 完整回归（111 项，需同目录 肺癌/ 真实数据）
+python tests/test_gui.py                     # 完整回归（154 项，需同目录 肺癌/ 真实数据）
 SKIP_REAL_DATA=1 python tests/test_gui.py    # 仅数据无关子集（CI 用，无需真实数据/权重）
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report   # 覆盖率
 ```
 
 - 离屏 Qt 运行，覆盖 AI 引擎、历次修复、多器官分割/编辑、ROI 拖缩、双序列配准、Cine、合规等。退出码 0 = 全部通过。
-- **CI**（`.github/workflows/ci.yml`）：每次 push/PR 在 Ubuntu 跑 `ruff` + 数据无关测试子集（离屏 Qt，无需真实数据或 119MB 权重）。CI 跑的是子集而非全套——交互层（重建实验室 / 双序列对比 / ROI 拖缩 / Cine）需本地真实数据才会执行，故「CI 全绿」不等于全部 111 项都跑过。
+- **CI**（`.github/workflows/ci.yml`）：每次 push/PR 在 Ubuntu 跑 `ruff` + 数据无关测试子集（离屏 Qt，无需真实数据或 119MB 权重）。CI 跑的是子集而非全套——交互层（重建实验室 / 双序列对比 / ROI 拖缩 / Cine）需本地真实数据才会执行，故「CI 全绿」不等于全部 154 项都跑过。
 - **`肺癌/` 是什么**：完整回归所需的本地测试数据为 **RIDER Lung CT**（[TCIA](https://www.cancerimagingarchive.net/) 公开数据集，单序列 233 层 / 1.25mm / 512²），已由 **CTP 去标识**（`PatientIdentityRemoved=YES`、`DeidentificationMethod=CTP`）。**本仓库不转载该数据**，需自行从 TCIA 获取并置于仓库同级目录；无此数据时用上面的 `SKIP_REAL_DATA=1` 子集。
-- **覆盖率**：完整套件 **≈67%**（`constants`/`ui_builder` 99–100%，`main` 82% / `ai_engine` 87%；交互/图形/重建类含大量鼠标事件与算法路径覆盖较低，`recon.py` 的完整 FBP/DFR 由 [`experiments/`](experiments/README.md) 另行覆盖）。四个无 Qt 纯计算模块（`recon`/`quantify`/`segmentation`/`mpr_geometry`）均有脱离主窗口的独立单测。
+- **覆盖率**：完整套件 **≈70%**（`quantify`/`mpr_geometry` 100%、`ai_engine` 89%、`segmentation` 86%、`main` 82%、`recon` 76%；交互/图形类含大量鼠标事件，覆盖较低）。四个无 Qt 纯计算模块（`recon`/`quantify`/`segmentation`/`mpr_geometry`）均有脱离主窗口的独立单测。
+- **重建算法的数值正确性有独立验算**（非仅「输出有限」）：断言锚在解析可知或理论恒等的性质上——线积分质量守恒、均匀圆盘投影 = 解析弦长 `2√(R²−t²)`、Radon 算子线性、傅里叶中心切片定理的直流项 `|F(0,0)|` = 图像总质量、`A·x ≡ compute_sinogram(x)`、满秩无噪系统 DMR 精确还原（`max|err|≈1e-6`）、ART/SIRT 误差与残差随迭代严格单调下降、以及 BP 与 FBP 的结构相关性对比（0.536 vs 0.936，用以证明滤波器确实接入）。
 - `recon.py`/`ai_engine.py` 为纯计算/无 Qt 模块，已加完整类型注解。
 
 ---
@@ -164,9 +165,10 @@ coverage run tests/test_gui.py && coverage report   # 覆盖率
 
 ## 第三方组件 · Acknowledgements
 
-本项目在自研代码之外集成了以下第三方成果，其著作权/许可归各自作者所有：
+本项目在自研代码之外集成了以下第三方成果，其著作权/许可归各自作者所有。
+**逐项的确切许可、一手来源 URL 与再分发义务见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)**（每条均直读上游 LICENSE 原文核实，未核准者如实标注为待确认）。
 
-- **AI 分割模型**：`models/organs.onnx` 为 **TotalSegmentator v2**（Wasserthal et al., *Radiology: AI*, 2023；基于 **nnU-Net v2**，Isensee et al., *Nature Methods*, 2021）的 `class_map_part_organs` 导出图。**模型权重（`organs.onnx.data`）未随本仓库分发**，其许可以 TotalSegmentator 官方为准。
+- **AI 分割模型**：`models/organs.onnx` 为 **TotalSegmentator v2**（Wasserthal et al., *Radiology: AI*, 2023；基于 **nnU-Net v2**，Isensee et al., *Nature Methods*, 2021）的 `class_map_part_organs`（Task 291）导出图。该任务上游列于 **Apache-2.0** 一档（注意：TotalSegmentator 按任务分档授权，另有任务需单独许可，换模型须重新核对）。**模型权重（`organs.onnx.data`）未随本仓库分发。**
 - **验证数据**：分割验证使用公开的 **TotalSegmentator-CT-Lite**（CC-BY-4.0）单例，**未随本仓库分发**。
 - **框架/库**：PySide6 (Qt for Python, LGPL)、pydicom、NumPy、SciPy、scikit-image、ONNX Runtime、nibabel。
 

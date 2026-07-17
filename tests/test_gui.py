@@ -5,7 +5,7 @@
 # 覆盖：启动/工具栏、AI 推理引擎（取消/进度/信号回调）、历次修复项、
 #      多器官分割渲染与定量、分割手动编辑（画笔/橡皮/目标/撤销）、
 #      椭圆 ROI（渲染/拖动/缩放/命中）、采样密度、双序列对比（配准/守卫）、
-#      Cine（往返/调速/键盘）、合规（脱敏/免责）。
+#      Cine（往返/调速/键盘）、合规（脱敏/免责）、重建算法数值正确性（解析模体验算）。
 #
 # 运行：conda activate dicom_gui && python tests/test_gui.py
 #      （离屏 Qt，无需真实显示；依赖同目录 ../肺癌 真实数据自动加载）
@@ -471,6 +471,173 @@ def test_recon_finite(app):
     p_ok = np.array([1.0, 0.0, 0.5, 0.2], np.float32)
     rec_ok, _ = R.compute_dmr(A, p_ok, 2)
     check(np.allclose(rec_ok.ravel(), np.clip(p_ok, 0, 1)), "正常弦图 DMR 结果不受 finite 守卫影响")
+
+
+def _recon_disk(n, radius_frac=0.3, val=1.0):
+    """半径 = radius_frac·n 的均匀圆盘，圆心取几何中心 (n-1)/2（与 radon 的探测器中心对齐）。"""
+    c = (n - 1) / 2.0
+    Y, X = np.ogrid[:n, :n]
+    return (((Y - c) ** 2 + (X - c) ** 2 <= (radius_frac * n) ** 2) * val).astype(np.float32)
+
+
+def _recon_phantom(n):
+    """Shepp-Logan 缩到 n×n 并施加圆形掩码——与 experiments/recon_study.py:get_phantom 同一构造。"""
+    import scipy.ndimage as ndimage
+    from skimage.data import shepp_logan_phantom
+
+    import recon as R
+    p = shepp_logan_phantom().astype(np.float32)
+    p = ndimage.zoom(p, (n / p.shape[0], n / p.shape[1]))
+    return (np.clip(p, 0.0, 1.0) * R._circle_mask(n)).astype(np.float32)
+
+
+def _roi_corr(a, b, n):
+    """圆形 ROI 内的零均值单位方差相关系数——与幅度/偏置无关，只看结构是否对得上。
+    BP 未归一化（量级差 100×），只能用相关系数与 FBP 公平比较。"""
+    import recon as R
+    m = R._circle_mask(n) > 0
+    x, y = a[m].astype(np.float64), b[m].astype(np.float64)
+    x = (x - x.mean()) / (x.std() + 1e-12); y = (y - y.mean()) / (y.std() + 1e-12)
+    return float(np.mean(x * y))
+
+
+def test_recon_numerics():
+    """重建算法数值正确性——解析可知的模体 + 已知性质，在 "finite" 之外真正验算法对不对。
+
+    断言全部锚在解析可知或理论恒等的性质上（质量守恒、解析弦长、算子线性、中心切片定理、
+    A·x≡Radon、满秩精确还原、迭代单调收敛），而非「上次跑出来是多少」的快照值——后者会把
+    bug 一起固化。n=64（解析/FBP/DFR 段）与 n=16（矩阵/迭代段），无真实数据、无 ONNX、
+    无 multiprocessing、不写 .matrix_cache。阈值按实测值留足余量（注释标出实测数）。
+    """
+    print("[重建算法数值正确性]")
+    from skimage.metrics import structural_similarity
+
+    import recon as R
+    n = 64
+    # ---- 1) compute_sinogram：解析可知的正向投影性质 ----
+    disk = _recon_disk(n, 0.3)
+    theta = R.make_theta(180, 60)
+    sino = R.compute_sinogram(disk, theta)
+    check(sino.shape == (n, len(theta)), f"弦图 shape=(探测器{n}, 角度{len(theta)}) (得 {sino.shape})")
+    # 每角度投影积分 = 图像总质量（线积分守恒，理论恒等）。实测偏差 3.1e-4，阈值 5e-3 留 16× 余量
+    col_sums = sino.sum(axis=0)
+    dev = float(np.abs(col_sums - disk.sum()).max() / disk.sum())
+    check(dev < 5e-3, f"总质量守恒：每角度投影积分 = 图像总和 (最大相对偏差 {dev:.2e})")
+    # 均匀圆盘 0° 投影 = 解析弦长 2√(R²-t²)。误差集中在圆盘边界像素化(partial volume)处：
+    # 实测 max 0.853 / 峰值 38.4（相对 2.2%），阈值取峰值 5% = 1.92，留 2.25× 余量
+    t = np.arange(n) - (n - 1) / 2.0
+    chord = 2 * np.sqrt(np.maximum((0.3 * n) ** 2 - t ** 2, 0))
+    err = float(np.abs(sino[:, 0] - chord).max())
+    check(err < 0.05 * chord.max(), f"均匀圆盘 0° 投影剖面 = 解析弦长 2√(R²-t²) (最大绝对误差 {err:.3f}, 峰值 {chord.max():.1f})")
+    # Radon 是线性算子：s(a+b)=s(a)+s(b)。实测 9.5e-06（float32 舍入），阈值 1e-4 留 10× 余量
+    a, b = _recon_disk(n, 0.2), _recon_disk(n, 0.35, 0.5)
+    lin = float(np.abs(R.compute_sinogram(a + b, theta) - R.compute_sinogram(a, theta) - R.compute_sinogram(b, theta)).max())
+    check(lin < 1e-4, f"Radon 变换线性：s(a+b)=s(a)+s(b) (最大偏差 {lin:.2e})")
+    # ---- 2) compute_fbp：与真值的 RMSE / SSIM 达阈值 ----
+    gt = _recon_phantom(n)
+    theta = R.make_theta(180, 180)
+    sino = R.compute_sinogram(gt, theta)
+    bp_ret, fbp = R.compute_fbp(sino, theta, "ramp")
+    m = R._circle_mask(n) > 0
+    # 实测 RMSE=0.0869 / SSIM=0.8541。误差底噪来自 n=64 下采样的锐边 + ramp 振铃，对投影数极不敏感
+    # （60/90/180 投影下 RMSE=0.0882/0.0872/0.0869，SSIM=0.799/0.845/0.854），故阈值稳健。
+    rmse_fbp = float(np.sqrt(np.mean((fbp - gt)[m] ** 2)))
+    ssim_fbp = float(structural_similarity(gt, fbp.astype(np.float32), data_range=1.0))
+    check(rmse_fbp < 0.12, f"FBP(ramp) 重建 Shepp-Logan：ROI RMSE={rmse_fbp:.4f} < 0.12")
+    check(ssim_fbp > 0.75, f"FBP(ramp) 重建 SSIM={ssim_fbp:.4f} > 0.75")
+    _, fbp_alias = R.compute_fbp(sino, theta, "Ram-Lak")
+    check(np.array_equal(fbp, fbp_alias), "滤波器名 'Ram-Lak' 映射为 'ramp'（UI 名称契约）")
+    # ---- 3) compute_bp：必须明显差于 FBP —— 证明滤波真的起作用 ----
+    bp = R.compute_bp(sino, theta)
+    check(np.array_equal(bp, bp_ret), "compute_fbp 返回的未滤波图 == compute_bp")
+    # BP 未归一化且低频过度叠加：用与幅度无关的相关系数比较才公平。实测 BP=0.536 / FBP=0.936
+    # （跨 60/90/180 投影极稳定）；阈值 0.7 两侧各留 ~30% 余量
+    c_fbp, c_bp = _roi_corr(gt, fbp, n), _roi_corr(gt, bp, n)
+    check(c_bp < 0.7 < c_fbp, f"纯反投影模糊：与真值相关 BP={c_bp:.3f} 显著低于 FBP={c_fbp:.3f}")
+    rmse_bp = float(np.sqrt(np.mean((bp - gt)[m] ** 2)))
+    check(rmse_bp > 10 * rmse_fbp, f"BP RMSE={rmse_bp:.2f} 远大于 FBP RMSE={rmse_fbp:.4f}（低频过度叠加）")
+    # ---- 4) compute_dfr：中心切片定理的直流项 + 方位契约 ----
+    freq2d, fft1d, dfr = R.compute_dfr(sino, theta)
+    check(freq2d.shape == (n, n) and np.all(np.isfinite(freq2d)), "DFR 频域矩阵 n×n 且全有限")
+    check(fft1d.shape == sino.shape and float(fft1d.min()) >= 0.0, "DFR 一维谱 log1p 幅度非负、与弦图同形")
+    # 中心切片定理的直接推论：二维频域原点 = 图像总质量。实测 |1-比值| ≈ 2e-7（n=32/48/64/96 皆然），
+    # 阈值 1e-3 留 4 个数量级余量——任何归一化/零频错位都会让它整数倍地跑掉。
+    dc_ratio = float(abs(freq2d[n // 2, n // 2]) / gt.sum())
+    check(abs(dc_ratio - 1.0) < 1e-3, f"中心切片定理：频域直流项 |F(0,0)| = 图像总质量 (比值 {dc_ratio:.6f})")
+    # compute_dfr 的输出须经 np.rot90 才与输入同方位——recon_lab.py:304 正是这样显示的。
+    # 实测 rot90 相关=0.689，未旋转仅 0.012（几乎无关）；此断言把该隐式方位契约钉死。
+    dfr_disp = np.rot90(np.abs(dfr)).astype(np.float32)
+    c_dfr, c_raw = _roi_corr(gt, dfr_disp, n), _roi_corr(gt, np.abs(dfr).astype(np.float32), n)
+    check(c_dfr > 0.6 and c_dfr > 5 * abs(c_raw), f"DFR 输出经 np.rot90 后才与真值对齐：rot90 相关={c_dfr:.3f} vs 未旋转={c_raw:.3f}（recon_lab.py:304 显示契约）")
+    # ---- 5) 系统矩阵 + DMR：满秩无噪系统应精确还原 ----
+    # 直接调 _matrix_worker 在进程内建阵（n=16 实测 0.08 s）：避开 multiprocessing 与 .matrix_cache 写盘副作用
+    n_s = 16
+    theta_s = R.make_theta(180, 32)
+    _, _, A = R._matrix_worker((0, n_s * n_s, n_s, theta_s))
+    img = np.zeros((n_s, n_s), np.float32)
+    img[4:9, 4:9] = 1.0; img[9:12, 7:12] = 0.5; img[5:7, 10:13] = 0.75
+    img *= R._circle_mask(n_s)
+    sino_s = R.compute_sinogram(img, theta_s)
+    check(A.shape == (sino_s.size, n_s * n_s), f"系统矩阵 shape=(射线{sino_s.size}, 像素{n_s * n_s}) (得 {A.shape})")
+    # A 就是 Radon 的矩阵表示：A·x 必须等于 compute_sinogram(x)。实测 9.5e-07（float32 精度），阈值 1e-4
+    fwd = float(np.abs(A @ img.ravel() - sino_s.ravel()).max())
+    check(fwd < 1e-4, f"系统矩阵与 Radon 一致：max|A·x - compute_sinogram(x)| = {fwd:.2e}")
+    rank = int(np.linalg.matrix_rank(A))
+    check(rank == n_s * n_s, f"A 列满秩 rank={rank} = {n_s * n_s}（DMR 有唯一最小二乘解）")
+    # 满秩 + 无噪 ⇒ lstsq 应还原到浮点精度。实测 max|err|=1.0e-06，阈值 1e-4 留 100× 余量
+    p_vec = sino_s.ravel().astype(np.float32)
+    dmr, ms = R.compute_dmr(A, p_vec, n_s)
+    err_dmr = float(np.abs(dmr - img).max())
+    check(err_dmr < 1e-4, f"DMR 满秩无噪系统精确还原：max|err| = {err_dmr:.2e}")
+    check(ms >= 0.0, f"DMR 返回耗时 {ms:.1f} ms")
+    key = (n_s, len(theta_s), round(float(theta_s[0]), 4), round(float(theta_s[-1]), 4))
+    A_c, key_c = R.build_system_matrix(n_s, theta_s, A, key)
+    check(A_c is A and key_c == key, "build_system_matrix 命中内存缓存直接复用（不重建、不起子进程）")
+    # ---- 6) ART / SIRT：迭代应收敛，误差随迭代下降 ----
+    stop = {"n": 0}
+    def _cancel(): stop["n"] += 1; return True          # 定义在循环外：避免闭包捕获循环变量（ruff B023）
+    for name, fn in (("ART", R.compute_art), ("SIRT", R.compute_sirt)):
+        rmses, resids = [], []
+        for it in (1, 5, 20):
+            rec, _ = fn(A, p_vec, n_s, it)
+            rmses.append(float(np.sqrt(np.mean((rec - img) ** 2))))
+            resids.append(float(np.linalg.norm(A @ rec.ravel() - p_vec)))
+        # 实测 ART RMSE 0.2126>0.0542>0.0167、残差 30.56>4.29>0.83；
+        #      SIRT RMSE 0.2582>0.1618>0.0885、残差 35.22>15.25>5.29——严格单调，余量极大
+        check(rmses[0] > rmses[1] > rmses[2], f"{name} RMSE 随迭代单调下降: {rmses[0]:.4f} > {rmses[1]:.4f} > {rmses[2]:.4f}")
+        check(resids[0] > resids[1] > resids[2], f"{name} 弦图残差 ‖A·x-p‖ 单调下降: {resids[0]:.2f} > {resids[1]:.2f} > {resids[2]:.2f}")
+        check(rmses[2] < 0.5 * rmses[0], f"{name} 20 轮后 RMSE={rmses[2]:.4f} 不足 1 轮的一半（确在收敛）")
+        stop["n"] = 0
+        rec_c, _ = fn(A, p_vec, n_s, 100, cancel_check=_cancel)
+        check(stop["n"] == 1 and float(np.abs(rec_c).max()) == 0.0, f"{name} cancel_check 首轮即停，返回全零初值（不跑满 100 轮）")
+        seen = []
+        fn(A, p_vec, n_s, 3, progress_cb=seen.append)
+        check(seen == [0, 1, 2], f"{name} progress_cb 每轮回调一次 (得 {seen})")
+    # Kaczmarz 逐射线更新每轮信息利用率高于 SIRT 的同步更新——教科书性质。实测 0.0167 vs 0.0885（5×）
+    art20, _ = R.compute_art(A, p_vec, n_s, 20)
+    sirt20, _ = R.compute_sirt(A, p_vec, n_s, 20)
+    r_art = float(np.sqrt(np.mean((art20 - img) ** 2))); r_sirt = float(np.sqrt(np.mean((sirt20 - img) ** 2)))
+    check(r_art < r_sirt, f"同迭代数下 ART 收敛快于 SIRT: RMSE {r_art:.4f} < {r_sirt:.4f}")
+    check(float(art20.min()) >= 0.0 and float(sirt20.min()) >= 0.0, "ART/SIRT 非负约束生效")
+
+
+def test_recon_pipeline_helpers():
+    """重建预处理/上采样纯函数直接单测——合成数组，无 Qt / 真实数据 / 系统矩阵。"""
+    print("[重建预处理/上采样纯函数]")
+    import recon as R
+    check(len(R.make_theta(180)) == 180 and float(R.make_theta(180)[-1]) == 179.0, "make_theta 省略 n_proj 时每度一个投影（向后兼容）")
+    big = np.zeros((100, 80), np.float32); big[20:60, 20:60] = 1.0; big[0, 0] = 1.0  # 角落故意置 1，验掩码
+    img_s, sino, theta = R.prepare_small_image(big, 32, 180, 90)
+    check(img_s.shape == (32, 32) and sino.shape == (32, 90) and len(theta) == 90, f"prepare_small_image 缩放到 32² 并出 (32,90) 弦图 (得 {img_s.shape}, {sino.shape})")
+    check(float(img_s.min()) >= 0.0 and float(img_s.max()) <= 1.0, f"缩放后 clip 在 [0,1]（防样条插值 Gibbs 过冲，得 [{img_s.min():.3f}, {img_s.max():.3f}]）")
+    outside = R._circle_mask(32) == 0
+    check(bool(np.all(img_s[outside] == 0)) and float(img_s[0, 0]) == 0.0, "圆形掩码生效：圆外恒为 0（角落原有值被掩掉，避免误差图虚假大误差）")
+    check(bool(np.allclose(sino, R.compute_sinogram(img_s, theta))), "返回的弦图 == compute_sinogram(返回的小图)（三元组自洽）")
+    up = R.upscale_recon(img_s, 32)
+    check(up.shape == (256, 256), f"upscale_recon 32² → 256²（scale=8）(得 {up.shape})")
+    check(bool(np.all(up[0:8, 0:8] == img_s[0, 0])) and bool(np.all(up[8:16, 0:8] == img_s[1, 0])), "kron 严格像素块复制（非插值，保留像素块感）")
+    same = np.zeros((256, 256), np.float32)
+    check(R.upscale_recon(same, 256) is same, "n=256 时 scale=1，原数组原样返回（不复制）")
 
 
 def test_malformed_annotations(v, app):
@@ -967,6 +1134,8 @@ def main_run():
         test_lung_fallback()
         test_mpr_geometry()
         test_mask_cache_guard()
+        test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
+        test_recon_pipeline_helpers()
     else:
         v = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌"))
         app.processEvents()
@@ -1000,6 +1169,8 @@ def main_run():
         test_lung_fallback()
         test_mpr_geometry()
         test_mask_cache_guard()
+        test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
+        test_recon_pipeline_helpers()
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0
 

@@ -169,7 +169,11 @@ def compute_dfr(sinogram: np.ndarray, theta: np.ndarray) -> tuple[np.ndarray, np
     返回: (freq_domain_2d, fft_1d_display, recon_dfr)
       freq_domain_2d:   插值后的二维复数频域矩阵，供"二维频域分布"视图展示
       fft_1d_display:   log1p 压缩后的一维频谱幅度图，供"一维FFT谱"视图展示
-      recon_dfr:        2D 逆 FFT 重建结果（复数，取 abs 后显示）
+      recon_dfr:        2D 逆 FFT 重建结果（复数，取 abs 后显示）。
+                        注意：本函数输出的方位相对输入图像转了 90°——调用方须取
+                        np.rot90(np.abs(recon_dfr)) 才与输入同方位（见 recon_lab.py:304）。
+                        该契约已由 tests/test_gui.py:test_recon_numerics 的 DFR 断言钉住
+                        （实测：rot90 后与真值相关 0.689，未旋转仅 0.012）。
 
     算法步骤：
       1. 对弦图每列（沿探测器方向）做 1D FFT → 极坐标频域样本
