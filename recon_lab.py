@@ -300,8 +300,8 @@ class ReconLabMixin:
         # V3 显示：投影的一维傅里叶谱
         self.display_numpy_image(3, fft_1d_display, is_freq=False)
         self.set_view_title(3, "V3 [1D FFT Spectrum]" if self.is_english else "V3 [投影的一维傅里叶谱]")
-        # V4 显示：重建图像
-        self.display_numpy_image(4, np.rot90(np.abs(recon_dfr)))
+        # V4 显示：重建图像（朝向已在 compute_dfr 内校正，直接 abs 即可）
+        self.display_numpy_image(4, np.abs(recon_dfr))
         self.set_view_title(4, "V4 [Direct Fourier DFR]" if self.is_english else "V4 [直接傅里叶重建 DFR]")
 
     # =========================================================================

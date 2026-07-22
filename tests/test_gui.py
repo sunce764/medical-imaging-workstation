@@ -564,11 +564,15 @@ def test_recon_numerics():
     # 阈值 1e-3 留 4 个数量级余量——任何归一化/零频错位都会让它整数倍地跑掉。
     dc_ratio = float(abs(freq2d[n // 2, n // 2]) / gt.sum())
     check(abs(dc_ratio - 1.0) < 1e-3, f"中心切片定理：频域直流项 |F(0,0)| = 图像总质量 (比值 {dc_ratio:.6f})")
-    # compute_dfr 的输出须经 np.rot90 才与输入同方位——recon_lab.py:304 正是这样显示的。
-    # 实测 rot90 相关=0.689，未旋转仅 0.012（几乎无关）；此断言把该隐式方位契约钉死。
-    dfr_disp = np.rot90(np.abs(dfr)).astype(np.float32)
-    c_dfr, c_raw = _roi_corr(gt, dfr_disp, n), _roi_corr(gt, np.abs(dfr).astype(np.float32), n)
-    check(c_dfr > 0.6 and c_dfr > 5 * abs(c_raw), f"DFR 输出经 np.rot90 后才与真值对齐：rot90 相关={c_dfr:.3f} vs 未旋转={c_raw:.3f}（recon_lab.py:304 显示契约）")
+    # compute_dfr 已在内部把朝向校正为与输入同方位，直接 abs 即可（不再有"须自行 rot90"契约）。
+    # 实测 n=64 治本后与真值相关 0.906（旧的 rot90 仅 0.689、完全未处理仅 0.012），阈值 0.85 留余量。
+    c_dfr = _roi_corr(gt, np.abs(dfr).astype(np.float32), n)
+    check(c_dfr > 0.85, f"DFR 输出直接与真值对齐（内部已校正朝向，无需调用方 rot90）：相关={c_dfr:.3f} > 0.85")
+    # 偏心脉冲的重建峰值须精确落在输入位置——偶数 n 曾因 np.rot90 绕几何中心 (n-1)/2 而错位 1 像素，已修
+    imp = np.zeros((n, n), np.float32); imp[n // 2 - 8, n // 2 + 6] = 1.0; imp *= R._circle_mask(n)
+    _, _, dfr_imp = R.compute_dfr(R.compute_sinogram(imp, theta), theta)
+    pk = tuple(int(v) for v in np.unravel_index(int(np.argmax(np.abs(dfr_imp))), (n, n)))
+    check(pk == (n // 2 - 8, n // 2 + 6), f"偏心脉冲重建峰值精确对齐输入 {(n // 2 - 8, n // 2 + 6)} (得 {pk}；偶数 n 的 1 像素错位已修)")
     # ---- 5) 系统矩阵 + DMR：满秩无噪系统应精确还原 ----
     # 直接调 _matrix_worker 在进程内建阵（n=16 实测 0.08 s）：避开 multiprocessing 与 .matrix_cache 写盘副作用
     n_s = 16
