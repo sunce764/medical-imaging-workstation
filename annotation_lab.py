@@ -37,6 +37,28 @@ from constants import AXIAL, LABEL_LUT, MANUAL_TRACK_LABEL
 from graphics_view import ROIGraphicsItem
 
 
+def mask_cache_matches(saved_uid, saved_shape, cur_uid, cur_shape):
+    """判断磁盘缓存的分割蒙版能否安全恢复到当前序列（纯函数，无 Qt，可独立单测）。
+
+    只比 shape 是不够的：缓存按 PatientID 命名，而同一患者的随访/复扫序列
+    （本软件的双序列对比功能正是为此设计）往往同为 512×512×N —— 只按 shape 匹配
+    会把 A 序列的蒙版静默套到 B 序列上，器官定量随之给出错误体积且无任何告警。
+    故要求 SeriesInstanceUID 严格相等；缓存或当前序列缺 UID 时一律拒绝：
+    宁可重跑 AI，也不返回可能张冠李戴的蒙版。
+
+    返回 (是否可恢复, 拒绝原因)；可恢复时原因为 ''。
+    """
+    if tuple(saved_shape) != tuple(cur_shape):
+        return False, f"shape 不匹配（缓存 {tuple(saved_shape)} vs 当前 {tuple(cur_shape)}）"
+    if not saved_uid:
+        return False, "缓存未记录 SeriesInstanceUID（旧版本产物），无法确认是否同一序列"
+    if not cur_uid:
+        return False, "当前序列缺 SeriesInstanceUID，无法确认与缓存是否同源"
+    if str(saved_uid) != str(cur_uid):
+        return False, "SeriesInstanceUID 不同（同一患者的另一序列），拒绝套用"
+    return True, ""
+
+
 class AnnotationMixin:
     """标注 / 分割蒙版编辑 / 器官定量相关方法集合，混入 MedicalViewer。"""
 
@@ -273,17 +295,33 @@ class AnnotationMixin:
         except Exception as e:
             print(f"Warning: failed to load annotations from {af}: {e}")
 
+    def _current_series_uid(self):
+        """当前序列的 SeriesInstanceUID；无数据或畸形 DICOM 缺该标签时返回 ''。"""
+        if not self.dicom_datasets:
+            return ''
+        return str(getattr(self.dicom_datasets[0], 'SeriesInstanceUID', '') or '')
+
     def _load_saved_mask(self, pid):
-        """尝试加载上次保存的 AI 分割标签图(.npz)，shape 匹配才恢复到 volume_mask。"""
+        """尝试加载上次保存的 AI 分割标签图(.npz)，SeriesInstanceUID 与 shape 双双匹配才恢复。
+
+        判定逻辑在纯函数 mask_cache_matches（无 Qt，可独立单测）。只比 shape 会把同一
+        患者另一序列（随访/复扫，常同为 512²）的蒙版静默套用，导致器官定量给出错误体积。
+        """
         fp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "Exported_Lesions", f"{self._safe_name(pid)}_mask.npz")
         if not os.path.exists(fp):
             return False
         try:
-            m = np.load(fp)['mask']
-            if m.shape == self.volume_hu.shape:
-                self.volume_mask = m.astype(np.uint8)
-                return True
+            z = np.load(fp)
+            m = z['mask']
+            saved_uid = str(z['series_uid'].item()) if 'series_uid' in z.files else ''
+            ok, why = mask_cache_matches(saved_uid, m.shape,
+                                         self._current_series_uid(), self.volume_hu.shape)
+            if not ok:
+                print(f"跳过磁盘缓存的分割蒙版：{why}；将重新运行 AI 分割。")
+                return False
+            self.volume_mask = m.astype(np.uint8)
+            return True
         except Exception as e:
             print(f"Warning: failed to load saved mask: {e}")
         return False
@@ -300,9 +338,13 @@ class AnnotationMixin:
         try:
             with open(os.path.join(ed, f"{pid}_annotations.json"), 'w', encoding='utf-8') as f:
                 json.dump({str(k): v for k, v in self.global_annotations.items()}, f, indent=4)
-            # 一并保存 AI 多器官分割标签图，下次加载可直接恢复，免掉 ~100s 重算
+            # 一并保存 AI 多器官分割标签图，下次加载可直接恢复，免掉 ~100s 重算。
+            # 必须连同 SeriesInstanceUID 一起写入：加载时据此确认是同一序列，
+            # 避免把同一患者另一序列（随访/复扫）的蒙版张冠李戴（见 mask_cache_matches）。
             if self.volume_mask is not None and np.any(self.volume_mask):
-                np.savez_compressed(os.path.join(ed, f"{pid}_mask.npz"), mask=self.volume_mask)
+                np.savez_compressed(os.path.join(ed, f"{pid}_mask.npz"),
+                                    mask=self.volume_mask,
+                                    series_uid=np.array(self._current_series_uid()))
             QMessageBox.information(self, "Success", "Project Saved.")
         except Exception as e:
             QMessageBox.warning(self, "Save Failed", f"Failed to save project:\n{e}")

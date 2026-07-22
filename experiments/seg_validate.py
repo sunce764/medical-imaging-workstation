@@ -12,6 +12,12 @@
 #   RemoteZip(base+"/Images.zip").read("Images/s0029.nii.gz")  -> s0029_img.nii.gz
 #   RemoteZip(base+"/Masks.zip").read("Masks/s0029.nii.gz")    -> s0029_msk.nii.gz
 #
+# 复现性限制（如实记录）：上面 URL 用的是 /resolve/main —— main 是【可变分支引用】。
+#   上游若更新数据集，重抓到的内容可能与产出 results/seg_dice.csv 时所用的不是同一份，
+#   而本仓库未记录当时那两个 .nii.gz 的校验和（原始文件已不在本地，无法事后补记）。
+#   要严格复现，请改用固定 revision（HF 支持 /resolve/<commit-sha>/...）并记录所得文件
+#   的 SHA256 后再与本仓库结果比对；已提交的 Dice 数值对应的是当时 main 分支的内容。
+#
 # 用法：
 #   python experiments/seg_validate.py <img.nii.gz> <mask.nii.gz>
 # 产出：experiments/results/ 下 seg_confusion.png + seg_dice.csv + seg_mapping.md

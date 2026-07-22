@@ -1,5 +1,6 @@
 # 量化研究额外依赖（App 运行不需要，仅复现 experiments/ 的实验时安装）
 # 主 requirements.txt 已含 numpy/scipy/scikit-image/onnxruntime，此处只补实验专用项。
-matplotlib>=3.8      # 出图（曲线/柱状/混淆热图）
-nibabel>=5.0         # 读取 TotalSegmentator nii.gz 影像与真值
-remotezip>=0.12      # HTTP Range 从 HF 大压缩包里只抽单例（seg_validate 数据获取）
+# 与主 requirements.txt 同风格锁版：已提交的 results/ 由下列确切版本跑出。
+matplotlib==3.10.8   # 出图（曲线/柱状/混淆热图）
+nibabel==5.4.2       # 读取 TotalSegmentator nii.gz 影像与真值
+remotezip==0.12.3    # HTTP Range 从 HF 大压缩包里只抽单例（seg_validate 数据获取）

@@ -646,7 +646,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.ai_thread.start()
 
     def _on_ai_progress(self, done, total, generation):
-        """AI 滑窗推理进度回调（经 QTimer 投递到主线程）。仅更新当前代的进度显示。"""
+        """AI 滑窗推理进度回调（经 Qt 信号 QueuedConnection 投递到主线程）。仅更新当前代的进度显示。"""
         if generation != self._ai_generation or self._ai_state != 'running':
             return
         pct = int(100 * done / total) if total else 0
@@ -663,7 +663,10 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
                 else f"状态: 检出 {n} 个器官 ({self._ai_time_ms:.0f}ms)")
 
     def on_auto_ai_finished(self, final_mask, time_ms, generation=None):
-        """AI 推理完成的回调（由 QTimer.singleShot 投递到主线程执行）。
+        """AI 推理完成的回调（由 Qt 信号 QueuedConnection 投递到主线程执行）。
+
+        投递机制勿改为 QTimer.singleShot：它依附调用它的子线程，而子线程无 Qt 事件循环，
+        回调根本不 fire（本项目踩过此坑，AI 蒙版曾从未真正显示）。见 ai_engine._AISignals。
 
         generation 比对：防止旧数据的 AI 结果在新数据加载后才回调，覆盖新数据的蒙版。
         shape 比对：防止数组维度不匹配导致后续 volume_mask 操作越界。

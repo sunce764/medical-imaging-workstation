@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 
 import numpy as np
+import shiboken6  # 随 PySide6 一同安装（PySide6_Essentials 硬依赖 shiboken6==6.11.0），非新增依赖
 from PySide6.QtCore import QObject, Signal
 
 import segmentation
@@ -62,13 +63,19 @@ class AutoAIEngineThread:
         #           label_map 为 uint8 多类标签图（0=背景，1-24=器官类别）
         # model_path: ONNX 模型文件绝对路径，默认 constants.MODEL_PATH（models/organs.onnx）
         # progress_callback: 可选，签名 progress_callback(done_slices, total_slices)，
-        #                    在滑窗推理过程中经 QTimer 投递到主线程，用于更新进度显示
+        #                    在滑窗推理过程中经 Qt 信号（QueuedConnection）投递到主线程，
+        #                    用于更新进度显示
         self.volume_hu = volume_hu
         self.callback = callback
         self.model_path = model_path
         self.progress_callback = progress_callback
         self._thread = None
-        # 信号对象在此（主线程）创建，其槽即在主线程执行；子线程 emit 自动排队投递
+        # 信号对象在此（主线程）创建，其槽即在主线程执行；子线程 emit 自动排队投递。
+        # 【刻意不设 parent，勿"优化"】实测（PySide6 6.11.0，15×15 对照）：不设 parent 时
+        # 宿主 widget 销毁后信号源仍存活（isValid=True），emit 正常，0/15 异常；一旦设
+        # parent=viewer，Qt 会在宿主析构时连带删除本对象，后台线程的 emit 必抛
+        # RuntimeError('Signal source has been deleted') —— 15/15 必现，且把 Python 层
+        # 异常升级为 C++ 跨线程 use-after-free。生存期已由后台线程栈帧持有本引擎保证。
         self._signals = _AISignals()
         self._signals.finished.connect(lambda m, t: self.callback(m, t))
         if progress_callback is not None:
@@ -90,6 +97,23 @@ class AutoAIEngineThread:
     def isRunning(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    def _emit_safe(self, signal, *args) -> bool:
+        """向主线程投递信号；若信号源已被拆卸则返回 False（不抛异常）。
+
+        QApplication 拆卸 / 进程退出时，_AISignals 的 C++ 侧可能已被销毁，此后任何
+        emit 都抛 RuntimeError('Signal source has been deleted')。那是退出期竞态，
+        不是推理失败——不加守卫的话它会被 _run 的 except 吞成「ONNX 推理失败」（日志说假话），
+        或从 finished.emit 处直接冲出线程打印 traceback。
+        投递机制仍是 Qt 信号（QueuedConnection），此处只加一道前置存活校验。
+        """
+        if not shiboken6.isValid(self._signals):
+            return False
+        try:
+            signal.emit(*args)
+            return True
+        except RuntimeError:
+            return False   # isValid 与 emit 之间宿主被拆卸的 TOCTOU 窗口，同样按拆卸处理
+
     def _run(self) -> None:
         """推理主体，运行在后台线程，严禁在此处操作任何 Qt 对象（非线程安全）。"""
         start_t = time.perf_counter()
@@ -106,6 +130,13 @@ class AutoAIEngineThread:
         if HAS_ONNX and os.path.exists(self.model_path):
             try:
                 final_mask = self._run_onnx_multiorgan(norm_vol)
+            except RuntimeError as e:
+                # Qt 生命周期竞态，不是模型问题：进度 emit 在 QApplication 拆卸后会抛
+                # RuntimeError('Signal source has been deleted')。实测 onnxruntime 1.23.2 的
+                # 14 个异常类型全部直接继承 Exception、无一继承 RuntimeError，故此分支
+                # 不会误吞真正的推理失败。日志必须说实话：这不是「ONNX 推理失败」。
+                print(f"AI 推理在应用拆卸期间中断（非模型故障）: {e}")
+                self._cancelled = True   # 宿主已在拆卸，无需再做数学降级，让线程尽早退出
             except Exception as e:
                 print(f"ONNX 推理失败，降级为数学算法: {e}")
 
@@ -124,8 +155,10 @@ class AutoAIEngineThread:
             return  # 数学降级期间也可能被作废，退出前再确认一次
         final_mask = final_mask.astype(np.uint8)  # 统一为 uint8 标签图，供调色板 LUT 索引
         end_t = time.perf_counter()
-        # 经信号跨线程投递到主线程（QueuedConnection），安全更新 Qt UI
-        self._signals.finished.emit(final_mask, (end_t - start_t) * 1000)
+        # 经信号跨线程投递到主线程（QueuedConnection），安全更新 Qt UI。
+        # 走 _emit_safe：拆卸期若信号源已销毁，此处原本会抛 RuntimeError 冲出 _run，
+        # 由 threading 打印「Exception in thread」traceback（此 emit 不在任何 try 内）。
+        self._emit_safe(self._signals.finished, final_mask, (end_t - start_t) * 1000)
 
     def _run_onnx_multiorgan(self, norm_vol: np.ndarray) -> np.ndarray | None:
         """ONNX 多器官分割推理，返回 uint8 标签图（0=背景，1-24=器官类别）。
@@ -158,5 +191,5 @@ class AutoAIEngineThread:
             del out, lab
             if self.progress_callback is not None:
                 # 经信号跨线程投递到主线程更新进度显示（子线程禁止直接操作 Qt）
-                self._signals.progress.emit(z1, Z)
+                self._emit_safe(self._signals.progress, z1, Z)
         return seg

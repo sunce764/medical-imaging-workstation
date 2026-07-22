@@ -1,9 +1,12 @@
-Copyright © 2026 盛超 (Sheng Chao). All rights reserved.
+Copyright © 2026 盛超 (Sheng Chao) and 赖胜圣 (Lai Shengsheng). All rights reserved.
+
+This software is jointly owned by the two copyright holders named above, as
+registered with the Copyright Protection Centre of China (软件著作权登记).
 
 This repository is made available for personal, educational, and portfolio
 review purposes only. No license is granted to copy, modify, distribute, or use
 the source code, in whole or in part, for any other purpose without the prior
-written permission of the copyright holder.
+written permission of the copyright holders.
 
 Third-party components integrated by this project (e.g., the TotalSegmentator /
 nnU-Net segmentation model graph, PySide6/Qt, pydicom, NumPy, SciPy,
@@ -12,4 +15,4 @@ copyrights; see README.md → "第三方组件 · Acknowledgements". The 119 MB 
 weights (organs.onnx.data) and any patient/DICOM data are NOT part of this
 repository.
 
-To request permission for any use beyond review, contact the copyright holder.
+To request permission for any use beyond review, contact the copyright holders.

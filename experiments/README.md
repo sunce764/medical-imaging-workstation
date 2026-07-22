@@ -5,7 +5,7 @@
 - **研究一（重建）**：用 Shepp-Logan 标准体模测量 `recon.py` 重建质量随剂量/滤波器/算法的变化。
 - **研究二（AI 分割）**：用带真值的公开 CT（TotalSegmentator-CT-Lite）实测 `organs.onnx` 的 Dice，并"测出"其 25 类标签映射。
 
-> 被测对象都是产品代码本身——直接调用 GUI 所用的 `recon` 函数与 `ai_engine` 同款推理，无任何重写。
+> 被测对象都是产品代码本身——重建实验直接 `import recon` 调用 GUI 所用的重建函数；分割实验复刻 `ai_engine` 的同款（逐步数值等价）预处理与滑窗推理，跑的是 GUI 所用的同一个 `organs.onnx`。
 
 ## 运行
 
@@ -92,8 +92,8 @@ python experiments/seg_validate.py s0029_img.nii.gz s0029_msk.nii.gz
 ## 发现
 `exp` 产出：`seg_confusion.png`（混淆热图）· `seg_dice.csv` · `seg_mapping.md`
 
-1. **映射被测出为完美恒等对角线**：our#k → TotalSegmentator 第 k 个器官，逐一命中。**由此确证模型 = TotalSegmentator v2 `class_map_part_organs`**（24 器官 + 背景，nnU-Net v2 导出），不再是"来源未知"。
-2. **21 个在场器官平均 Dice ≈ 0.92**（肾/肺叶 0.97–0.99，甲状腺/胆囊等小器官 0.79–0.82），与 TotalSegmentator 官方公布水平一致——**同时验证了 GUI 推理管线正确**。
+1. **映射被测出为恒等对角线**：our#k → TotalSegmentator 第 k 个器官，逐一命中（本例真值不含前列腺/肾囊肿，故标签 22/23 无实测 Dice，身份由该映射方案确定）。**由此确证模型 = TotalSegmentator v2 `class_map_part_organs`**（24 器官 + 背景，nnU-Net v2 导出），不再是"来源未知"。
+2. **21 个在场器官平均 Dice ≈ 0.92**（肾 0.98，肺叶 0.96–0.99，甲状腺/胆囊等小器官 0.79–0.82），与 TotalSegmentator 官方公布水平一致——**同时验证了 GUI 推理管线正确**。
 3. **纠正历史错标**：`5`=**肝**（旧推断误作"心脏"；模型无心脏/主动脉输出，二者在 TS 另一 part 编号 51/52，超出 0-24）；肺叶 `10,11`=**左**、`12,13,14`=**右**（旧标注左右判反系放射惯例镜像）。`models/organ_labels_candidate.json` 已据此改写为已确证映射。
 
 | our# | 器官 | Dice | | our# | 器官 | Dice |

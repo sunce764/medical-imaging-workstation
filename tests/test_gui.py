@@ -5,7 +5,7 @@
 # 覆盖：启动/工具栏、AI 推理引擎（取消/进度/信号回调）、历次修复项、
 #      多器官分割渲染与定量、分割手动编辑（画笔/橡皮/目标/撤销）、
 #      椭圆 ROI（渲染/拖动/缩放/命中）、采样密度、双序列对比（配准/守卫）、
-#      Cine（往返/调速/键盘）、合规（脱敏/免责）。
+#      Cine（往返/调速/键盘）、合规（脱敏/免责）、重建算法数值正确性（解析模体验算）。
 #
 # 运行：conda activate dicom_gui && python tests/test_gui.py
 #      （离屏 Qt，无需真实显示；依赖同目录 ../肺癌 真实数据自动加载）
@@ -345,10 +345,11 @@ def test_edge_cases(v, app):
 
 
 def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_numeric=False,
-                   n_frames=1, truncate=False):
+                   n_frames=1, truncate=False, pix=100, slope=1, intercept=-1024):
     """写一张最小合规的 CT DICOM，供混合形状加载测试使用。ipp_z=None 则不写 ImagePositionPatient。
     empty_numeric=True 时把 RescaleSlope/Intercept/PixelSpacing/SliceThickness 写成空值（None）。
-    n_frames>1 写多帧 DICOM；truncate=True 写截断的 PixelData（pixel_array 解码会抛）。"""
+    n_frames>1 写多帧 DICOM；truncate=True 写截断的 PixelData（pixel_array 解码会抛）。
+    pix/slope/intercept 给定已知像素值与线性变换，供 HU 转换正确性测试断言 HU=pix*slope+intercept。"""
     import numpy as _np
     from pydicom.dataset import FileDataset, FileMetaDataset
     from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, generate_uid
@@ -368,8 +369,8 @@ def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_n
         ds.ImagePositionPatient = [0.0, 0.0, float(ipp_z)]
     ds.PixelSpacing = None if empty_numeric else [1.0, 1.0]
     ds.SliceThickness = None if empty_numeric else 1.0
-    ds.RescaleSlope = None if empty_numeric else 1
-    ds.RescaleIntercept = None if empty_numeric else -1024
+    ds.RescaleSlope = None if empty_numeric else slope
+    ds.RescaleIntercept = None if empty_numeric else intercept
     ds.SamplesPerPixel = 1
     ds.PhotometricInterpretation = 'MONOCHROME2'
     ds.Rows, ds.Columns = rows, cols
@@ -379,9 +380,9 @@ def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_n
     ds.PixelRepresentation = 1
     if n_frames > 1:
         ds.NumberOfFrames = n_frames
-        ds.PixelData = _np.full((n_frames, rows, cols), 100, dtype=_np.int16).tobytes()
+        ds.PixelData = _np.full((n_frames, rows, cols), pix, dtype=_np.int16).tobytes()
     else:
-        full = _np.full((rows, cols), 100, dtype=_np.int16).tobytes()
+        full = _np.full((rows, cols), pix, dtype=_np.int16).tobytes()
         ds.PixelData = full[:len(full) // 3] if truncate else full
     ds.save_as(path, write_like_original=False)
 
@@ -470,6 +471,177 @@ def test_recon_finite(app):
     p_ok = np.array([1.0, 0.0, 0.5, 0.2], np.float32)
     rec_ok, _ = R.compute_dmr(A, p_ok, 2)
     check(np.allclose(rec_ok.ravel(), np.clip(p_ok, 0, 1)), "正常弦图 DMR 结果不受 finite 守卫影响")
+
+
+def _recon_disk(n, radius_frac=0.3, val=1.0):
+    """半径 = radius_frac·n 的均匀圆盘，圆心取几何中心 (n-1)/2（与 radon 的探测器中心对齐）。"""
+    c = (n - 1) / 2.0
+    Y, X = np.ogrid[:n, :n]
+    return (((Y - c) ** 2 + (X - c) ** 2 <= (radius_frac * n) ** 2) * val).astype(np.float32)
+
+
+def _recon_phantom(n):
+    """Shepp-Logan 缩到 n×n 并施加圆形掩码——与 experiments/recon_study.py:get_phantom 同一构造。"""
+    import scipy.ndimage as ndimage
+    from skimage.data import shepp_logan_phantom
+
+    import recon as R
+    p = shepp_logan_phantom().astype(np.float32)
+    p = ndimage.zoom(p, (n / p.shape[0], n / p.shape[1]))
+    return (np.clip(p, 0.0, 1.0) * R._circle_mask(n)).astype(np.float32)
+
+
+def _roi_corr(a, b, n):
+    """圆形 ROI 内的零均值单位方差相关系数——与幅度/偏置无关，只看结构是否对得上。
+    BP 未归一化（量级差 100×），只能用相关系数与 FBP 公平比较。"""
+    import recon as R
+    m = R._circle_mask(n) > 0
+    x, y = a[m].astype(np.float64), b[m].astype(np.float64)
+    x = (x - x.mean()) / (x.std() + 1e-12); y = (y - y.mean()) / (y.std() + 1e-12)
+    return float(np.mean(x * y))
+
+
+def test_recon_numerics():
+    """重建算法数值正确性——解析可知的模体 + 已知性质，在 "finite" 之外真正验算法对不对。
+
+    断言全部锚在解析可知或理论恒等的性质上（质量守恒、解析弦长、算子线性、中心切片定理、
+    A·x≡Radon、满秩精确还原、迭代单调收敛），而非「上次跑出来是多少」的快照值——后者会把
+    bug 一起固化。n=64（解析/FBP/DFR 段）与 n=16（矩阵/迭代段），无真实数据、无 ONNX、
+    无 multiprocessing、不写 .matrix_cache。阈值按实测值留足余量（注释标出实测数）。
+    """
+    print("[重建算法数值正确性]")
+    from skimage.metrics import structural_similarity
+
+    import recon as R
+    n = 64
+    # ---- 1) compute_sinogram：解析可知的正向投影性质 ----
+    disk = _recon_disk(n, 0.3)
+    theta = R.make_theta(180, 60)
+    sino = R.compute_sinogram(disk, theta)
+    check(sino.shape == (n, len(theta)), f"弦图 shape=(探测器{n}, 角度{len(theta)}) (得 {sino.shape})")
+    # 每角度投影积分 = 图像总质量（线积分守恒，理论恒等）。实测偏差 3.1e-4，阈值 5e-3 留 16× 余量
+    col_sums = sino.sum(axis=0)
+    dev = float(np.abs(col_sums - disk.sum()).max() / disk.sum())
+    check(dev < 5e-3, f"总质量守恒：每角度投影积分 = 图像总和 (最大相对偏差 {dev:.2e})")
+    # 均匀圆盘 0° 投影 = 解析弦长 2√(R²-t²)。误差集中在圆盘边界像素化(partial volume)处：
+    # 实测 max 0.853 / 峰值 38.4（相对 2.2%），阈值取峰值 5% = 1.92，留 2.25× 余量
+    t = np.arange(n) - (n - 1) / 2.0
+    chord = 2 * np.sqrt(np.maximum((0.3 * n) ** 2 - t ** 2, 0))
+    err = float(np.abs(sino[:, 0] - chord).max())
+    check(err < 0.05 * chord.max(), f"均匀圆盘 0° 投影剖面 = 解析弦长 2√(R²-t²) (最大绝对误差 {err:.3f}, 峰值 {chord.max():.1f})")
+    # Radon 是线性算子：s(a+b)=s(a)+s(b)。实测 9.5e-06（float32 舍入），阈值 1e-4 留 10× 余量
+    a, b = _recon_disk(n, 0.2), _recon_disk(n, 0.35, 0.5)
+    lin = float(np.abs(R.compute_sinogram(a + b, theta) - R.compute_sinogram(a, theta) - R.compute_sinogram(b, theta)).max())
+    check(lin < 1e-4, f"Radon 变换线性：s(a+b)=s(a)+s(b) (最大偏差 {lin:.2e})")
+    # ---- 2) compute_fbp：与真值的 RMSE / SSIM 达阈值 ----
+    gt = _recon_phantom(n)
+    theta = R.make_theta(180, 180)
+    sino = R.compute_sinogram(gt, theta)
+    bp_ret, fbp = R.compute_fbp(sino, theta, "ramp")
+    m = R._circle_mask(n) > 0
+    # 实测 RMSE=0.0869 / SSIM=0.8541。误差底噪来自 n=64 下采样的锐边 + ramp 振铃，对投影数极不敏感
+    # （60/90/180 投影下 RMSE=0.0882/0.0872/0.0869，SSIM=0.799/0.845/0.854），故阈值稳健。
+    rmse_fbp = float(np.sqrt(np.mean((fbp - gt)[m] ** 2)))
+    ssim_fbp = float(structural_similarity(gt, fbp.astype(np.float32), data_range=1.0))
+    check(rmse_fbp < 0.12, f"FBP(ramp) 重建 Shepp-Logan：ROI RMSE={rmse_fbp:.4f} < 0.12")
+    check(ssim_fbp > 0.75, f"FBP(ramp) 重建 SSIM={ssim_fbp:.4f} > 0.75")
+    _, fbp_alias = R.compute_fbp(sino, theta, "Ram-Lak")
+    check(np.array_equal(fbp, fbp_alias), "滤波器名 'Ram-Lak' 映射为 'ramp'（UI 名称契约）")
+    # ---- 3) compute_bp：必须明显差于 FBP —— 证明滤波真的起作用 ----
+    bp = R.compute_bp(sino, theta)
+    check(np.array_equal(bp, bp_ret), "compute_fbp 返回的未滤波图 == compute_bp")
+    # BP 未归一化且低频过度叠加：用与幅度无关的相关系数比较才公平。实测 BP=0.536 / FBP=0.936
+    # （跨 60/90/180 投影极稳定）；阈值 0.7 两侧各留 ~30% 余量
+    c_fbp, c_bp = _roi_corr(gt, fbp, n), _roi_corr(gt, bp, n)
+    check(c_bp < 0.7 < c_fbp, f"纯反投影模糊：与真值相关 BP={c_bp:.3f} 显著低于 FBP={c_fbp:.3f}")
+    rmse_bp = float(np.sqrt(np.mean((bp - gt)[m] ** 2)))
+    check(rmse_bp > 10 * rmse_fbp, f"BP RMSE={rmse_bp:.2f} 远大于 FBP RMSE={rmse_fbp:.4f}（低频过度叠加）")
+    # ---- 4) compute_dfr：中心切片定理的直流项 + 方位契约 ----
+    freq2d, fft1d, dfr = R.compute_dfr(sino, theta)
+    check(freq2d.shape == (n, n) and np.all(np.isfinite(freq2d)), "DFR 频域矩阵 n×n 且全有限")
+    check(fft1d.shape == sino.shape and float(fft1d.min()) >= 0.0, "DFR 一维谱 log1p 幅度非负、与弦图同形")
+    # 中心切片定理的直接推论：二维频域原点 = 图像总质量。实测 |1-比值| ≈ 2e-7（n=32/48/64/96 皆然），
+    # 阈值 1e-3 留 4 个数量级余量——任何归一化/零频错位都会让它整数倍地跑掉。
+    dc_ratio = float(abs(freq2d[n // 2, n // 2]) / gt.sum())
+    check(abs(dc_ratio - 1.0) < 1e-3, f"中心切片定理：频域直流项 |F(0,0)| = 图像总质量 (比值 {dc_ratio:.6f})")
+    # compute_dfr 已在内部把朝向校正为与输入同方位，直接 abs 即可（不再有"须自行 rot90"契约）。
+    # 实测 n=64 治本后与真值相关 0.906（旧的 rot90 仅 0.689、完全未处理仅 0.012），阈值 0.85 留余量。
+    c_dfr = _roi_corr(gt, np.abs(dfr).astype(np.float32), n)
+    check(c_dfr > 0.85, f"DFR 输出直接与真值对齐（内部已校正朝向，无需调用方 rot90）：相关={c_dfr:.3f} > 0.85")
+    # 偏心脉冲的重建峰值须精确落在输入位置——偶数 n 曾因 np.rot90 绕几何中心 (n-1)/2 而错位 1 像素，已修
+    imp = np.zeros((n, n), np.float32); imp[n // 2 - 8, n // 2 + 6] = 1.0; imp *= R._circle_mask(n)
+    _, _, dfr_imp = R.compute_dfr(R.compute_sinogram(imp, theta), theta)
+    pk = tuple(int(v) for v in np.unravel_index(int(np.argmax(np.abs(dfr_imp))), (n, n)))
+    check(pk == (n // 2 - 8, n // 2 + 6), f"偏心脉冲重建峰值精确对齐输入 {(n // 2 - 8, n // 2 + 6)} (得 {pk}；偶数 n 的 1 像素错位已修)")
+    # ---- 5) 系统矩阵 + DMR：满秩无噪系统应精确还原 ----
+    # 直接调 _matrix_worker 在进程内建阵（n=16 实测 0.08 s）：避开 multiprocessing 与 .matrix_cache 写盘副作用
+    n_s = 16
+    theta_s = R.make_theta(180, 32)
+    _, _, A = R._matrix_worker((0, n_s * n_s, n_s, theta_s))
+    img = np.zeros((n_s, n_s), np.float32)
+    img[4:9, 4:9] = 1.0; img[9:12, 7:12] = 0.5; img[5:7, 10:13] = 0.75
+    img *= R._circle_mask(n_s)
+    sino_s = R.compute_sinogram(img, theta_s)
+    check(A.shape == (sino_s.size, n_s * n_s), f"系统矩阵 shape=(射线{sino_s.size}, 像素{n_s * n_s}) (得 {A.shape})")
+    # A 就是 Radon 的矩阵表示：A·x 必须等于 compute_sinogram(x)。实测 9.5e-07（float32 精度），阈值 1e-4
+    fwd = float(np.abs(A @ img.ravel() - sino_s.ravel()).max())
+    check(fwd < 1e-4, f"系统矩阵与 Radon 一致：max|A·x - compute_sinogram(x)| = {fwd:.2e}")
+    rank = int(np.linalg.matrix_rank(A))
+    check(rank == n_s * n_s, f"A 列满秩 rank={rank} = {n_s * n_s}（DMR 有唯一最小二乘解）")
+    # 满秩 + 无噪 ⇒ lstsq 应还原到浮点精度。实测 max|err|=1.0e-06，阈值 1e-4 留 100× 余量
+    p_vec = sino_s.ravel().astype(np.float32)
+    dmr, ms = R.compute_dmr(A, p_vec, n_s)
+    err_dmr = float(np.abs(dmr - img).max())
+    check(err_dmr < 1e-4, f"DMR 满秩无噪系统精确还原：max|err| = {err_dmr:.2e}")
+    check(ms >= 0.0, f"DMR 返回耗时 {ms:.1f} ms")
+    key = (n_s, len(theta_s), round(float(theta_s[0]), 4), round(float(theta_s[-1]), 4))
+    A_c, key_c = R.build_system_matrix(n_s, theta_s, A, key)
+    check(A_c is A and key_c == key, "build_system_matrix 命中内存缓存直接复用（不重建、不起子进程）")
+    # ---- 6) ART / SIRT：迭代应收敛，误差随迭代下降 ----
+    stop = {"n": 0}
+    def _cancel(): stop["n"] += 1; return True          # 定义在循环外：避免闭包捕获循环变量（ruff B023）
+    for name, fn in (("ART", R.compute_art), ("SIRT", R.compute_sirt)):
+        rmses, resids = [], []
+        for it in (1, 5, 20):
+            rec, _ = fn(A, p_vec, n_s, it)
+            rmses.append(float(np.sqrt(np.mean((rec - img) ** 2))))
+            resids.append(float(np.linalg.norm(A @ rec.ravel() - p_vec)))
+        # 实测 ART RMSE 0.2126>0.0542>0.0167、残差 30.56>4.29>0.83；
+        #      SIRT RMSE 0.2582>0.1618>0.0885、残差 35.22>15.25>5.29——严格单调，余量极大
+        check(rmses[0] > rmses[1] > rmses[2], f"{name} RMSE 随迭代单调下降: {rmses[0]:.4f} > {rmses[1]:.4f} > {rmses[2]:.4f}")
+        check(resids[0] > resids[1] > resids[2], f"{name} 弦图残差 ‖A·x-p‖ 单调下降: {resids[0]:.2f} > {resids[1]:.2f} > {resids[2]:.2f}")
+        check(rmses[2] < 0.5 * rmses[0], f"{name} 20 轮后 RMSE={rmses[2]:.4f} 不足 1 轮的一半（确在收敛）")
+        stop["n"] = 0
+        rec_c, _ = fn(A, p_vec, n_s, 100, cancel_check=_cancel)
+        check(stop["n"] == 1 and float(np.abs(rec_c).max()) == 0.0, f"{name} cancel_check 首轮即停，返回全零初值（不跑满 100 轮）")
+        seen = []
+        fn(A, p_vec, n_s, 3, progress_cb=seen.append)
+        check(seen == [0, 1, 2], f"{name} progress_cb 每轮回调一次 (得 {seen})")
+    # Kaczmarz 逐射线更新每轮信息利用率高于 SIRT 的同步更新——教科书性质。实测 0.0167 vs 0.0885（5×）
+    art20, _ = R.compute_art(A, p_vec, n_s, 20)
+    sirt20, _ = R.compute_sirt(A, p_vec, n_s, 20)
+    r_art = float(np.sqrt(np.mean((art20 - img) ** 2))); r_sirt = float(np.sqrt(np.mean((sirt20 - img) ** 2)))
+    check(r_art < r_sirt, f"同迭代数下 ART 收敛快于 SIRT: RMSE {r_art:.4f} < {r_sirt:.4f}")
+    check(float(art20.min()) >= 0.0 and float(sirt20.min()) >= 0.0, "ART/SIRT 非负约束生效")
+
+
+def test_recon_pipeline_helpers():
+    """重建预处理/上采样纯函数直接单测——合成数组，无 Qt / 真实数据 / 系统矩阵。"""
+    print("[重建预处理/上采样纯函数]")
+    import recon as R
+    check(len(R.make_theta(180)) == 180 and float(R.make_theta(180)[-1]) == 179.0, "make_theta 省略 n_proj 时每度一个投影（向后兼容）")
+    big = np.zeros((100, 80), np.float32); big[20:60, 20:60] = 1.0; big[0, 0] = 1.0  # 角落故意置 1，验掩码
+    img_s, sino, theta = R.prepare_small_image(big, 32, 180, 90)
+    check(img_s.shape == (32, 32) and sino.shape == (32, 90) and len(theta) == 90, f"prepare_small_image 缩放到 32² 并出 (32,90) 弦图 (得 {img_s.shape}, {sino.shape})")
+    check(float(img_s.min()) >= 0.0 and float(img_s.max()) <= 1.0, f"缩放后 clip 在 [0,1]（防样条插值 Gibbs 过冲，得 [{img_s.min():.3f}, {img_s.max():.3f}]）")
+    outside = R._circle_mask(32) == 0
+    check(bool(np.all(img_s[outside] == 0)) and float(img_s[0, 0]) == 0.0, "圆形掩码生效：圆外恒为 0（角落原有值被掩掉，避免误差图虚假大误差）")
+    check(bool(np.allclose(sino, R.compute_sinogram(img_s, theta))), "返回的弦图 == compute_sinogram(返回的小图)（三元组自洽）")
+    up = R.upscale_recon(img_s, 32)
+    check(up.shape == (256, 256), f"upscale_recon 32² → 256²（scale=8）(得 {up.shape})")
+    check(bool(np.all(up[0:8, 0:8] == img_s[0, 0])) and bool(np.all(up[8:16, 0:8] == img_s[1, 0])), "kron 严格像素块复制（非插值，保留像素块感）")
+    same = np.zeros((256, 256), np.float32)
+    check(R.upscale_recon(same, 256) is same, "n=256 时 scale=1，原数组原样返回（不复制）")
 
 
 def test_malformed_annotations(v, app):
@@ -668,7 +840,10 @@ def test_export_path_safety(app):
         vp.ai_thread.cancel()
 
     class _DS:
-        def __init__(self, pid): self.PatientID = pid; self.PatientName = pid
+        # SeriesInstanceUID 在真实 DICOM 中是 Type 1 必填；蒙版缓存据它校验序列身份
+        # （防止把同患者另一序列的蒙版张冠李戴），故此桩必须带上才具代表性。
+        def __init__(self, pid, uid="1.2.826.0.1.3680043.2.1125.1.PATHSAFE"):
+            self.PatientID = pid; self.PatientName = pid; self.SeriesInstanceUID = uid
 
     made = []
     try:
@@ -833,6 +1008,119 @@ def test_mpr_geometry():
     check(g.nearest_slice([0, 5, 10, 15, 20], 100) == 4, "超出范围取最末切片")
 
 
+def test_mask_cache_guard():
+    """分割蒙版磁盘缓存的恢复守卫纯函数直接单测——无 Qt / 真实数据。
+
+    缓存按 PatientID 命名，只比 shape 会把同一患者另一序列（随访/复扫，常同为 512²）
+    的蒙版静默套到当前序列上，器官定量随之给出错误体积。故必须 UID+shape 双匹配。"""
+    print("[分割蒙版缓存守卫纯函数 annotation_lab.mask_cache_matches]")
+    import annotation_lab as al
+    shp = (233, 512, 512)
+    ok, why = al.mask_cache_matches("1.2.840.A", shp, "1.2.840.A", shp)
+    check(ok and why == "", "同一序列（UID 与 shape 皆同）→ 恢复缓存")
+    ok, why = al.mask_cache_matches("1.2.840.A", shp, "1.2.840.B", shp)
+    check(not ok and "SeriesInstanceUID" in why,
+          "同患者另一序列（shape 相同、UID 不同）→ 拒绝套用（核心回归：防串序列）")
+    ok, why = al.mask_cache_matches("1.2.840.A", (233, 512, 512), "1.2.840.A", (200, 512, 512))
+    check(not ok and "shape" in why, "shape 不匹配 → 拒绝")
+    ok, why = al.mask_cache_matches("", shp, "1.2.840.A", shp)
+    check(not ok, "缓存缺 UID（旧版本产物）→ 拒绝，宁可重跑 AI")
+    ok, why = al.mask_cache_matches("1.2.840.A", shp, "", shp)
+    check(not ok, "当前序列缺 UID → 拒绝")
+
+
+def test_mask_cache_roundtrip(app):
+    """蒙版缓存 save→reload 往返：同序列恢复、同患者另一序列拒绝（合成 DICOM，无真实数据）。"""
+    print("[蒙版缓存 save→reload 往返]")
+    import glob
+    import shutil
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    ed = os.path.join(_ROOT, "Exported_Lesions")
+    pid = "RID_CACHE_TEST"
+    made = []
+
+    def _mkdir_series(uid, z=3):
+        d = tempfile.mkdtemp()
+        for i in range(z):
+            _write_min_dcm(os.path.join(d, f"s{i}.dcm"), (16, 16), uid, ipp_z=i, inst=i + 1, pid=pid)
+        return d
+
+    uid_a, uid_b = generate_uid(), generate_uid()
+    da, db = _mkdir_series(uid_a), _mkdir_series(uid_b)
+    try:
+        vc = m.MedicalViewer(); app.processEvents()
+        if vc.ai_thread:
+            vc.ai_thread.cancel()
+        # 序列 A：造一个非空蒙版并保存
+        vc.load_data(da); app.processEvents()
+        if vc.ai_thread:
+            vc.ai_thread.cancel()
+        vc.volume_mask = np.zeros_like(vc.volume_hu, dtype=np.uint8)
+        vc.volume_mask[0, :4, :4] = 5          # 标记为器官5，便于区分
+        vc.save_project()
+        made = glob.glob(os.path.join(ed, f"{pid}_*"))
+        check(any(f.endswith("_mask.npz") for f in made), "save_project 落盘 _mask.npz")
+
+        # 重开序列 A（同 UID 同 shape）→ 应恢复
+        vc.volume_mask = None
+        restored_a = vc._load_saved_mask(pid)
+        check(restored_a and vc.volume_mask is not None and int(vc.volume_mask[0, 0, 0]) == 5,
+              "重开同一序列 → 缓存被恢复（省掉 ~100s 重算）")
+
+        # 切到序列 B（同 PatientID、同 shape、不同 SeriesInstanceUID）→ 必须拒绝
+        vc.load_data(db); app.processEvents()
+        if vc.ai_thread:
+            vc.ai_thread.cancel()
+        vc.volume_mask = None
+        restored_b = vc._load_saved_mask(pid)
+        check(not restored_b and vc.volume_mask is None,
+              "切到同患者另一序列（同 shape 不同 UID）→ 拒绝套用旧蒙版（核心回归）")
+    finally:
+        for f in made:
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        shutil.rmtree(da, ignore_errors=True); shutil.rmtree(db, ignore_errors=True)
+
+
+def test_hu_conversion(app):
+    """DICOM 像素 → HU 的数值正确性：HU = pixel × RescaleSlope + RescaleIntercept。
+
+    这是探针 HU / ROI 统计 / 器官定量 / AI 归一化的共同地基，此前只被“不崩溃”覆盖，
+    从未断言过算得对（test_quantify 直接喂合成 HU，绕过了本转换）。"""
+    print("[DICOM→HU 转换正确性]")
+    import shutil
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    vh = m.MedicalViewer(); app.processEvents()
+    if vh.ai_thread:
+        vh.ai_thread.cancel()
+    # (像素值, slope, intercept, 期望 HU)
+    cases = [(100, 1, -1024, -924.0),     # GE 典型：空气≈-1000 附近
+             (500, 2, -1000, 0.0),        # 非 1 的 slope，验证真在乘
+             (0, 1, -1024, -1024.0),      # 像素 0 → 纯 intercept
+             (1200, 1, 0, 1200.0)]        # intercept=0 → 原值
+    for pix, slope, icpt, want in cases:
+        d = tempfile.mkdtemp()
+        try:
+            uid = generate_uid()
+            for i in range(3):
+                _write_min_dcm(os.path.join(d, f"s{i}.dcm"), (8, 8), uid, ipp_z=i, inst=i + 1,
+                               pix=pix, slope=slope, intercept=icpt)
+            vh.load_data(d); app.processEvents()
+            if vh.ai_thread:
+                vh.ai_thread.cancel()
+            got = float(vh.volume_hu[0, 0, 0])
+            check(abs(got - want) < 1e-3 and bool(np.allclose(vh.volume_hu, want)),
+                  f"pix={pix} slope={slope} intercept={icpt} → HU={want}（得 {got}）")
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
 def main_run():
     app = QApplication([])
     # 有真实数据（本地开发）跑全套；无数据或 CI（SKIP_REAL_DATA=1）只跑数据无关的自包含测试。
@@ -843,11 +1131,15 @@ def main_run():
         # 这些测试自建合成 DICOM / 用 /nonexistent.onnx 走数学降级，不依赖真实数据或 119MB 权重
         for t in (test_ai_engine, test_mixed_shape_dicom, test_recon_finite,
                   test_close_cancels_ai, test_malformed_pixels, test_empty_dicom_tags,
-                  test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent):
+                  test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent,
+                  test_hu_conversion, test_mask_cache_roundtrip):
             t(app)
         test_quantify()      # 纯函数单测，无需 app / 真实数据
         test_lung_fallback()
         test_mpr_geometry()
+        test_mask_cache_guard()
+        test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
+        test_recon_pipeline_helpers()
     else:
         v = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌"))
         app.processEvents()
@@ -875,9 +1167,14 @@ def main_run():
         test_export_path_safety(app)
         test_dicom_sort_consistency(app)
         test_i18n_persistent(app)
+        test_hu_conversion(app)
+        test_mask_cache_roundtrip(app)
         test_quantify()
         test_lung_fallback()
         test_mpr_geometry()
+        test_mask_cache_guard()
+        test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
+        test_recon_pipeline_helpers()
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0
 

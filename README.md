@@ -1,177 +1,99 @@
-# 医学影像工作站 Pro + 重建实验室
+# Medical Imaging Workstation + Reconstruction Lab
+
+**English** · [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/sunce764/medical-imaging-workstation/actions/workflows/ci.yml/badge.svg)](https://github.com/sunce764/medical-imaging-workstation/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)
+![GUI](https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-41CD52?logo=qt&logoColor=white)
+[![License](https://img.shields.io/badge/License-Proprietary-lightgrey)](LICENSE)
+![Not a medical device](https://img.shields.io/badge/⚠️-teaching%2Fresearch%20·%20not%20a%20medical%20device-critical)
 
-**[English overview ↓](#overview-english)** · 中文说明见下 · 界面与文档中英双语
+A desktop **CT imaging workstation** (PySide6/Qt6) that unites a clinical DICOM reader, **AI multi-organ segmentation**, and a tomographic **reconstruction teaching lab** in one application. Beyond the software, the repository ships **two reproducible quantitative studies** that turn the built-in algorithms into measured findings.
 
-基于 **PySide6 (Qt6)** 的桌面 CT 影像工作站，集成 **AI 多器官分割**、临床阅片工具与 **CT 断层重建教学实验室**。
+> **Positioning.** A teaching / research tool — **not a certified medical device, not for clinical diagnosis.** AI segmentation and quantification are automated estimates for reference only.
 
-> **定位声明**：本软件是**影像教学 / 科研工具**，**不是经认证的医疗器械，不得用于临床诊断**。AI 分割结果与器官定量为自动推断，仅供参考。
-
----
-
-## Overview (English)
-
-A desktop **CT imaging workstation** (PySide6/Qt6, ~4,100 lines of application Python across 13 modules) that combines a clinical DICOM reader, a **from-scratch tomographic reconstruction laboratory**, and an **AI multi-organ segmentation** pipeline — built as a teaching/research tool (not a certified medical device).
-
-Beyond the application, the repository contains **two reproducible quantitative studies** that turn the built-in algorithms into measured findings:
-
-- **Low-dose reconstruction — dose–quality tradeoffs.** On the Shepp-Logan phantom, reconstruction error saturates beyond ≈180 views; the optimal FBP filter *inverts* with dose (smoothing filters win at sparse angles, the sharp Ram-Lak wins at dense angles); and under Poisson photon noise a constrained iterative solver (ART) is most robust while naive least-squares inversion becomes unstable near the square-system regime.
-- **AI segmentation — provenance recovery & Dice validation.** By running the shipped ONNX model on one ground-truth-labelled public CT and computing a label-overlap confusion matrix, the undocumented model is identified as **TotalSegmentator v2 `class_map_part_organs`** (nnU-Net v2), with **mean Dice ≈ 0.92** over 21 organs — simultaneously validating the inference pipeline and correcting two label errors.
-
-📄 **Read the [technical report](docs/technical_report.md)** (methods, figures, results) · 🧪 **Reproduce via [`experiments/`](experiments/README.md)**.
-
-Highlights: modular architecture (God-object decomposed into 5 UI mixins + 4 Qt-free compute modules that are unit-tested in isolation), a **102-check** offscreen-Qt regression suite with CI, defensive DICOM handling, and reconstruction algorithms (Radon / FBP / DFR / ART / SIRT) implemented from first principles.
-
-## 界面 · Screenshots
-
-> 演示数据为公开的 **TotalSegmentator-CT-Lite**（CC-BY-4.0），**非患者数据、无 PHI**（患者栏已标注）。
-
-**AI 多器官分割 · 轴位叠加**（右侧图例含各器官体积/HU 与免责声明）
-![Axial view with AI multi-organ overlay](docs/img/gui_axial_segmentation.png)
-
-**三平面 MPR · 十字线联动**（肺窗，5 个肺叶彩色叠加）
-![Tri-planar MPR with linked cross-hairs](docs/img/gui_mpr_triplanar.png)
+![AI multi-organ segmentation overlay](docs/img/gui_axial_segmentation.png)
 
 ---
 
-## 功能概览
+## Highlights
 
-### 临床阅片
-- **DICOM 加载**：并行读盘，按解剖 Z 坐标排序；多序列目录自动取切片最多的序列
-- **MPR 三平面**：横断 / 冠状 / 矢状面，十字线联动、切片/窗位同步
-- **窗宽窗位**：三滑条 + 6 套临床预设（肺/纵隔/骨/血管/腹部/脑）+ 反色
-- **测量工具**（左栏 9 个）：探针测 HU、卡尺测距、自由画笔、矩形/套索截取、3D 连通域追踪、**分割画笔/橡皮**、**椭圆 ROI 密度测量**
-- **椭圆 ROI**：拖出椭圆读均值±SD / 最值 HU / 面积；可**拖动、缩放、删除**
-- **标注**：切片专属 / 全局穿透，工程 JSON 存取
-- **DICOM 四角叠加**：PACS 风格患者信息 / 窗位 / 切片，解剖方位字母 (A/P/R/L/S/I)
-- **Cine 电影播放**：往返(bounce)连播、速度可调；**键盘翻片**（↑↓ / PgUp PgDn）
-- **双序列随访对比**：加载既往序列并排显示，按 `ImagePositionPatient` **解剖配准**、切片/窗位联动
+- **Clinical reader** — parallel DICOM loading with anatomical sort; tri-planar MPR with linked cross-hairs; 6 clinical window/level presets; measurement, annotation and ellipse-ROI densitometry; dual-series follow-up comparison with anatomical registration.
+- **AI multi-organ segmentation** — background sliding-window ONNX inference (25 classes, incl. 5 lung lobes). The shipped model was undocumented; its provenance was **recovered by measurement** — identified as TotalSegmentator v2 `class_map_part_organs`, with **mean Dice ≈ 0.92** over 21 organs on one ground-truth case (*n = 1*).
+- **Reconstruction lab (teaching)** — forward Radon and analytic inverses (BP, FBP with 5 apodisation filters) via scikit-image; **DFR, DMR, ART and SIRT inverse solvers implemented from first principles.**
+- **Two quantitative studies** — a reconstruction dose–quality characterisation (with a non-obvious filter-inversion finding) and an AI-model provenance/Dice validation, both driving the production code, fully reproducible, using no patient data.
+- **Engineered for review** — a God-object decomposed into 5 UI mixins + 4 Qt-free compute modules; a **155-check** offscreen-Qt regression suite with CI (reconstruction algorithms carry numerical-correctness assertions, not just "finite"); defensive DICOM handling.
 
-### AI 多器官分割
-- 加载数据即**自动后台推理**（`models/organs.onnx`，25 类胸腹器官含肺叶）
-- 结果彩色叠加 + **图例可点切换显隐** + **光标 HUD**（HU / 坐标 / 所在器官）
-- **器官定量面板**：各器官体积(mL) / 平均 HU，导出 CSV
-- **分割可编辑**：画笔补画（可选目标器官，计入其定量）/ 橡皮擦除，**Ctrl+Z 撤销**
-- 无模型时自动降级为纯数学连通域算法
+## Screenshots
 
-### 重建实验室（教学）
-- 投影生成（Radon）：角度范围 60/120/180/360° + 采样密度 1×/2×/4×
-- 解析重建：BP / FBP（5 种滤波器）/ DFR（傅里叶中心切片）
-- 矩阵/迭代：DMR（最小二乘）/ ART / SIRT，误差图 + RMSE
+| AI multi-organ segmentation | Tri-planar MPR with linked cross-hairs |
+|:---:|:---:|
+| ![Axial segmentation](docs/img/gui_axial_segmentation.png) | ![Tri-planar MPR](docs/img/gui_mpr_triplanar.png) |
 
-### 合规
-- **脱敏开关**：一键隐去屏幕与导出文件名中的患者身份（显示层）
-- **AI 免责声明**：面板常驻 + 导出 CSV 内嵌
+> Demo data is the public **TotalSegmentator-CT-Lite** (CC-BY-4.0) — no patient data, no PHI.
 
-界面支持**中英双语**一键切换。
-
----
-
-## 环境与运行
-
-推荐使用专用 conda 环境 **`dicom_gui`**（Python 3.10）：
+## Quick start
 
 ```bash
-conda activate dicom_gui        # 或 conda env create -f environment.yml
-python main.py                  # 空载启动
-python main.py --data /path/to/dicom_dir   # 启动即加载指定 DICOM 目录（可选）
+conda env create -f environment.yml     # creates the "dicom_gui" env (Python 3.10)
+conda activate dicom_gui
+python main.py                           # empty start (no data loaded)
+python main.py --data /path/to/dicom_dir # or load a DICOM directory on launch
 ```
 
-依赖：PySide6 · pydicom · numpy · scipy · scikit-image · onnxruntime（见 `requirements.txt` / `environment.yml`）。
+- **CPU-only; no GPU required.** Full-volume AI inference takes ≈ 100 s.
+- Model weights (`models/organs.onnx.data`, 119 MB) are **not shipped**; without them, segmentation falls back to a classical connected-component algorithm. See [Architecture → Model](docs/ARCHITECTURE.md#segmentation-model).
 
-启动默认**不加载任何数据**；用 `--data DIR` 指定 DICOM 目录，或运行后从界面「加载 DICOM 目录」选择。
+## Features
 
----
+| Area | Capabilities |
+|---|---|
+| **Clinical reading** | Anatomical-sorted DICOM loading · tri-planar MPR + linked cross-hairs · 6 window presets + invert · 9 measurement/annotation tools · ellipse ROI (mean±SD / min-max HU / area) · four-corner PACS overlay · Cine playback · dual-series follow-up comparison |
+| **AI segmentation** | Auto background inference · colour overlay with clickable legend · cursor HUD (HU / coords / organ) · per-organ quantification (volume mL / mean HU) with CSV export · brush/eraser editing with undo |
+| **Reconstruction lab** | Radon projection (60–360°, 1–4× sampling) · BP / FBP (5 filters) / DFR · DMR (least-squares) / ART / SIRT with error maps + RMSE |
+| **Compliance** | Display-layer de-identification · persistent AI disclaimer · bilingual (EN / 中文) UI toggle |
 
-## 目录结构
+## Quantitative studies
 
-```
-—— 主窗口与 UI 层（God object 拆分为 MedicalViewer 本体 + 5 个 Mixin）——
-main.py            主窗口 MedicalViewer + 入口（--data 加载 / 临床渲染 / 窗位·工具·布局·AI 调度 / i18n / 键盘导航）
-ui_builder.py      UiBuilderMixin —— 三栏布局与全部控件构建
-interaction.py     InteractionMixin —— Cine 播放 + MPR 联动/导航
-recon_lab.py       ReconLabMixin —— 重建实验室 UI 调度（投影 / BP / FBP / DFR / DMR / ART / SIRT）
-compare_lab.py     CompareMixin —— 双序列随访对比（解剖配准 / 联动）
-annotation_lab.py  AnnotationMixin —— 标注 / 分割蒙版编辑 / 器官定量 / 工程持久化
-ai_engine.py       AutoAIEngineThread —— 后台 AI 推理（滑窗 + 信号回调）
-graphics_view.py   MedicalGraphicsView —— 影像交互视图 + ROIGraphicsItem
-—— 无 Qt 依赖的纯计算模块（可脱离主窗口独立单测）——
-recon.py           重建算法（Radon / BP / FBP / DFR / DMR / ART / SIRT）
-quantify.py        器官定量（体积 mL / 平均 HU）
-segmentation.py    AI 数学降级（肺连通域分割）
-mpr_geometry.py    MPR 坐标换算 + 双序列 z 配准
-constants.py       工具/平面常量 + 多器官调色板
-—— 资源 / 工程化 ——
-style.qss          暗色主题　·　models/organs.onnx 分割模型图（外部权重未入库，见「模型说明」）
-tests/test_gui.py  回归测试套件（102 项）　·　experiments/ 量化研究 + 复现脚本/图表/CSV
-docs/              技术报告 + 预印本稿 + 截图　·　pyproject.toml 打包/工具配置　·　.github/workflows/ci.yml CI
-```
+Both studies exercise the shipped production code and use no patient data. See the [technical report](docs/technical_report.md) for methods, figures and results.
 
----
+- **Study I — dose–quality tradeoffs in CT reconstruction.** On the Shepp-Logan phantom, error saturates beyond ≈ 180 views; the optimal FBP filter *inverts* with dose (smoothing filters win at sparse angles, sharp Ram-Lak at dense); under Poisson photon noise, constrained iteration (ART) is most robust while naive least-squares inversion destabilises near the square-system regime. Written up as a [preprint](docs/preprint_recon.md).
+- **Study II — provenance recovery & Dice validation.** Running the undocumented ONNX model on one ground-truth-labelled public CT and computing a label-overlap confusion matrix recovers the label map (identity diagonal) and yields mean Dice ≈ 0.92 over 21 organs — simultaneously validating the inference pipeline and correcting two label errors.
 
-## 模型说明（重要）
+Reproduce via [`experiments/`](experiments/README.md) (scripts + figures + CSVs).
 
-- `models/organs.onnx`（图，已入库）+ `models/organs.onnx.data`（**119MB 外部权重，未入库，需单独放置到 `models/` 下**）。
-- **架构已确证：nnU-Net v2 `PlainConvUNet`（3D 全分辨率）**。由 ONNX 张量命名与结构逆向确认：`decoder.encoder.stages.*` + `decoder.seg_layers.*`（nnU-Net v2 深监督头命名）、6 级编码器通道 `[32,64,128,256,320,320]`（`max_features=320` 为 nnU-Net 默认）、5 级下采样（故输入 pad 到 2⁵=32 倍数）、InstanceNorm + LeakyReLU、25 类（24 器官 + 背景）、经 PyTorch 2.11 `torch.onnx` 导出。
-- **出处与标签映射已确证（实测，非推断）**：模型 = **TotalSegmentator v2 `class_map_part_organs`**（24 器官 + 背景）。用一例带真值的公开 CT（TotalSegmentator-CT-Lite，1.5mm 各向同性）跑 GUI 同款推理并与真值逐标签算重叠，得到**完美恒等对角线**：our#k → 第 k 个器官，21 个在场器官**平均 Dice≈0.92**（肾/肺叶 0.97–0.99）。`models/organ_labels_candidate.json` 已改写为该确证映射。此举同时**验证了 GUI 推理管线正确**，并纠正旧推断的错标（`5`=肝非心脏；肺叶 `10,11`=左、`12,13,14`=右）。复现见 [`experiments/`](experiments/README.md) 的 `seg_validate.py`。
-- ONNX 输入 `[1,1,D,H,W]`（每维 pad 到 32 倍数），输出 `[1,25,D,H,W]` logits，取 `argmax`。整卷推理约 **100 秒（CPU）**；如有 GPU 可为 `InferenceSession` 增加对应 ExecutionProvider 提速。
-
----
-
-## 测试与质量
+## Testing
 
 ```bash
-python tests/test_gui.py                     # 完整回归（102 项，需同目录 肺癌/ 真实数据）
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 仅数据无关子集（CI 用，无需真实数据/权重）
-ruff check .                                 # 静态检查
-coverage run tests/test_gui.py && coverage report   # 覆盖率
+python tests/test_gui.py                     # full suite: 155 checks (needs local RIDER data)
+SKIP_REAL_DATA=1 python tests/test_gui.py    # data-independent subset (used by CI)
+ruff check .                                 # lint
+coverage run tests/test_gui.py && coverage report
 ```
 
-- 离屏 Qt 运行，覆盖 AI 引擎、历次修复、多器官分割/编辑、ROI 拖缩、双序列配准、Cine、合规等。退出码 0 = 全部通过。
-- **CI**（`.github/workflows/ci.yml`）：每次 push/PR 在 Ubuntu 跑 `ruff` + 数据无关测试子集（离屏 Qt，无需真实数据或 119MB 权重）。
-- **覆盖率**：完整套件 **≈67%**（`constants`/`ui_builder` 99–100%，`main` 82% / `ai_engine` 87%；交互/图形/重建类含大量鼠标事件与算法路径覆盖较低，`recon.py` 的完整 FBP/DFR 由 [`experiments/`](experiments/README.md) 另行覆盖）。四个无 Qt 纯计算模块（`recon`/`quantify`/`segmentation`/`mpr_geometry`）均有脱离主窗口的独立单测。
-- `recon.py`/`ai_engine.py` 为纯计算/无 Qt 模块，已加完整类型注解。
+Offscreen Qt; exit code 0 = all pass. Coverage ≈ 70%; the four Qt-free compute modules (`recon` / `quantify` / `segmentation` / `mpr_geometry`) are unit-tested in isolation. CI runs the data-independent subset on every push/PR — so a green CI is **not** the full 155 checks (interaction-layer tests need local data).
 
----
+## Documentation
 
-## 已知限制
+| Document | Lang | Contents |
+|---|---|---|
+| [Architecture](docs/ARCHITECTURE.md) | EN | Module layout, God-object decomposition, segmentation-model reverse-engineering, AI-pipeline contract |
+| [User manual](docs/manual_zh.md) · [PDF](docs/manual_zh.pdf) | 中文 | Feature-by-feature guide with screenshots |
+| [Technical report](docs/technical_report.md) | EN | Two quantitative studies — methods, figures, results |
+| [Preprint (Study I)](docs/preprint_recon.md) | EN | Sparse-view / low-dose reconstruction, academic format |
+| [Experiments](experiments/README.md) | 中文 | Reproducible scripts + figures + CSVs |
+| [Changelog](CHANGELOG.md) | 中文 | Defect-fix review notes |
+| [Third-party notices](THIRD_PARTY_NOTICES.md) | EN/中文 | Licenses of integrated components (verified against upstream) |
 
-- **非临床器械**：无监管认证、无算法验证文档、无审计/访问控制。
-- **脱敏为显示层**：隐去屏幕与导出文件名中的 PHI，但**不清洗底层 DICOM 标签与烧录文字**——非完整去标识。
-- **AI 标签已确证**：映射经 TotalSegmentator 真值实测（平均 Dice≈0.92），器官归属可信；但定量数值仍受单序列分辨率与分割边界误差影响。
-- 矩阵重建（DMR/ART）受 `lstsq` 限制，实用上限 64×64（教学用途）。
-- 单体数据模型：AI/重建/标注默认作用于当前主序列。
-- **AI 蒙版叠加仅横断面**：冠状/矢状面不显示器官分割叠加。
-- MPR 冠/矢状面**不保留** Ctrl+滚轮缩放（切片刷新会按解剖比例重适配；横断面正常保留）。
+## Limitations
 
----
+- **Not a clinical device** — no regulatory clearance, no algorithm-validation dossier, no audit/access control.
+- **De-identification is display-layer only** — hides PHI on screen and in export filenames, but does **not** scrub underlying DICOM tags or burned-in text.
+- **Dice ≈ 0.92 rests on a single labelled case (*n = 1*)** — the label mapping is verified, but the figure should not be read as a population estimate.
+- Matrix reconstruction (DMR/ART) is bounded to ≈ 64×64 by `lstsq` cost (teaching scope); AI/reconstruction/annotation act on the current primary series; AI overlay is axial-only.
 
-## 技术报告与量化研究
+## License · Copyright
 
-- **软件说明书**（中文）：[docs/manual_zh.md](docs/manual_zh.md)（源）· [docs/manual_zh.pdf](docs/manual_zh.pdf)（18 页排版版）—— 按功能组织的完整用户手册，从启动到各功能逐一图文说明（含界面截图）。PDF 由 `python docs/build_manual_pdf.py` 从 Markdown 生成。
-- **技术报告**（英文）：[docs/technical_report.md](docs/technical_report.md) —— 两组量化研究（低剂量重建剂量-质量权衡 / AI 分割 Dice 验证与出处确证）的方法、图表、结论。
-- **预印本稿**（英文，研究一）：[docs/preprint_recon.md](docs/preprint_recon.md) —— 稀疏视角/低剂量 CT 重建权衡的可复现体模研究，学术格式（摘要/相关工作/方法/实验/讨论/复现/参考文献）。
-- **可复现实验**：[experiments/](experiments/README.md) —— 脚本 + 图表 + CSV。
+© 2026 **Sheng Chao (盛超)** and **Lai Shengsheng (赖胜圣)**. All rights reserved.
 
-## 变更记录
-
-历次缺陷排查与修复的审查小结见 [CHANGELOG.md](CHANGELOG.md)。
-
----
-
-## 第三方组件 · Acknowledgements
-
-本项目在自研代码之外集成了以下第三方成果，其著作权/许可归各自作者所有：
-
-- **AI 分割模型**：`models/organs.onnx` 为 **TotalSegmentator v2**（Wasserthal et al., *Radiology: AI*, 2023；基于 **nnU-Net v2**，Isensee et al., *Nature Methods*, 2021）的 `class_map_part_organs` 导出图。**模型权重（`organs.onnx.data`）未随本仓库分发**，其许可以 TotalSegmentator 官方为准。
-- **验证数据**：分割验证使用公开的 **TotalSegmentator-CT-Lite**（CC-BY-4.0）单例，**未随本仓库分发**。
-- **框架/库**：PySide6 (Qt for Python, LGPL)、pydicom、NumPy、SciPy、scikit-image、ONNX Runtime、nibabel。
-
-自研代码（`main.py`、`recon.py`、`graphics_view.py`、`ai_engine.py`、各 `*_lab.py`、`ui_builder.py`、`interaction.py`、`quantify.py`、`segmentation.py`、`mpr_geometry.py`、`experiments/` 等）由本人设计、主导开发与验证。
-
-## 版权 · Copyright
-
-© 2026 盛超 (Sheng Chao)。**保留所有权利 / All rights reserved.**
-
-本仓库为个人教学/科研与作品集用途，**未授予**任何开源复制、修改或再分发许可；如需使用请联系作者。第三方组件依其各自许可。
+Jointly owned by the two copyright holders above, as registered with the Copyright Protection Centre of China. This repository is provided for teaching / research and portfolio review only; **no license** is granted for copying, modification or redistribution — contact the copyright holders. Integrated third-party components remain under their own licenses — see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

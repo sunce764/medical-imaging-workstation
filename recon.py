@@ -169,7 +169,10 @@ def compute_dfr(sinogram: np.ndarray, theta: np.ndarray) -> tuple[np.ndarray, np
     返回: (freq_domain_2d, fft_1d_display, recon_dfr)
       freq_domain_2d:   插值后的二维复数频域矩阵，供"二维频域分布"视图展示
       fft_1d_display:   log1p 压缩后的一维频谱幅度图，供"一维FFT谱"视图展示
-      recon_dfr:        2D 逆 FFT 重建结果（复数，取 abs 后显示）
+      recon_dfr:        2D 逆 FFT 重建结果（复数，取 abs 后显示）。朝向已在本函数内
+                        校正为与输入同方位（含偶数 n 的 1 像素修正），调用方直接
+                        np.abs(recon_dfr) 即可，无需再自行 rot90。见 test_recon_numerics
+                        的 DFR 断言（实测：治本后与真值相关 n=64→0.906、偏心脉冲峰值零偏移）。
 
     算法步骤：
       1. 对弦图每列（沿探测器方向）做 1D FFT → 极坐标频域样本
@@ -223,6 +226,15 @@ def compute_dfr(sinogram: np.ndarray, theta: np.ndarray) -> tuple[np.ndarray, np
     freq_domain_2d = np.nan_to_num(freq_domain_2d, nan=0.0, posinf=0.0, neginf=0.0)
     # ifftshift 先将零频移回左上角（FFT 约定原点位置），ifft2 计算，再 fftshift 将图像中心化
     recon_dfr = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(freq_domain_2d)))
+
+    # 朝向校正：极坐标→直角映射使重建相对输入转了 90°，此处转回输入同方位，使调用方
+    # 直接 np.abs(recon_dfr) 即可（消除"须自行 rot90"的隐式契约）。np.rot90 绕几何中心
+    # (n-1)/2 旋转，而本函数的 FFT 原点在 n//2：偶数 n 两者差半格，仅 rot90 会使重建整体
+    # 错位 1 像素（奇数 n 恰好重合、无错位）。故偶数 n 补 roll(+1) 把原点移回 n//2。
+    # 已由脉冲响应实测：n=32/64/65 峰值均精确对齐输入（偏移 0），根因见此三行之上。
+    recon_dfr = np.rot90(recon_dfr)
+    if num_detectors % 2 == 0:
+        recon_dfr = np.roll(recon_dfr, 1, axis=0)
 
     return freq_domain_2d, fft_1d_display, recon_dfr
 
