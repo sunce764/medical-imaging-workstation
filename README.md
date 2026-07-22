@@ -78,12 +78,12 @@ Offscreen Qt; exit code 0 = all pass. Coverage ≈ 70%; the four Qt-free compute
 | Document | Lang | Contents |
 |---|---|---|
 | [Architecture](docs/ARCHITECTURE.md) | EN | Module layout, God-object decomposition, segmentation-model reverse-engineering, AI-pipeline contract |
-| [User manual](docs/manual_zh.md) · [PDF](docs/manual_zh.pdf) | 中文 | Feature-by-feature guide with screenshots |
+| [User manual](docs/manual_en.md) · [中文](docs/manual_zh.md) · [PDF](docs/manual_zh.pdf) | EN · 中文 | Feature-by-feature guide with screenshots |
 | [Technical report](docs/technical_report.md) | EN | Two quantitative studies — methods, figures, results |
 | [Preprint (Study I)](docs/preprint_recon.md) | EN | Sparse-view / low-dose reconstruction, academic format |
-| [Experiments](experiments/README.md) | 中文 | Reproducible scripts + figures + CSVs |
-| [Changelog](CHANGELOG.md) | 中文 | Defect-fix review notes |
-| [Third-party notices](THIRD_PARTY_NOTICES.md) | EN/中文 | Licenses of integrated components (verified against upstream) |
+| [Experiments](experiments/README.md) | EN | Reproducible scripts + figures + CSVs |
+| [Changelog](CHANGELOG.md) | EN | Defect-fix review notes |
+| [Third-party notices](THIRD_PARTY_NOTICES.md) | EN | Licenses of integrated components (verified against upstream) |
 
 ## Limitations
 

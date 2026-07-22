@@ -1,0 +1,206 @@
+# Medical Imaging Workstation — User Manual
+
+**English** · [简体中文](manual_zh.md)
+
+> This manual is written for software version V1.0. All screenshots are demonstrated using the **public dataset TotalSegmentator-CT-Lite (CC-BY-4.0)** — **not patient data, containing no personal health information (PHI)**; the patient-information panel is explicitly labelled as public data.
+
+---
+
+## 1. Software Overview
+
+**Software name**: Medical Imaging Workstation Software
+**Software version**: V1.0
+**Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
+**Operating environment**: Windows / macOS / Linux desktop systems, Python 3.10; depends on PySide6, pydicom, NumPy, SciPy, scikit-image, ONNX Runtime.
+**Development language**: Python.
+**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 155 automated regression checks.
+**Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
+
+---
+
+## 2. Operating Environment and Launch
+
+In a Python environment with the dependencies configured, run the following from the software root directory:
+
+```
+python main.py                          # empty start (no data loaded)
+python main.py --data <DICOM directory path>    # load the specified DICOM directory on launch
+```
+
+After the software starts, it enters the main interface. By default it **loads no data**, waiting for the user to load data from the interface, as shown below.
+
+![Empty-start interface](img/manual_startup_empty.png)
+
+*Figure 2-1  The empty-start interface (English-UI example). The toolbar is on the left, the image view area in the centre, and the control panel on the right.*
+
+---
+
+## 3. Main Interface Layout
+
+The main interface is divided into three columns:
+
+1. **Left toolbar**: nine measurement / annotation tool buttons arranged top to bottom (probe & pan, distance caliper, freehand pen, rectangle capture, lasso, 3D tracking, segmentation brush, segmentation eraser, ROI densitometry). After a tool is selected with a click, mouse actions on the image correspond to that tool's function.
+2. **Central image view area**: composed of 1–4 image views, supporting single-, dual-, and quad-view layouts. Each view has, along its top, dropdown / checkbox controls for plane selection (axial / coronal / sagittal), window-level presets, overlay display, locking, etc.
+3. **Right control panel**: at the top are the "Load DICOM directory" and "Save annotation project" buttons; below them are two tabs, "Clinical reading / Reconstruction lab," which carry the clinical-reading controls and the reconstruction-lab controls respectively.
+
+The top tabs switch between the two working modes, **Clinical reading** and **Reconstruction lab**.
+
+---
+
+## 4. Loading DICOM Data
+
+Click the **"Load DICOM directory"** button at the top of the right panel, and in the folder-selection dialog that pops up choose a directory containing DICOM slices. The software will:
+
+- **Parallel disk reading**: read all DICOM files in the directory with multiple threads, speeding up loading of large series;
+- **Multi-series handling**: if the directory contains multiple series, automatically select the series with the most slices and filter by slice matrix size to avoid mixing;
+- **Anatomical sorting**: sort preferentially by `ImagePositionPatient` (couch Z coordinate), falling back to `InstanceNumber` when it is missing, to keep the anatomical slice order correct;
+- **Building the 3-D volume**: convert layer by layer into a 3-D HU array following the DICOM standard `HU = pixel value × RescaleSlope + RescaleIntercept`;
+- After loading completes, automatically jump to the middle slice and start AI segmentation inference in the background (see Section 7).
+
+---
+
+## 5. Clinical Reading
+
+### 5.1 Slice Browsing and Navigation
+
+The "Slice" slider on the right panel lets you browse layer by layer; you can also move the mouse into the image and use the scroll wheel to page through slices. The keyboard `↑ / ↓` and `PgUp / PgDn` keys also page through slices.
+
+### 5.2 Window Width / Window Level Adjustment
+
+The "Display control" area on the right provides two sliders, **WW (window width) / WL (window level)**, along with 6 clinical window-level preset buttons: **lung, mediastinum, bone, vessel, abdomen, brain**; there is also an **invert** checkbox. You can also hold the right mouse button and drag on the image to adjust window width / level in real time. The figure below shows the effect after switching to the **lung window**, displaying a chest axial slice.
+
+![Clinical reading · lung window](img/manual_clinical_lung.png)
+
+*Figure 5-1  Reading a chest axial slice under the lung window. The four corners overlay patient information (public data), window level, slice number, and anatomical orientation letters (A/P/R/L).*
+
+### 5.3 Tri-planar MPR and Linked Cross-hairs
+
+After enabling "MPR linkage," the quad-view layout can simultaneously display the three planes **axial, coronal, sagittal**. Moving the mouse in any view links the cross-hairs and slices of the other views to the same anatomical point; the anisotropic planes (coronal / sagittal) automatically correct their display aspect ratio according to anatomical proportions.
+
+![Tri-planar MPR linkage](img/gui_mpr_triplanar.png)
+
+*Figure 5-2  Tri-planar MPR + linked cross-hairs (lung window, AI lung-lobe colour overlay shown in the axial view).*
+
+### 5.4 Layout Modes
+
+The layout dropdown in the right "Display control" can switch between **single (1×1) / dual (1×2) / quad (2×2)** views.
+
+### 5.5 Four-corner DICOM Information Overlay
+
+When the "Information overlay" checkbox is enabled, the four corners of the image overlay patient information, window width / level, and slice number in PACS style, and anatomical orientation letters are marked at the image edges (A anterior / P posterior / R right / L left / S superior / I inferior).
+
+### 5.6 Cine Playback and Keyboard Paging
+
+The "Play" button starts Cine playback, automatically paging through slices continuously (bouncing back at the top / bottom, no wrap-around jump); the speed dropdown offers slow / medium / fast; clicking again pauses.
+
+---
+
+## 6. Measurement and Annotation Tools
+
+The nine tools in the left toolbar operate on the axial image after selection:
+
+1. **Probe & pan**: click to read the HU value and coordinates at that point; drag to pan the view.
+2. **Distance caliper**: drag out a straight line to measure the physical distance between two points (mm, converted by pixel spacing).
+3. **Freehand pen**: draw annotation lines freely on the image.
+4. **Rectangle capture**: box-select a rectangular ROI, compute the region's area and mean HU, and optionally export the cropped image and a CSV.
+5. **Lasso**: draw a polygonal ROI to generate a segmentation mask.
+6. **3D tracking**: box-select an ROI on one slice, extract its HU statistics, track HU-similar connected structures throughout the whole 3-D volume, and generate a 3-D mask.
+7. **Segmentation brush**: paint on the current axial slice to add the strokes into the segmentation mask (an optional target organ can be chosen, and painted-in strokes count toward that organ's quantification), used to correct AI omissions.
+8. **Segmentation eraser**: erase the mask where it was painted (can remove AI mis-segmentations).
+9. **ROI densitometry**: drag out an elliptical ROI and read the interior mean ± SD / min-max HU / area; the ellipse can be dragged, resized, and deleted.
+
+Annotations support two ownership modes, **slice-specific** and **global (all-slices)**, and can be persistently saved together with the segmentation masks as a project JSON via "Save annotation project." Segmentation editing supports `Ctrl+Z` undo.
+
+---
+
+## 7. AI Multi-organ Segmentation
+
+### 7.1 Automatic Inference
+
+After DICOM data is loaded, the software automatically calls the segmentation model (`models/organs.onnx`, 25 thoracoabdominal organ classes including 5 lung lobes) in a background thread to perform whole-volume sliding-window inference; the "Automated AI engine" area on the right displays the inference progress in real time; inference does not block interface operations. When there is no model file or inference fails, it falls back to a purely mathematical connected-component lung-segmentation algorithm.
+
+### 7.2 Result Overlay and Legend
+
+After inference completes, the segmentation result is overlaid on the axial image as a colour semi-transparent mask; the legend on the right lists each detected organ and its colour, and **clicking a legend entry toggles that organ's visibility**.
+
+![AI multi-organ segmentation overlay and organ quantification](img/gui_axial_segmentation.png)
+
+*Figure 7-1  AI multi-organ segmentation result overlay (liver, spleen, kidney, stomach, lung lobes, etc.); the right legend includes each organ's volume / HU and a disclaimer.*
+
+### 7.3 Cursor HUD
+
+As the mouse moves over the image, the interface displays in real time the coordinates and HU value at the cursor, along with the name of the organ it lies in (if that voxel belongs to a segmented organ).
+
+### 7.4 Organ Quantification Panel and CSV Export
+
+The "Automated AI engine" area lists each detected organ's **volume (mL) and mean HU** (in descending order of volume). Clicking **"Export quantification CSV"** exports the quantification results to a CSV file (UTF-8-SIG encoding, so Excel displays Chinese correctly), with the AI disclaimer embedded in the CSV.
+
+### 7.5 Segmentation Editing
+
+Using the "Segmentation brush / Segmentation eraser" tools, you can manually add to or erase the AI segmentation result; when painting in, a target organ can be specified (its quantification updates accordingly). All edits support `Ctrl+Z` undo.
+
+---
+
+## 8. Dual-series Follow-up Comparison
+
+Click the **"Load comparison series"** button on the right and select the DICOM directory of a prior examination; the software enters dual-view comparison mode: the left view (V1) is the current series, the right view (V2) is the prior series. The two series are **registered by the `ImagePositionPatient` anatomical Z coordinate** (the same anatomical slice is shown side by side), with slices and window level linked; when position information is missing, it falls back to mapping by index ratio. Clicking **"Exit comparison"** returns. When de-identification is enabled, the prior examination date in the comparison title is hidden.
+
+---
+
+## 9. Reconstruction Lab (CT Tomographic-reconstruction Teaching)
+
+Click the top tab to switch to **"Reconstruction lab."** This module takes the current slice as its subject and fully demonstrates the process from X-ray projection to image reconstruction. Within it, the forward Radon projection and the analytic inverses (BP / FBP) are built on scikit-image's `radon` / `iradon`; the four inverse-solver algorithms DFR, DMR, ART, and SIRT are implemented as self-contained numerical code in this project.
+
+![Reconstruction lab](img/manual_recon_lab.png)
+
+*Figure 9-1  The reconstruction lab quad view: V1 the real slice, V2 the projection sinogram, V3 the unfiltered back-projection (blurry), V4 the filtered back-projection FBP (sharp); on the right are the projection / algorithm controls and performance monitoring.*
+
+### 9.1 Projection Generation (Radon Transform)
+
+In the "X-ray projection generation" area on the right, select the **angular range (60° / 120° / 180° / 360°)** and the **sampling density (standard 1× / high 2× / ultra 4×)**, then click **"Emit rays to generate sinogram"** to perform the Radon transform on the current slice and generate the projection sinogram, shown in V2.
+
+### 9.2 Analytic Reconstruction
+
+The "Image reconstruction algorithms" area provides:
+
+- **Direct Fourier reconstruction (DFR)**: reconstructs directly from the sinogram based on the Fourier central-slice theorem;
+- **Back-projection (BP, unfiltered)**: pure back-projection, with a blurry result (star-shaped artefacts), shown in V3 for comparison;
+- **Filtered back-projection (FBP)**: with a choice of 5 filters (Ram-Lak / Shepp-Logan / Cosine / Hamming / Hann), the result shown in V4.
+
+### 9.3 Matrix / Iterative Reconstruction
+
+In the "Direct matrix reconstruction & ART / SIRT" area, select the **image size (16/32/64)**, **iterative method (ART / SIRT)**, and **iteration count**; it provides:
+
+- **Direct matrix reconstruction (DMR)**: solves the projection system of equations by least squares;
+- **ART / SIRT iterative reconstruction**: algebraic iterative reconstruction, with an error map and RMSE.
+
+### 9.4 Performance Monitoring
+
+The "Algorithm performance monitoring" area displays in real time the running time of each reconstruction algorithm (as in Figure 9-1, "FBP (ram-lak) time: 254.9 ms").
+
+---
+
+## 10. Compliance and De-identification
+
+- **De-identification switch**: after the "De-ID" checkbox in the right "Display control" is enabled, patient identity information in the on-screen display and in export filenames is hidden with one click (display-layer de-identification).
+- **AI disclaimer**: the AI panel permanently displays a disclaimer, and the exported quantification CSV also embeds that disclaimer.
+
+---
+
+## 11. Bilingual (Chinese / English) Toggle
+
+The language button in the top-right corner of the interface toggles between **Chinese / English** with one click, and all persistent widget text (tools, buttons, panel titles, dropdown items, hover tooltips, status text, etc.) is re-translated accordingly. The figure below shows the English-UI example.
+
+![English interface](img/manual_english_ui.png)
+
+*Figure 11-1  The English interface (mediastinum window, abdominal axial slice).*
+
+---
+
+## 12. Annotation Project Persistence
+
+Click **"Save annotation project"** on the right to save the current annotations and segmentation masks as a project JSON file; when the same patient's data is loaded again, the last-saved annotations and segmentation are automatically restored, with no need to re-run inference.
+
+---
+
+*(End of manual)*

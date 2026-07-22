@@ -78,12 +78,12 @@ coverage run tests/test_gui.py && coverage report
 | 文档 | 语言 | 内容 |
 |---|---|---|
 | [架构说明](docs/ARCHITECTURE.md) | 英文 | 模块布局、God-object 分解、分割模型逆向工程、AI 管线契约 |
-| [软件说明书](docs/manual_zh.md) · [PDF](docs/manual_zh.pdf) | 中文 | 按功能逐一图文说明的完整用户手册 |
+| [软件说明书](docs/manual_zh.md) · [English](docs/manual_en.md) · [PDF](docs/manual_zh.pdf) | 中文 · EN | 按功能逐一图文说明的完整用户手册 |
 | [技术报告](docs/technical_report.md) | 英文 | 两项量化研究 —— 方法、图表、结论 |
 | [预印本稿（研究一）](docs/preprint_recon.md) | 英文 | 稀疏视角 / 低剂量重建，学术格式 |
-| [实验](experiments/README.md) | 中文 | 可复现脚本 + 图表 + CSV |
-| [变更记录](CHANGELOG.md) | 中文 | 缺陷排查与修复的审查小结 |
-| [第三方许可](THIRD_PARTY_NOTICES.md) | 中英 | 集成组件的许可（已对上游核实） |
+| [实验](experiments/README.md) | 英文 | 可复现脚本 + 图表 + CSV |
+| [变更记录](CHANGELOG.md) | 英文 | 缺陷排查与修复的审查小结 |
+| [第三方许可](THIRD_PARTY_NOTICES.md) | 英文 | 集成组件的许可（已对上游核实） |
 
 ## 已知限制
 
