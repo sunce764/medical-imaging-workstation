@@ -21,6 +21,7 @@ recon.py           reconstruction algorithms (Radon / BP / FBP / DFR / DMR / ART
 quantify.py        organ quantification (volume mL / mean HU)
 segmentation.py    classical fallback segmentation (lung connected-components)
 mpr_geometry.py    MPR coordinate mapping + dual-series z-registration
+followup.py        follow-up comparison metrics (HU difference map + per-slice statistics)
 constants.py       tool / plane constants + multi-organ palette
 —— resources ——
 style.qss          dark theme

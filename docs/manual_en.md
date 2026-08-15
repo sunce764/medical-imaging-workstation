@@ -13,7 +13,7 @@
 **Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
 **Operating environment**: Windows / macOS / Linux desktop systems, Python 3.10; depends on PySide6, pydicom, NumPy, SciPy, scikit-image, ONNX Runtime.
 **Development language**: Python.
-**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 165 automated regression checks.
+**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 183 automated regression checks.
 **Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
 
 ---
@@ -146,6 +146,14 @@ Using the "Segmentation brush / Segmentation eraser" tools, you can manually add
 ## 8. Dual-series Follow-up Comparison
 
 Click the **"Load comparison series"** button on the right and select the DICOM directory of a prior examination; the software enters dual-view comparison mode: the left view (V1) is the current series, the right view (V2) is the prior series. The two series are **registered by the `ImagePositionPatient` anatomical Z coordinate** (the same anatomical slice is shown side by side), with slices and window level linked; when position information is missing, it falls back to mapping by index ratio. Clicking **"Exit comparison"** returns. When de-identification is enabled, the prior examination date in the comparison title is hidden.
+
+### 8.1 Difference quantification
+
+After registration, the V2 title bar reports the HU difference for the current slice in real time: **Δ mean** (current − prior; positive means denser now), **mean absolute difference**, and **RMSE**. Switching to the quad-view layout shows a **difference map** in V3: warm colours where density has increased, cool where it has decreased, transparent where there is no change.
+
+When the two series have different matrix sizes, the software **states plainly that they are not comparable rather than force-resampling them** — interpolation would introduce error and create the illusion of a valid comparison.
+
+> **Important limitation**: this feature aligns along the **z axis only**; **no rigid or deformable registration is performed in-plane**. The reported difference therefore mixes true density change with uncorrected posture and respiratory-phase differences, and is **a qualitative indicator, not a clinical measurement of lesion change**. Genuine follow-up quantification requires rigid/deformable registration, which this software does not implement. In addition, the prior series is not run through AI inference, so **organ-level volume change is not provided**.
 
 ---
 

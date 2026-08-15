@@ -16,6 +16,7 @@ import numpy as np
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QFileDialog, QMessageBox
 
+import followup
 import mpr_geometry
 
 
@@ -111,8 +112,38 @@ class CompareMixin:
         # 标题带既往检查日期（脱敏时隐去——检查日期属可识别信息）
         date = '' if self.anonymize else (str(getattr(self.compare_datasets[0], 'StudyDate', '')) if self.compare_datasets else '')
         dtag = f" {date[:4]}-{date[4:6]}-{date[6:8]}" if len(date) == 8 else ''
-        self.set_view_title(2, (f"V2 [Prior{dtag} {z2 + 1}/{Z2} · {reg}]" if self.is_english
-                                else f"V2 [既往{dtag} {z2 + 1}/{Z2} · {reg}]"))
+        stat = self._compare_stat_text(self.volume_hu[z], self.compare_volume[z2])
+        self.set_view_title(2, (f"V2 [Prior{dtag} {z2 + 1}/{Z2} · {reg}]{stat}" if self.is_english
+                                else f"V2 [既往{dtag} {z2 + 1}/{Z2} · {reg}]{stat}"))
+
+    def _compare_stat_text(self, cur, prev):
+        """本层 HU 差异定量，返回可直接拼进 V2 标题的一段文字（无差异可比时返回提示）。
+
+        计算全在无 Qt 的 followup 模块，本方法只做取值与格式化。
+        差值图另在 V3 渲染——但对比模式默认是 1×2 双窗，V3 处于隐藏状态，
+        故仅当用户切到四窗（V3 可见）时才渲染，避免为看不见的视图做无用计算。
+
+        【勿夸大】只做了 z 轴层面配准，xy 平面未做刚性/形变配准，故差值中混有体位与
+        呼吸相位差异，仅供定性参考，不是临床意义上的病灶变化量——标题里如实标注。
+        """
+        e = self.is_english
+        ok, why = followup.can_compare(cur, prev)
+        if not ok:
+            return f" · Δ n/a ({why})" if e else f" · Δ 不可比（{why}）"
+        s = followup.compare_slices(cur, prev)
+        # 差值图叠加到 V3——仅在它确实可见时才做（默认双窗布局下 V3 隐藏）
+        if 3 in self.views and not self.views[3]['container'].isHidden():
+            d = followup.diff_map(cur, prev)
+            self._show_windowed(3, cur, self.slider_ww.value(), self.slider_wl.value())
+            rgba = np.ascontiguousarray(followup.diff_to_rgba(d))
+            h, w = d.shape
+            mq = QImage(rgba.data, w, h, w * 4, QImage.Format_RGBA8888).copy()
+            v3 = self.views[3]['view']
+            v3.set_image(v3.image_item.pixmap(), mq)
+            self.set_view_title(3, "V3 [Difference map · warm = denser now]" if e
+                                else "V3 [差值图 · 暖色=当前更致密]")
+        return (f" · Δ{s['mean_diff']:+.0f} MAE {s['mae']:.0f} RMSE {s['rmse']:.0f} HU (z-aligned only)" if e
+                else f" · Δ{s['mean_diff']:+.0f} 绝对差 {s['mae']:.0f} RMSE {s['rmse']:.0f} HU（仅z轴配准）")
 
     def _show_windowed(self, vid, hu2d, ww, wl):
         """把 2D HU 切片按窗位映射为灰度显示到指定视图（对比模式用，不叠加蒙版/标注/四角信息）。"""

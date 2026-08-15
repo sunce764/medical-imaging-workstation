@@ -267,7 +267,8 @@ def test_sampling_density(v):
 
 def test_compare(v, app):
     print("[双序列随访对比]")
-    saved_id = id(v.dicom_datasets)
+    saved_layout = v.combo_layout.currentIndex()   # 本测试会切布局验 V3，退出前必须还原，
+    saved_id = id(v.dicom_datasets)                # 否则污染后续测试的可见视图集合
     vol, dsets = v._read_compare_dir(os.path.join(_ROOT, "肺癌"))
     check(vol is not None and id(v.dicom_datasets) == saved_id, "读取对比序列不污染主序列")
     v.compare_volume = np.zeros((10, 64, 64), np.float32)
@@ -284,6 +285,26 @@ def test_compare(v, app):
     before = dict(v.global_annotations)
     v.handle_annotation_added({'id': 'x', 'type': 'ruler', 'p1': (1, 1), 'p2': (2, 2)})
     check(v.global_annotations == before, "对比模式下标注被守卫")
+    # 形状不同（上面的 64×64 对比卷 vs 512×512 主序列）→ 定量须如实报告不可比，而非强行缩放
+    check("不可比" in v.views[2]['title_label'].text() or "n/a" in v.views[2]['title_label'].text(),
+          "矩阵尺寸不同 → 标题如实标注 Δ 不可比")
+    # 同形序列才走真正的差值定量路径（上面那条 64×64 用例恰好绕过了它）：
+    # 构造既往 = 当前 + 40 HU，则 Δ 必为 -40、MAE/RMSE 必为 40，可精确验算。
+    Zp = v.volume_hu.shape[0]
+    v.compare_volume = v.volume_hu + 40.0
+    v.compare_datasets = [type('D', (), {'StudyDate': '20200115'})()]
+    v._primary_zpos = np.arange(Zp).astype(float)
+    v._compare_zpos = np.arange(Zp).astype(float)
+    v.current_3d_pos[0] = Zp // 2
+    v._render_compare(); app.processEvents()
+    t2 = v.views[2]['title_label'].text()
+    check("Δ-40" in t2 and "40" in t2, f"同形序列差值定量：既往高 40 HU → Δ-40 (得 {t2[-42:]})")
+    check(v.views[3]['container'].isHidden(), "对比模式默认双窗，V3 隐藏（差值图不做无用渲染）")
+    v.combo_layout.setCurrentIndex(2); app.processEvents()   # 切四窗，V3 可见
+    v._render_compare(); app.processEvents()
+    check(not v.views[3]['container'].isHidden() and "差值图" in v.views[3]['title_label'].text()
+          or "Difference" in v.views[3]['title_label'].text(), "切四窗后 V3 渲染差值图不崩")
+    v.combo_layout.setCurrentIndex(saved_layout); app.processEvents()   # 还原布局，勿污染后续测试
     v.compare_mode_active = False; v.compare_volume = None
     v.tabs.setCurrentIndex(0); app.processEvents()
 
@@ -998,6 +1019,43 @@ def test_quantify():
           "空蒙版返回空列表")
 
 
+def test_followup():
+    """随访对比定量纯函数直接单测——合成切片，不构造 MedicalViewer。断言值均可手算。"""
+    print("[随访对比定量纯函数 followup]")
+    import followup as F
+    # 可比性守卫：形状不同必须拒绝，而不是强行 resize 制造「看起来能比」的假象
+    ok, why = F.can_compare(np.zeros((4, 4), np.float32), np.zeros((4, 5), np.float32))
+    check(not ok and "尺寸不同" in why, f"矩阵尺寸不同 → 拒绝比较 ({why})")
+    ok, _ = F.can_compare(np.zeros((4, 4), np.float32), np.zeros((4, 4), np.float32))
+    check(ok, "同形切片 → 可比")
+    # 差值统计：prev 全 0，cur 为 [0,10,20,90] → 差值即 cur 本身，各量可手算
+    prev = np.zeros((2, 2), np.float32)
+    cur = np.array([[0.0, 10.0], [20.0, 90.0]], np.float32)
+    s = F.compare_slices(cur, prev)
+    check(abs(s['mean_diff'] - 30.0) < 1e-6, f"mean_diff=(0+10+20+90)/4=30 (得 {s['mean_diff']})")
+    check(abs(s['mae'] - 30.0) < 1e-6, f"mae=30（差值全非负，等于 mean_diff）(得 {s['mae']})")
+    check(abs(s['rmse'] - np.sqrt((0 + 100 + 400 + 8100) / 4)) < 1e-4,
+          f"rmse=√((0+100+400+8100)/4)=√2150≈46.37 (得 {s['rmse']:.4f})")
+    check(abs(s['sd_diff'] - np.sqrt(1250.0)) < 1e-4, f"sd_diff=√1250≈35.36 (得 {s['sd_diff']:.4f})")
+    check(abs(s['max_abs'] - 90.0) < 1e-6, "max_abs=90")
+    # 完全相同的两张切片：差值恒为 0，相关系数为 1
+    same = np.array([[1.0, 2.0], [3.0, 4.0]], np.float32)
+    s2 = F.compare_slices(same, same)
+    check(s2['mean_diff'] == 0 and s2['mae'] == 0 and s2['rmse'] == 0, "相同切片 → 差值统计全为 0")
+    check(abs(s2['corr'] - 1.0) < 1e-9, f"相同切片 → 相关系数=1 (得 {s2['corr']})")
+    # 有符号性：cur 比 prev 低时 mean_diff 必须为负（正=密度升高的约定）
+    s3 = F.compare_slices(np.zeros((2, 2), np.float32), np.full((2, 2), 50.0, np.float32))
+    check(s3['mean_diff'] == -50.0, f"当前低于既往 → mean_diff 为负 (得 {s3['mean_diff']})")
+    # 常数切片方差为 0，相关系数无定义 → 必须返回 nan 而非崩溃或给出假值
+    check(np.isnan(s3['corr']), "常数切片 → 相关系数返回 nan（无定义，不编造）")
+    # 差值渲染：0 差异全透明；正负分属暖/冷色；饱和阈值处不透明度最高
+    rgba = F.diff_to_rgba(np.array([[0.0, 300.0], [-300.0, 0.0]], np.float32), clip_hu=200.0)
+    check(rgba.shape == (2, 2, 4) and rgba.dtype == np.uint8, f"差值图 RGBA 形状/类型 (得 {rgba.shape})")
+    check(int(rgba[0, 0, 3]) == 0 and int(rgba[1, 1, 3]) == 0, "零差异处完全透明")
+    check(int(rgba[0, 1, 0]) > int(rgba[0, 1, 2]) and int(rgba[1, 0, 2]) > int(rgba[1, 0, 0]),
+          "正差值偏暖色、负差值偏冷色（超阈值已 clip）")
+
+
 def test_lung_fallback():
     """AI 数学降级纯函数直接单测——合成体积，不构造推理线程/MedicalViewer。"""
     print("[AI 数学降级纯函数 segmentation.segment_lungs_fallback]")
@@ -1162,6 +1220,7 @@ def main_run():
             t(app)
         test_quantify()      # 纯函数单测，无需 app / 真实数据
         test_lung_fallback()
+        test_followup()
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
@@ -1197,6 +1256,7 @@ def main_run():
         test_mask_cache_roundtrip(app)
         test_quantify()
         test_lung_fallback()
+        test_followup()
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
