@@ -15,14 +15,20 @@ import scipy.ndimage as ndimage
 def compute_organ_stats(volume_hu: np.ndarray, volume_mask: np.ndarray,
                         spacing: tuple[float, float, float],
                         organ_names: dict[int, tuple[str, str]]) -> list[dict]:
-    """统计 volume_mask 中各标签的体积(mL)与平均 HU，按体积降序返回。
+    """统计 volume_mask 中各标签的体积(mL)与 HU 一阶统计量，按体积降序返回。
 
     volume_hu:    3D HU 值体素数组，shape=(Z,H,W)
     volume_mask:  同形状的 uint8 标签图（0=背景，1-255=器官/手动层）
     spacing:      (行间距 ps0, 列间距 ps1, 层厚 st)，单位 mm
     organ_names:  {标签号: (中文名, 英文名)}；缺失标签回退为 "类{id}"/"cls{id}"
-    返回:         [{'id','name_zh','name_en','voxels','volume_ml','mean_hu'}, ...]，
+    返回:         [{'id','name_zh','name_en','voxels','volume_ml',
+                    'mean_hu','sd_hu','median_hu','p5_hu','p95_hu','min_hu','max_hu'}, ...]，
                   按 volume_ml 降序；无前景标签时返回 []。
+
+    为何不止 mean：只报均值无法反映区域内的密度离散程度，而离散度正是判断分割是否
+    误纳入邻近组织、以及做任何统计比较的前提（椭圆 ROI 一直给的是 mean±SD，
+    器官定量此前只给 mean，两者口径不一致）。p5/p95 比 min/max 抗单体素噪声，
+    故一并给出，min/max 仍保留供查看极端值。
     """
     ps0, ps1, st = spacing
     vox_ml = ps0 * ps1 * st / 1000.0  # 单体素体积，mm³ → mL
@@ -30,12 +36,21 @@ def compute_organ_stats(volume_hu: np.ndarray, volume_mask: np.ndarray,
     present = [i for i in range(1, 256) if counts[i] > 0]
     if not present:
         return []
-    # ndimage.mean 一次性算出所有标签区域的平均 HU，避免逐类布尔索引
+    # ndimage 一次性算出所有标签区域的统计量，避免逐类布尔索引
     means = np.atleast_1d(ndimage.mean(volume_hu, labels=volume_mask, index=present))
+    sds = np.atleast_1d(ndimage.standard_deviation(volume_hu, labels=volume_mask, index=present))
+    mins = np.atleast_1d(ndimage.minimum(volume_hu, labels=volume_mask, index=present))
+    maxs = np.atleast_1d(ndimage.maximum(volume_hu, labels=volume_mask, index=present))
     rows = []
     for i, lid in enumerate(present):
         zh, en = organ_names.get(lid, (f"类{lid}", f"cls{lid}"))
+        # 百分位需按标签取值，ndimage 无对应聚合函数；仅对本标签体素取一次
+        vals = volume_hu[volume_mask == lid]
+        p5, med, p95 = np.percentile(vals, (5, 50, 95))
         rows.append({'id': lid, 'name_zh': zh, 'name_en': en, 'voxels': int(counts[lid]),
-                     'volume_ml': counts[lid] * vox_ml, 'mean_hu': float(means[i])})
+                     'volume_ml': counts[lid] * vox_ml,
+                     'mean_hu': float(means[i]), 'sd_hu': float(sds[i]),
+                     'median_hu': float(med), 'p5_hu': float(p5), 'p95_hu': float(p95),
+                     'min_hu': float(mins[i]), 'max_hu': float(maxs[i])})
     rows.sort(key=lambda r: -r['volume_ml'])
     return rows

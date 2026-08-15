@@ -13,7 +13,7 @@
 **Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
 **Operating environment**: Windows / macOS / Linux desktop systems, Python 3.10; depends on PySide6, pydicom, NumPy, SciPy, scikit-image, ONNX Runtime.
 **Development language**: Python.
-**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 155 automated regression checks.
+**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 165 automated regression checks.
 **Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
 
 ---
@@ -121,7 +121,7 @@ After DICOM data is loaded, the software automatically calls the segmentation mo
 
 ### 7.2 Result Overlay and Legend
 
-After inference completes, the segmentation result is overlaid on the axial image as a colour semi-transparent mask; the legend on the right lists each detected organ and its colour, and **clicking a legend entry toggles that organ's visibility**.
+After inference completes, the segmentation result is overlaid on the image as a colour semi-transparent mask, **displayed on all three planes — axial, coronal and sagittal** (mask and image are taken as corresponding slices of the same 3-D array, so they align pixel for pixel); the legend on the right lists each detected organ and its colour, and **clicking a legend entry toggles that organ's visibility**.
 
 ![AI multi-organ segmentation overlay and organ quantification](img/gui_axial_segmentation.png)
 
@@ -133,7 +133,9 @@ As the mouse moves over the image, the interface displays in real time the coord
 
 ### 7.4 Organ Quantification Panel and CSV Export
 
-The "Automated AI engine" area lists each detected organ's **volume (mL) and mean HU** (in descending order of volume). Clicking **"Export quantification CSV"** exports the quantification results to a CSV file (UTF-8-SIG encoding, so Excel displays Chinese correctly), with the AI disclaimer embedded in the CSV.
+The "Automated AI engine" area lists each detected organ's **volume (mL) and mean HU ± SD** (in descending order of volume). Clicking **"Export quantification CSV"** exports the quantification results to a CSV file (UTF-8-SIG encoding, so Excel displays Chinese correctly) carrying seven HU statistics per organ — mean, SD, median, 5th and 95th percentiles, minimum and maximum — alongside the volume, with the AI disclaimer embedded in the CSV.
+
+> Why not the mean alone: a mean says nothing about how dispersed the density is inside an organ, and that dispersion is what tells you whether the segmentation has absorbed neighbouring tissue — and is a precondition for any statistical comparison. The 5th/95th percentiles are more robust to single-voxel noise than the extremes.
 
 ### 7.5 Segmentation Editing
 

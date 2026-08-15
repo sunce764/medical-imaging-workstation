@@ -164,6 +164,17 @@ def test_multiorgan_and_edit(v, app):
     # 橡皮擦 AI 标签
     v.handle_seg_paint(1, [(70, 70)], True)
     check(int((v.volume_mask[z] == 10).sum()) < before, "橡皮可擦除 AI 分割")
+    # 蒙版叠加须覆盖三个平面：volume_mask 与 volume_hu 同形状，各平面按同一索引取切片。
+    # 曾硬编码 `plane == AXIAL`，使冠/矢状面看不到任何分割（MPR 与 AI 两大功能未打通）。
+    Z, H, W = v.volume_mask.shape
+    v.volume_mask[:] = 0
+    v.volume_mask[Z // 2 - 5:Z // 2 + 5, H // 2 - 20:H // 2 + 20, W // 2 - 20:W // 2 + 20] = 5
+    zc, yc, xc = Z // 2, H // 2, W // 2
+    for nm, msk, hu in (("Axial", v.volume_mask[zc, :, :], v.volume_hu[zc, :, :]),
+                        ("Coronal", v.volume_mask[:, yc, :], v.volume_hu[:, yc, :]),
+                        ("Sagittal", v.volume_mask[:, :, xc], v.volume_hu[:, :, xc])):
+        check(msk.shape == hu.shape and int((msk != 0).sum()) > 0,
+              f"{nm} 面蒙版切片与影像切片同形 {msk.shape} 且含分割 (得 {int((msk != 0).sum())} 体素)")
 
 
 def test_roi(v, app):
@@ -968,6 +979,21 @@ def test_quantify():
     check(r2['name_zh'] == "肾" and r2['name_en'] == "Kidney", "器官2 名称查表命中")
     check(r5['name_zh'] == "类5" and r5['name_en'] == "cls5", "器官5 未登记 → 回退名 类5/cls5")
     check(abs(r5['mean_hu'] - 100.0) < 1e-6, "器官5 平均 HU=100")
+    # 恒定区域的离散度必须为 0（上面两个器官内 HU 全同）——独立可验算，不抄实现
+    check(abs(r2['sd_hu']) < 1e-6 and abs(r5['sd_hu']) < 1e-6, "HU 恒定区域 SD=0")
+    check(abs(r2['median_hu'] - 50.0) < 1e-6 and abs(r2['min_hu'] - 50.0) < 1e-6
+          and abs(r2['max_hu'] - 50.0) < 1e-6, "HU 恒定区域 median/min/max 均=50")
+    # 非恒定区域：器官7 取 4 个已知值 [0,10,20,90]，各统计量可手算
+    vol2 = np.zeros((4, 4, 4), np.float32); mask2 = np.zeros((4, 4, 4), np.uint8)
+    for k, hv in enumerate([0.0, 10.0, 20.0, 90.0]):
+        mask2[2, 0, k] = 7; vol2[2, 0, k] = hv
+    r7 = quantify.compute_organ_stats(vol2, mask2, spacing, {})[0]
+    check(abs(r7['mean_hu'] - 30.0) < 1e-6, f"器官7 mean=(0+10+20+90)/4=30 (得 {r7['mean_hu']})")
+    check(abs(r7['median_hu'] - 15.0) < 1e-6, f"器官7 median=(10+20)/2=15 (得 {r7['median_hu']})")
+    check(abs(r7['min_hu'] - 0.0) < 1e-6 and abs(r7['max_hu'] - 90.0) < 1e-6, "器官7 min=0 max=90")
+    # 总体标准差(ddof=0)：√(((0-30)²+(10-30)²+(20-30)²+(90-30)²)/4) = √1250 = 35.3553…
+    check(abs(r7['sd_hu'] - np.sqrt(1250.0)) < 1e-4, f"器官7 总体标准差=√1250≈35.36 (得 {r7['sd_hu']:.4f})")
+    check(r7['p5_hu'] <= r7['median_hu'] <= r7['p95_hu'], "p5 ≤ median ≤ p95 单调有序")
     check(quantify.compute_organ_stats(vol, np.zeros((4, 4, 4), np.uint8), spacing, names) == [],
           "空蒙版返回空列表")
 

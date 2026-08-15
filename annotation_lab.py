@@ -376,8 +376,9 @@ class AnnotationMixin:
         for r in self._organ_stats:
             r_, g_, b_ = (int(LABEL_LUT[r['id']][0]), int(LABEL_LUT[r['id']][1]), int(LABEL_LUT[r['id']][2]))
             nm = r['name_en'] if e else r['name_zh']
+            # 与椭圆 ROI 同口径给出 mean±SD：只报均值无法反映区域内密度离散程度
             lines.append(f'<span style="color:#{r_:02X}{g_:02X}{b_:02X};">■</span> '
-                         f"{nm}: {r['volume_ml']:.1f} mL / {r['mean_hu']:.0f} HU")
+                         f"{nm}: {r['volume_ml']:.1f} mL / {r['mean_hu']:.0f}±{r['sd_hu']:.0f} HU")
         self.lbl_ai_stats.setText("<br>".join(lines))
         self.btn_export_stats.setEnabled(True)
 
@@ -412,10 +413,13 @@ class AnnotationMixin:
                 w = csv.writer(f)
                 w.writerow(['# AI-derived, for reference only, NOT for diagnosis; organ labels are auto-inferred /'
                             ' AI 自动推断，仅供参考，非诊断依据'])
-                w.writerow(['class_id', 'organ_zh', 'organ_en', 'voxels', 'volume_mL', 'mean_HU'])
+                w.writerow(['class_id', 'organ_zh', 'organ_en', 'voxels', 'volume_mL',
+                            'mean_HU', 'SD_HU', 'median_HU', 'p5_HU', 'p95_HU', 'min_HU', 'max_HU'])
                 for r in rows:
                     w.writerow([r['id'], r['name_zh'], r['name_en'], r['voxels'],
-                                f"{r['volume_ml']:.2f}", f"{r['mean_hu']:.1f}"])
+                                f"{r['volume_ml']:.2f}", f"{r['mean_hu']:.1f}", f"{r['sd_hu']:.1f}",
+                                f"{r['median_hu']:.1f}", f"{r['p5_hu']:.1f}", f"{r['p95_hu']:.1f}",
+                                f"{r['min_hu']:.1f}", f"{r['max_hu']:.1f}"])
             QMessageBox.information(self, "Success", f"Saved: {os.path.basename(fp)}")
         except Exception as ex:
             QMessageBox.warning(self, "Export Failed", str(ex))

@@ -22,7 +22,7 @@
 - **AI 多器官分割** —— 后台滑窗 ONNX 推理（25 类，含 5 个肺叶）。所用模型原本来源未知，其出处经**实测反推确证** —— 即 TotalSegmentator v2 `class_map_part_organs`，在一例带真值的公开 CT 上 21 个在场器官**平均 Dice ≈ 0.92**（*n = 1*）。
 - **重建实验室（教学）** —— 正向 Radon 与解析反投影（BP、含 5 种滤波器的 FBP）基于 scikit-image；**DFR、DMR、ART、SIRT 四种反解算法为本项目从零实现**。
 - **两项量化研究** —— 重建剂量-质量权衡（含一个反直觉的滤波器翻转发现）与 AI 模型出处/Dice 验证，均直调产品代码、完全可复现、不使用患者数据。
-- **面向审阅的工程** —— God-object 拆分为 5 个 UI mixin + 4 个无 Qt 计算模块；**155 项**离屏 Qt 回归测试 + CI（重建算法有数值正确性断言，而非仅验「有限」）；防御式 DICOM 处理。
+- **面向审阅的工程** —— God-object 拆分为 5 个 UI mixin + 4 个无 Qt 计算模块；**165 项**离屏 Qt 回归测试 + CI（重建算法有数值正确性断言，而非仅验「有限」）；防御式 DICOM 处理。
 
 ## 界面
 
@@ -49,7 +49,7 @@ python main.py --data /path/to/dicom_dir # 或启动即加载指定 DICOM 目录
 | 模块 | 能力 |
 |---|---|
 | **临床阅片** | 解剖排序 DICOM 加载 · 三平面 MPR + 十字线联动 · 6 套窗位预设 + 反色 · 9 个测量/标注工具 · 椭圆 ROI（均值±SD / 最值 HU / 面积）· 四角 PACS 叠加 · Cine 播放 · 双序列随访对比 |
-| **AI 分割** | 后台自动推理 · 彩色叠加 + 可点图例 · 光标 HUD（HU / 坐标 / 器官）· 器官定量（体积 mL / 平均 HU）+ CSV 导出 · 画笔/橡皮编辑 + 撤销 |
+| **AI 分割** | 后台自动推理 · 三平面彩色叠加 + 可点图例 · 光标 HUD（HU / 坐标 / 器官）· 器官定量（体积 mL、均值±SD、中位数、p5–p95、最值 HU）+ CSV 导出 · 画笔/橡皮编辑 + 撤销 |
 | **重建实验室** | Radon 投影（60–360°，1–4× 采样）· BP / FBP（5 种滤波器）/ DFR · DMR（最小二乘）/ ART / SIRT，附误差图 + RMSE |
 | **合规** | 显示层脱敏 · 常驻 AI 免责声明 · 中英双语界面切换 |
 
@@ -65,13 +65,13 @@ python main.py --data /path/to/dicom_dir # 或启动即加载指定 DICOM 目录
 ## 测试
 
 ```bash
-python tests/test_gui.py                     # 完整回归：155 项（需同目录 RIDER 真实数据）
+python tests/test_gui.py                     # 完整回归：165 项（需同目录 RIDER 真实数据）
 SKIP_REAL_DATA=1 python tests/test_gui.py    # 数据无关子集（CI 使用）
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```
 
-离屏 Qt，退出码 0 = 全部通过。覆盖率 ≈ 70%；四个无 Qt 计算模块（`recon` / `quantify` / `segmentation` / `mpr_geometry`）均有独立单测。CI 每次 push/PR 只跑数据无关子集 —— 故「CI 全绿」**不等于**全部 155 项都跑过（交互层测试需本地真实数据）。
+离屏 Qt，退出码 0 = 全部通过。覆盖率 ≈ 70%；四个无 Qt 计算模块（`recon` / `quantify` / `segmentation` / `mpr_geometry`）均有独立单测。CI 每次 push/PR 只跑数据无关子集 —— 故「CI 全绿」**不等于**全部 165 项都跑过（交互层测试需本地真实数据）。
 
 ## 文档
 
@@ -90,7 +90,8 @@ coverage run tests/test_gui.py && coverage report
 - **非临床器械** —— 无监管认证、无算法验证文档、无审计 / 访问控制。
 - **脱敏为显示层** —— 隐去屏幕与导出文件名中的 PHI，但**不清洗**底层 DICOM 标签与烧录文字。
 - **Dice ≈ 0.92 基于单一带真值序列（*n = 1*）** —— 标签映射已确证，但该数字不应被当作总体估计。
-- 矩阵重建（DMR/ART）受 `lstsq` 成本限制，实用上限约 64×64（教学用途）；AI/重建/标注默认作用于当前主序列；AI 叠加仅横断面。
+- 矩阵重建（DMR/ART）受 `lstsq` 成本限制，实用上限约 64×64（教学用途）；AI/重建/标注默认作用于当前主序列。
+- 双序列随访对比只做配准与并排显示，**不给出任何定量变化**（无两次扫描间的体积或 HU 差值）。
 
 ## 许可 · 版权
 

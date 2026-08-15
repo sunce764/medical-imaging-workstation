@@ -867,11 +867,17 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         h, w = img.shape
         qimg = QImage(img.data, w, h, w, QImage.Format_Grayscale8).copy()
 
-        # AI 多器官蒙版叠加：仅 Axial 平面支持。用调色板 LUT 一步向量化上色，
-        # 每个类别号映射到 constants.LABEL_LUT 中的 RGBA（0=背景为全透明）。
+        # AI 多器官蒙版叠加：三个平面均支持。volume_mask 与 volume_hu 同形状(Z,H,W)，
+        # 故按与上方 hu 完全相同的索引取对应平面的蒙版切片，保证叠加与影像逐像素对齐。
+        # 用调色板 LUT 一步向量化上色，每个类别号映射到 constants.LABEL_LUT 的 RGBA（0=背景全透明）。
         mq = None
-        if plane == AXIAL and vdata['chk_anno'].isChecked() and self.volume_mask is not None:
-            sm = self.volume_mask[z]
+        if vdata['chk_anno'].isChecked() and self.volume_mask is not None:
+            if plane == AXIAL:
+                sm = self.volume_mask[z, :, :]
+            elif plane == CORONAL:
+                sm = self.volume_mask[:, y, :]
+            else:                                  # SAGITTAL
+                sm = self.volume_mask[:, :, x]
             present = np.unique(sm)
             present = present[present != 0]  # 剔除背景，得到本切片出现的器官类别
             if present.size:  # 性能优化：无器官时跳过 QImage 构建

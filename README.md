@@ -22,7 +22,7 @@ A desktop **CT imaging workstation** (PySide6/Qt6) that unites a clinical DICOM 
 - **AI multi-organ segmentation** — background sliding-window ONNX inference (25 classes, incl. 5 lung lobes). The shipped model was undocumented; its provenance was **recovered by measurement** — identified as TotalSegmentator v2 `class_map_part_organs`, with **mean Dice ≈ 0.92** over 21 organs on one ground-truth case (*n = 1*).
 - **Reconstruction lab (teaching)** — forward Radon and analytic inverses (BP, FBP with 5 apodisation filters) via scikit-image; **DFR, DMR, ART and SIRT inverse solvers implemented from first principles.**
 - **Two quantitative studies** — a reconstruction dose–quality characterisation (with a non-obvious filter-inversion finding) and an AI-model provenance/Dice validation, both driving the production code, fully reproducible, using no patient data.
-- **Engineered for review** — a God-object decomposed into 5 UI mixins + 4 Qt-free compute modules; a **155-check** offscreen-Qt regression suite with CI (reconstruction algorithms carry numerical-correctness assertions, not just "finite"); defensive DICOM handling.
+- **Engineered for review** — a God-object decomposed into 5 UI mixins + 4 Qt-free compute modules; a **165-check** offscreen-Qt regression suite with CI (reconstruction algorithms carry numerical-correctness assertions, not just "finite"); defensive DICOM handling.
 
 ## Screenshots
 
@@ -49,7 +49,7 @@ python main.py --data /path/to/dicom_dir # or load a DICOM directory on launch
 | Area | Capabilities |
 |---|---|
 | **Clinical reading** | Anatomical-sorted DICOM loading · tri-planar MPR + linked cross-hairs · 6 window presets + invert · 9 measurement/annotation tools · ellipse ROI (mean±SD / min-max HU / area) · four-corner PACS overlay · Cine playback · dual-series follow-up comparison |
-| **AI segmentation** | Auto background inference · colour overlay with clickable legend · cursor HUD (HU / coords / organ) · per-organ quantification (volume mL / mean HU) with CSV export · brush/eraser editing with undo |
+| **AI segmentation** | Auto background inference · colour overlay on all three planes with clickable legend · cursor HUD (HU / coords / organ) · per-organ quantification (volume mL, mean ± SD, median, p5–p95, min–max HU) with CSV export · brush/eraser editing with undo |
 | **Reconstruction lab** | Radon projection (60–360°, 1–4× sampling) · BP / FBP (5 filters) / DFR · DMR (least-squares) / ART / SIRT with error maps + RMSE |
 | **Compliance** | Display-layer de-identification · persistent AI disclaimer · bilingual (EN / 中文) UI toggle |
 
@@ -65,13 +65,13 @@ Reproduce via [`experiments/`](experiments/README.md) (scripts + figures + CSVs)
 ## Testing
 
 ```bash
-python tests/test_gui.py                     # full suite: 155 checks (needs local RIDER data)
+python tests/test_gui.py                     # full suite: 165 checks (needs local RIDER data)
 SKIP_REAL_DATA=1 python tests/test_gui.py    # data-independent subset (used by CI)
 ruff check .                                 # lint
 coverage run tests/test_gui.py && coverage report
 ```
 
-Offscreen Qt; exit code 0 = all pass. Coverage ≈ 70%; the four Qt-free compute modules (`recon` / `quantify` / `segmentation` / `mpr_geometry`) are unit-tested in isolation. CI runs the data-independent subset on every push/PR — so a green CI is **not** the full 155 checks (interaction-layer tests need local data).
+Offscreen Qt; exit code 0 = all pass. Coverage ≈ 70%; the four Qt-free compute modules (`recon` / `quantify` / `segmentation` / `mpr_geometry`) are unit-tested in isolation. CI runs the data-independent subset on every push/PR — so a green CI is **not** the full 165 checks (interaction-layer tests need local data).
 
 ## Documentation
 
@@ -90,7 +90,8 @@ Offscreen Qt; exit code 0 = all pass. Coverage ≈ 70%; the four Qt-free compute
 - **Not a clinical device** — no regulatory clearance, no algorithm-validation dossier, no audit/access control.
 - **De-identification is display-layer only** — hides PHI on screen and in export filenames, but does **not** scrub underlying DICOM tags or burned-in text.
 - **Dice ≈ 0.92 rests on a single labelled case (*n = 1*)** — the label mapping is verified, but the figure should not be read as a population estimate.
-- Matrix reconstruction (DMR/ART) is bounded to ≈ 64×64 by `lstsq` cost (teaching scope); AI/reconstruction/annotation act on the current primary series; AI overlay is axial-only.
+- Matrix reconstruction (DMR/ART) is bounded to ≈ 64×64 by `lstsq` cost (teaching scope); AI/reconstruction/annotation act on the current primary series.
+- Dual-series follow-up comparison registers and displays the two series side by side, but reports no quantitative change (no volume or HU delta between scans).
 
 ## License · Copyright
 
