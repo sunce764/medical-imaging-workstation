@@ -538,12 +538,26 @@ class MedicalGraphicsView(QGraphicsView):
                      'p2': (p2.x(), p2.y())}
                 self.scene.removeItem(self.temp_item)
                 self.scene.removeItem(self.temp_text)
-                self.annotation_added.emit(d)
+                # 误触过滤：纯点击（不拖动）原本会生成一条长度 0 的卡尺并被 save_project
+                # 持久化进工程 JSON。阈值取 1 像素——图像的最小单位就是 1 像素，不足
+                # 1 像素的"测量"在任何分辨率下都不成立，故不会误伤真实的短距离测量。
+                # 相邻工具本就有同类过滤（套索 ≥3 点、矩形截取 >5 像素），此处原本漏了。
+                if math.hypot(p2.x() - self.start_pos.x(), p2.y() - self.start_pos.y()) >= 1.0:
+                    self.annotation_added.emit(d)
 
             elif self.current_tool == TOOL_DRAW and self.temp_item:
                 d = {'id': str(uuid.uuid4()), 'type': 'path', 'points': self.polygon_points}
                 self.scene.removeItem(self.temp_item)
-                self.annotation_added.emit(d)
+                # 同卡尺的 1 像素标准。用包围盒跨度而非首尾距离——自由画笔画一个闭合
+                # 圈时首尾重合，按首尾判会把有效路径误杀。
+                # 注意 polygon_points 在本分支存的是 (x, y) 元组，而套索分支存的是
+                # QPointF —— 同一属性在不同工具下类型不同，取值方式勿照搬。
+                _pts = self.polygon_points
+                _span = (math.hypot(max(p[0] for p in _pts) - min(p[0] for p in _pts),
+                                    max(p[1] for p in _pts) - min(p[1] for p in _pts))
+                         if len(_pts) >= 2 else 0.0)
+                if _span >= 1.0:
+                    self.annotation_added.emit(d)
 
             elif self.current_tool == TOOL_CROP and self.temp_item:
                 pts = [(p.x(), p.y()) for p in self.polygon_points]

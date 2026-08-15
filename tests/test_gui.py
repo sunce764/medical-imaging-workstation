@@ -1500,6 +1500,19 @@ def test_mouse_interaction(app):
     except Exception:
         crashed = True
     check(not crashed, "零长度拖拽不崩")
+    # 不崩还不够：纯点击（不拖动）原本会生成一条长度 0 的卡尺，并被 save_project
+    # 持久化进工程 JSON。相邻工具本就有误触过滤（套索 ≥3 点、矩形截取 >5 像素），
+    # 卡尺与自由画笔此前漏了。
+    n0 = len(g['annotation_added']) if not crashed else -1
+    check(n0 == 0, f"零长度卡尺不产生退化标注（得 {n0} 条）")
+    n1 = len(drag(TOOL_RULER, 150, 150, 150.4, 150.3, steps=1)['annotation_added'])
+    check(n1 == 0, f"亚像素抖动（<1px）同样视为误触（得 {n1} 条）")
+    n2 = len(drag(TOOL_RULER, 100, 100, 140, 130, steps=3)['annotation_added'])
+    check(n2 == 1, f"真实拖拽仍正常产出卡尺（得 {n2} 条）")
+    n3 = len(drag(TOOL_DRAW, 60, 60, 60, 60, steps=1)['annotation_added'])
+    check(n3 == 0, f"原地自由画笔不产生退化路径（得 {n3} 条）")
+    n4 = len(drag(TOOL_DRAW, 60, 60, 120, 90, steps=4)['annotation_added'])
+    check(n4 == 1, f"真实自由画笔仍正常产出路径（得 {n4} 条）")
     view.close()          # 独立实例用完即弃，无需还原状态，也不会污染主窗口
     app.processEvents()
 

@@ -314,6 +314,11 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             vdata['chk_anno'].setText("Anno" if e else "显示")
             vdata['lock'].setText("Lock" if e else "锁定")
 
+        # 三个解析重建按钮的「为什么禁用」提示（DMR/ART 自造弦图故不在此列）
+        for _b in (self.btn_dfr, self.btn_bp, self.btn_fbp):
+            _b.setToolTip("Generate the sinogram first — this algorithm reconstructs from it" if e
+                          else "需要先点「发射射线生成弦图」——本算法由弦图反解图像")
+
         self._refresh_patient_info()   # 脱敏占位文字随语言刷新
         self.on_slice_changed(self.slider_slice.value())
 

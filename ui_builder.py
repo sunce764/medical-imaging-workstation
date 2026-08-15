@@ -355,6 +355,10 @@ class UiBuilderMixin:
         self.btn_fbp.setStyleSheet("background-color: #27AE60; color: white;")
         self.btn_fbp.clicked.connect(self.run_fbp)
 
+        # 这三个消费已生成的弦图，故未生成前禁用。禁用态原本不给任何理由，用户无从
+        # 知道该先做什么（DMR/ART 自己造弦图所以始终可点，对比之下更显得没道理）。
+        for _b in (self.btn_dfr, self.btn_bp, self.btn_fbp):
+            _b.setToolTip("需要先点「发射射线生成弦图」——本算法由弦图反解图像")
         alay.addWidget(self.btn_dfr); alay.addWidget(self.btn_bp); alay.addWidget(self.btn_fbp)
         self.grp_algo.setLayout(alay)
         t2_lay.addWidget(self.grp_algo)
