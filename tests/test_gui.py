@@ -349,7 +349,9 @@ def test_edge_cases(v, app):
     # 换病例清撤销栈
     v._build_volume_hu()
     check(len(v._mask_undo) == 0, "换病例清空分割撤销栈")
-    # 换更小病例后撤销不越界崩溃
+    # 换更小病例后撤销不越界崩溃。本段会把 volume_hu 换成合成卷，
+    # 用完必须还原为真实数据——否则后续依赖真实 HU 的测试会拿到全零卷而静默失真。
+    saved_hu, saved_pos = v.volume_hu, list(v.current_3d_pos)
     v.volume_mask = np.zeros(v.volume_hu.shape, np.uint8)
     v.handle_seg_paint(1, [(200, 200)], False)
     v.volume_hu = np.zeros((50, 512, 512), np.float32)
@@ -361,6 +363,11 @@ def test_edge_cases(v, app):
     except Exception:
         crashed = True
     check(not crashed, "换病例后撤销不越界崩溃")
+    v.volume_hu = saved_hu                      # 还原真实体数据
+    v.volume_mask = np.zeros(v.volume_hu.shape, np.uint8)
+    v.current_3d_pos = saved_pos
+    check(v.volume_hu.shape[1:] == (512, 512) and float(v.volume_hu.min()) < -500,
+          f"退出前还原真实 HU 体数据 (shape={v.volume_hu.shape}, min={float(v.volume_hu.min()):.0f})")
     # 脱敏隐去对比既往日期（PHI）
     vv = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌")); app.processEvents()
     if vv.ai_thread:
@@ -1019,6 +1026,44 @@ def test_quantify():
           "空蒙版返回空列表")
 
 
+def test_projection():
+    """厚层投影纯函数直接单测——合成体积，断言值均可手算。"""
+    print("[厚层投影纯函数 projection]")
+    import projection as P
+    from constants import AXIAL, CORONAL, SAGITTAL
+    # 体积 (4,3,2)：第 z 层全为 z*10 → 沿 z 投影的结果可直接心算
+    vol = np.zeros((4, 3, 2), np.float32)
+    for z in range(4):
+        vol[z] = z * 10.0
+    # 关键契约：thickness=1 必须与直接切片逐元素相同，否则会悄悄改变既有渲染行为
+    for pl, idx, ref in ((AXIAL, 2, vol[2, :, :]), (CORONAL, 1, vol[:, 1, :]), (SAGITTAL, 0, vol[:, :, 0])):
+        got = P.project(vol, pl, idx, thickness=1)
+        check(got.shape == ref.shape and bool(np.array_equal(got, ref)),
+              f"thickness=1 与直接切片完全一致 (plane={pl}, shape={got.shape})")
+    # z=1..3 三层的 MIP=30、MinIP=10、AIP=20（(10+20+30)/3）
+    mx = P.project(vol, AXIAL, 2, thickness=3, mode='max')
+    mn = P.project(vol, AXIAL, 2, thickness=3, mode='min')
+    av = P.project(vol, AXIAL, 2, thickness=3, mode='mean')
+    check(float(mx.max()) == 30.0 and float(mx.min()) == 30.0, f"MIP 取层块最大值=30 (得 {float(mx.max())})")
+    check(float(mn.max()) == 10.0, f"MinIP 取层块最小值=10 (得 {float(mn.max())})")
+    check(abs(float(av.max()) - 20.0) < 1e-6, f"AIP 取层块均值=(10+20+30)/3=20 (得 {float(av.max())})")
+    # 厚度超出体积：夹到边界且不抛异常，仍返回该平面的正确形状
+    big = P.project(vol, AXIAL, 0, thickness=99, mode='max')
+    check(big.shape == (3, 2) and float(big.max()) == 30.0, f"厚度超界 → 夹到全体积 (得 {big.shape}, max={float(big.max())})")
+    # 层块范围：中心 5、厚度 4、长度 10 → [3,7)；靠上边界时回推保证足额厚度
+    check(P.slab_bounds(5, 4, 10) == (3, 7), f"slab_bounds(5,4,10)=(3,7) (得 {P.slab_bounds(5, 4, 10)})")
+    check(P.slab_bounds(9, 4, 10) == (6, 10), f"靠边界回推保足额厚度 (得 {P.slab_bounds(9, 4, 10)})")
+    # 毫米换算：Axial 沿 z 用层厚，Coronal/Sagittal 沿平面内轴用像素间距——物理尺度不同
+    check(abs(P.thickness_mm(5, AXIAL, 0.7, 1.25) - 6.25) < 1e-9, "Axial 5 层 × 层厚1.25 = 6.25mm")
+    check(abs(P.thickness_mm(5, CORONAL, 0.7, 1.25) - 3.5) < 1e-9, "Coronal 5 层 × 像素间距0.7 = 3.5mm")
+    bad = False
+    try:
+        P.project(vol, AXIAL, 0, mode='median')
+    except ValueError:
+        bad = True
+    check(bad, "非法投影模式抛 ValueError")
+
+
 def test_followup():
     """随访对比定量纯函数直接单测——合成切片，不构造 MedicalViewer。断言值均可手算。"""
     print("[随访对比定量纯函数 followup]")
@@ -1090,6 +1135,34 @@ def test_mpr_geometry():
     check(g.voxel_to_crosshair(SAGITTAL, 10, 20, 30) == (20, 10), "Sagittal 十字线 (y,z)")
     check(g.nearest_slice([0, 5, 10, 15, 20], 12) == 2, "最近解剖切片 = 索引2 (z=10)")
     check(g.nearest_slice([0, 5, 10, 15, 20], 100) == 4, "超出范围取最末切片")
+
+
+def test_projection_ui(v, app):
+    """厚层投影接入渲染路径：默认单层必须与原行为完全一致，切到 MIP 才改变画面。"""
+    print("[厚层投影接入渲染]")
+    import projection as P
+    from constants import AXIAL
+    vd = v.views[1]
+    check(vd['cb_proj'].currentIndex() == 0 and vd['sp_thick'].value() == 1
+          and not vd['sp_thick'].isEnabled(),
+          "默认单层模式、厚度1、厚度框禁用（不改变既有默认体验）")
+    z = v.current_3d_pos[0]
+    # 默认路径与直接切片逐元素相同——这是接入投影后最重要的不回归契约
+    check(bool(np.array_equal(P.project(v.volume_hu, AXIAL, z, 1, 'max'), v.volume_hu[z, :, :])),
+          "单层投影结果 == 直接切片（真实数据逐元素比对）")
+    # 切到 MIP 后厚度框启用，且渲染不崩
+    vd['cb_proj'].setCurrentIndex(1); vd['sp_thick'].setValue(10)
+    app.processEvents(); v.update_display(); app.processEvents()
+    check(vd['sp_thick'].isEnabled(), "选到投影模式后厚度框启用")
+    mip = P.project(v.volume_hu, AXIAL, z, 10, 'max')
+    check(mip.shape == v.volume_hu[z].shape and float(mip.mean()) > float(v.volume_hu[z].mean()),
+          f"MIP 均值高于单层 ({mip.mean():.1f} > {v.volume_hu[z].mean():.1f})")
+    vd['cb_proj'].setCurrentIndex(2)      # MinIP
+    app.processEvents(); v.update_display(); app.processEvents()
+    minip = P.project(v.volume_hu, AXIAL, z, 10, 'min')
+    check(float(minip.mean()) < float(v.volume_hu[z].mean()), "MinIP 均值低于单层")
+    vd['cb_proj'].setCurrentIndex(0); vd['sp_thick'].setValue(1)   # 还原，勿污染后续测试
+    app.processEvents(); v.update_display(); app.processEvents()
 
 
 def test_mask_cache_guard():
@@ -1221,6 +1294,7 @@ def main_run():
         test_quantify()      # 纯函数单测，无需 app / 真实数据
         test_lung_fallback()
         test_followup()
+        test_projection()
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
@@ -1252,11 +1326,13 @@ def main_run():
         test_export_path_safety(app)
         test_dicom_sort_consistency(app)
         test_i18n_persistent(app)
+        test_projection_ui(v, app)
         test_hu_conversion(app)
         test_mask_cache_roundtrip(app)
         test_quantify()
         test_lung_fallback()
         test_followup()
+        test_projection()
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据

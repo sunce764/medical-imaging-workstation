@@ -377,9 +377,17 @@ class UiBuilderMixin:
         lt = QLabel(f"V{vid}"); lt.setStyleSheet("color: #C9D1D9; font-weight: bold; min-width: 20px;")
         cb_plane = QComboBox(); cb_plane.setFixedWidth(80)
         ps = QComboBox(); ps.setFixedWidth(85); ps.currentIndexChanged.connect(self.update_display)
+        # 厚层投影：模式 + 厚度（层数）。默认 Slice/1 时行为与原单层切片完全一致，
+        # 故不改变既有默认体验；MIP 用于肺结节/血管，MinIP 用于气道，AIP 用于降噪。
+        cb_proj = QComboBox(); cb_proj.setFixedWidth(72)
+        sp_thick = QSpinBox(); sp_thick.setRange(1, 200); sp_thick.setValue(1); sp_thick.setFixedWidth(52)
+        sp_thick.setEnabled(False)          # 单层模式下厚度无意义，选到投影模式才启用
+        cb_proj.currentIndexChanged.connect(lambda i, s=sp_thick: (s.setEnabled(i > 0), self.update_display()))
+        sp_thick.valueChanged.connect(self.update_display)
         an = QCheckBox(); an.setObjectName("ViewOption"); an.setChecked(True); an.stateChanged.connect(self.update_display)
         lk = QCheckBox(); lk.setObjectName("ViewOption"); lk.stateChanged.connect(self.update_display)
-        tl.addWidget(lt); tl.addWidget(cb_plane); tl.addWidget(ps); tl.addStretch(); tl.addWidget(an); tl.addWidget(lk)
+        tl.addWidget(lt); tl.addWidget(cb_plane); tl.addWidget(ps); tl.addWidget(cb_proj); tl.addWidget(sp_thick)
+        tl.addStretch(); tl.addWidget(an); tl.addWidget(lk)
         v = MedicalGraphicsView(vid)
         v.clicked_pos.connect(lambda p, id=vid: self.measure_hu(p, id))
         v.wheel_scrolled.connect(lambda d, id=vid: self.on_wheel_mpr(d, id))
@@ -391,6 +399,7 @@ class UiBuilderMixin:
         v.mouse_hovered.connect(lambda pos, id=vid: self.sync_crosshair(pos, id))
         v.seg_paint_requested.connect(lambda pts, er, id=vid: self.handle_seg_paint(id, pts, er))
         lay.addWidget(t); lay.addWidget(v); t.raise_()
-        self.views[vid] = {'container':c, 'cb_plane': cb_plane, 'preset':ps, 'lock':lk, 'chk_anno':an, 'view':v, 'plane': plane, 'title_label': lt}
+        self.views[vid] = {'container':c, 'cb_plane': cb_plane, 'preset':ps, 'lock':lk, 'chk_anno':an, 'view':v, 'plane': plane, 'title_label': lt,
+                           'cb_proj': cb_proj, 'sp_thick': sp_thick}
         cb_plane.currentIndexChanged.connect(lambda idx, v_id=vid: self.change_view_plane(v_id, idx))
 

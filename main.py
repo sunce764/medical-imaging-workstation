@@ -24,6 +24,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBo
 
 # 子模块导入
 import mpr_geometry
+import projection
 from ai_engine import AutoAIEngineThread
 from annotation_lab import AnnotationMixin
 from compare_lab import CompareMixin
@@ -297,9 +298,15 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         v_cn = ["跟随", "肺窗", "纵隔", "骨窗", "血管", "腹部", "脑窗"]
         plane_en = ["Axial", "Coronal", "Sagittal"]
         plane_cn = ["横断面", "冠状面", "矢状面"]
+        # 厚层投影模式：Slice=单层（默认，行为同原来）/ MIP 最大 / MinIP 最小 / AIP 平均
+        proj_en = ["Slice", "MIP", "MinIP", "AIP"]
+        proj_cn = ["单层", "最大密度", "最小密度", "平均密度"]
         for vdata in self.views.values():
             self._retranslate_combo(vdata['cb_plane'], plane_en, plane_cn, e, idx=vdata['plane'])
             self._retranslate_combo(vdata['preset'], v_en, v_cn, e)
+            self._retranslate_combo(vdata['cb_proj'], proj_en, proj_cn, e)
+            vdata['sp_thick'].setSuffix(" sl" if e else " 层")
+            vdata['sp_thick'].setToolTip("Slab thickness in slices" if e else "投影层块厚度（层数）")
             vdata['chk_anno'].setText("Anno" if e else "显示")
             vdata['lock'].setText("Lock" if e else "锁定")
 
@@ -849,15 +856,20 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # 根据平面切取对应的 2D 截面
         # 像素间距 sp=(行间距, 列间距)=(垂直/Y轴, 水平/X轴)，供 ruler 测距按真实 mm 换算
         # （graphics_view 里 d=√((dx·sp[1])²+(dy·sp[0])²)，故 sp[0] 配垂直、sp[1] 配水平）
-        if plane == AXIAL:
+        # 厚层投影：下拉为「单层」(index 0) 时走原路径，逐元素等价于直接切片；
+        # 选到 MIP/MinIP/AIP 才按厚度取层块投影（projection.project 已保证 thickness=1 时一致）。
+        pmode = ['slice', 'max', 'min', 'mean'][vdata['cb_proj'].currentIndex()]
+        pthick = vdata['sp_thick'].value()
+        idx_of = {AXIAL: z, CORONAL: y, SAGITTAL: x}
+        if pmode != 'slice' and pthick > 1:
+            hu = projection.project(self.volume_hu, plane, idx_of[plane], pthick, pmode)
+        elif plane == AXIAL:
             hu = self.volume_hu[z, :, :]
-            sp = (px_sp, px_sp)              # 横断面：行/列均为 PixelSpacing
         elif plane == CORONAL:
             hu = self.volume_hu[:, y, :]     # (Z, X)：垂直=Z→SliceThickness，水平=X→PixelSpacing
-            sp = (slice_thick, px_sp)
-        elif plane == SAGITTAL:
+        else:                                # SAGITTAL
             hu = self.volume_hu[:, :, x]     # (Z, Y)：垂直=Z→SliceThickness，水平=Y→PixelSpacing
-            sp = (slice_thick, px_sp)
+        sp = (px_sp, px_sp) if plane == AXIAL else (slice_thick, px_sp)
 
         # 窗宽窗位映射：HU → [0, 255] 线性映射
         img = np.clip(hu, wl - ww / 2, wl + ww / 2)

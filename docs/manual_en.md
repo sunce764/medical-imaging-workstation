@@ -13,7 +13,7 @@
 **Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
 **Operating environment**: Windows / macOS / Linux desktop systems, Python 3.10; depends on PySide6, pydicom, NumPy, SciPy, scikit-image, ONNX Runtime.
 **Development language**: Python.
-**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 183 automated regression checks.
+**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 201 automated regression checks.
 **Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
 
 ---
@@ -92,6 +92,21 @@ When the "Information overlay" checkbox is enabled, the four corners of the imag
 ### 5.6 Cine Playback and Keyboard Paging
 
 The "Play" button starts Cine playback, automatically paging through slices continuously (bouncing back at the top / bottom, no wrap-around jump); the speed dropdown offers slow / medium / fast; clicking again pauses.
+
+### 5.7 Slab Projection (MIP / MinIP / AIP)
+
+The projection dropdown at the top of each view switches between four modes, with the spin box beside it setting the slab thickness in slices:
+
+| Mode | Meaning | Typical use |
+|---|---|---|
+| **Slice** | Default, shows a single slice | Routine reading |
+| **MIP** | Maximum intensity projection | **High-density** structures: lung nodules, vessels, bone |
+| **MinIP** | Minimum intensity projection | **Low-density** structures: airways, emphysematous regions |
+| **AIP** | Average intensity projection | Noise reduction, overall density distribution |
+
+Projection runs along the normal of the current plane and is **supported on all three planes**. Selecting "Slice" disables the thickness box; in that state the displayed result is **pixel-for-pixel identical** to not using the projection feature at all.
+
+> Why slab rather than whole-volume projection: clinical practice uses slab MIP (typically 5–20 mm). Collapsing the entire volume into one image superimposes unrelated anatomy and obscures the target instead of revealing it. Thickness is converted to millimetres per plane — axial uses slice thickness along z, coronal/sagittal use pixel spacing along the in-plane axis, since the two carry different physical scales.
 
 ---
 
