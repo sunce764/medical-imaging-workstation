@@ -47,5 +47,13 @@ def voxel_to_crosshair(plane: int, z: int, y: int, x: int) -> tuple[int, int]:
 
 
 def nearest_slice(zpos, target_z: float) -> int:
-    """在解剖 z 坐标数组 zpos 中，返回与 target_z 最接近的切片索引（双序列配准）。"""
-    return int(np.argmin(np.abs(np.asarray(zpos) - target_z)))
+    """在解剖 z 坐标数组 zpos 中，返回与 target_z 最接近的切片索引（双序列配准）。
+
+    zpos 为空时返回 0 而非让 np.argmin 抛 ValueError：本函数在渲染热路径上被调用，
+    崩在这里会让整个对比视图挂掉；退回首层是安全且可见的降级。
+    （正常路径下 compare_lab 的守卫已保证 zpos 非空，此处是纵深防御。）
+    """
+    a = np.asarray(zpos)
+    if a.size == 0:
+        return 0
+    return int(np.argmin(np.abs(a - target_z)))

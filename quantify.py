@@ -36,11 +36,16 @@ def compute_organ_stats(volume_hu: np.ndarray, volume_mask: np.ndarray,
     present = [i for i in range(1, 256) if counts[i] > 0]
     if not present:
         return []
-    # ndimage 一次性算出所有标签区域的统计量，避免逐类布尔索引
-    means = np.atleast_1d(ndimage.mean(volume_hu, labels=volume_mask, index=present))
-    sds = np.atleast_1d(ndimage.standard_deviation(volume_hu, labels=volume_mask, index=present))
-    mins = np.atleast_1d(ndimage.minimum(volume_hu, labels=volume_mask, index=present))
-    maxs = np.atleast_1d(ndimage.maximum(volume_hu, labels=volume_mask, index=present))
+    # ndimage 一次性算出所有标签区域的统计量，避免逐类布尔索引。
+    # errstate：scipy 的 _sum_centered 内部对不连续的 label 索引会建出空 bin 并做
+    # counts=0 的除法，抛 invalid-value 警告——传进去的 present 全都有体素，是 scipy
+    # 的实现细节而非本函数的问题（结果已由单测对手算值验证）。局部抑制，避免每次
+    # 器官定量都刷警告；不用全局 seterr，以免掩盖别处的真实数值异常。
+    with np.errstate(invalid='ignore', divide='ignore'):
+        means = np.atleast_1d(ndimage.mean(volume_hu, labels=volume_mask, index=present))
+        sds = np.atleast_1d(ndimage.standard_deviation(volume_hu, labels=volume_mask, index=present))
+        mins = np.atleast_1d(ndimage.minimum(volume_hu, labels=volume_mask, index=present))
+        maxs = np.atleast_1d(ndimage.maximum(volume_hu, labels=volume_mask, index=present))
     rows = []
     for i, lid in enumerate(present):
         zh, en = organ_names.get(lid, (f"类{lid}", f"cls{lid}"))

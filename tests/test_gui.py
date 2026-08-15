@@ -510,6 +510,28 @@ def test_recon_finite(app):
     p_ok = np.array([1.0, 0.0, 0.5, 0.2], np.float32)
     rec_ok, _ = R.compute_dmr(A, p_ok, 2)
     check(np.allclose(rec_ok.ravel(), np.clip(p_ok, 0, 1)), "正常弦图 DMR 结果不受 finite 守卫影响")
+    # 解析法（FBP/DFR）此前没有 finite 守卫，与矩阵/迭代法防御不一致——补齐后一并钉住。
+    # 弦图混入 NaN/Inf 时 iradon 会把污染扩散到整幅图，NaN 在显示中静默变黑并污染 RMSE。
+    th32 = R.make_theta(180, 32)
+    sino_ok = R.compute_sinogram(np.random.RandomState(0).rand(16, 16).astype(np.float32), th32)
+    for nm, bad_v in (("NaN", np.nan), ("+Inf", np.inf), ("-Inf", -np.inf)):
+        bp, fbp = R.compute_fbp(np.full_like(sino_ok, bad_v), th32, 'ramp')
+        check(bool(np.all(np.isfinite(bp))) and bool(np.all(np.isfinite(fbp))),
+              f"FBP/BP 对全 {nm} 弦图输出有限")
+    f2, f1, dfr = R.compute_dfr(np.full_like(sino_ok, np.inf), th32)
+    check(bool(np.all(np.isfinite(f2))) and bool(np.all(np.isfinite(f1))),
+          "DFR 对含 Inf 弦图的频域输出有限（入口即中和，不等 FFT 后再救）")
+    # SIRT 的归一化系数曾用 np.where(cond, 1/x, 0)——np.where 不短路，1/x 仍会对 0 求值。
+    # 结果虽正确但每次调用刷除零警告；改用 np.divide(where=) 后应无警告且结果不变。
+    import warnings as _w
+    _, _, A32 = R._matrix_worker((0, 256, 16, th32))
+    p32 = sino_ok.ravel().astype(np.float32)
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        rec_s, _ = R.compute_sirt(A32, p32, 16, 3)
+    divzero = [x for x in caught if issubclass(x.category, RuntimeWarning) and 'divide by zero' in str(x.message)]
+    check(not divzero and bool(np.all(np.isfinite(rec_s))),
+          f"SIRT 无除零警告且结果有限 (捕获 {len(divzero)} 条除零警告)")
 
 
 def _recon_disk(n, radius_frac=0.3, val=1.0):

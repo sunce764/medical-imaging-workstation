@@ -154,8 +154,12 @@ def compute_fbp(sinogram: np.ndarray, theta: np.ndarray, filter_name: str) -> tu
     # skimage.transform.iradon 内部滤波器名为 'ramp'，调用前需做名称映射
     if filter_name.lower() == "ram-lak":
         filter_name = "ramp"
-    recon_bp = iradon(sinogram, theta=theta, filter_name=None, circle=True)
-    recon_fbp = iradon(sinogram, theta=theta, filter_name=filter_name, circle=True)
+    # 与 DMR/ART/SIRT 的 _finite_clip 对齐：弦图若混入 NaN/±Inf（损坏输入、上游异常），
+    # iradon 会把它扩散到整幅重建图，而 NaN 在后续 clip/显示中会静默变黑并污染 RMSE。
+    # 此前只有矩阵/迭代法设了这道防线，解析法没有——防御不一致，此处补齐。
+    s = np.nan_to_num(sinogram, nan=0.0, posinf=0.0, neginf=0.0)
+    recon_bp = iradon(s, theta=theta, filter_name=None, circle=True)
+    recon_fbp = iradon(s, theta=theta, filter_name=filter_name, circle=True)
     return recon_bp, recon_fbp
 
 
@@ -184,8 +188,11 @@ def compute_dfr(sinogram: np.ndarray, theta: np.ndarray) -> tuple[np.ndarray, np
     # 步骤1：对弦图沿探测器方向（axis=0）做 1D FFT
     # ifftshift 将数据中心移到 FFT 起点（左端），fft 计算，再 fftshift 将零频移回中心
     # 这样 proj_fft[num_detectors//2, :] 对应零频（直流分量）
+    # 入口先中和非有限值：FFT 遇 NaN/±Inf 会把污染扩散到全部频率分量，
+    # 后面第 227 行的 nan_to_num 已来不及救（那时整幅频域都成了 NaN）。
+    sino = np.nan_to_num(sinogram, nan=0.0, posinf=0.0, neginf=0.0)
     proj_fft = np.fft.fftshift(
-        np.fft.fft(np.fft.ifftshift(sinogram, axes=0), axis=0),
+        np.fft.fft(np.fft.ifftshift(sino, axes=0), axis=0),
         axes=0
     )
 
@@ -474,23 +481,34 @@ def compute_sirt(A: np.ndarray, p_vec: np.ndarray, n: int, n_iter: int,
     x = np.zeros(n * n, dtype=np.float32)
     col_sums = A.sum(axis=0)  # 每列之和 = 每个像素被所有射线覆盖的总权重
     row_sums = A.sum(axis=1)  # 每行之和 = 每条射线穿过所有像素的总路径长度
-    # where 保护：避免除以 0（完全不被射线覆盖的像素列/行）
-    C = np.where(col_sums > 1e-10, 1.0 / col_sums, 0.0).astype(np.float32)
-    R = np.where(row_sums > 1e-10, 1.0 / row_sums, 0.0).astype(np.float32)
+    # 避免除以 0（完全不被射线覆盖的像素列/行）。
+    # 注意不能写成 np.where(cond, 1.0/x, 0.0)：np.where **不短路**，两个分支都会被完整
+    # 求值，故 1.0/x 仍会对 x=0 的位置做除法并抛 divide-by-zero 警告（结果虽被选对，
+    # 但每次调用都会污染终端）。改用 np.divide 的 where= 参数，只在有效位置计算。
+    C = np.zeros_like(col_sums, dtype=np.float64)
+    R = np.zeros_like(row_sums, dtype=np.float64)
+    np.divide(1.0, col_sums, out=C, where=col_sums > 1e-10)
+    np.divide(1.0, row_sums, out=R, where=row_sums > 1e-10)
+    C, R = C.astype(np.float32), R.astype(np.float32)
 
     start_t = time.perf_counter()
-    for it in range(n_iter):
-        if cancel_check is not None and cancel_check():
-            break
-        # x ← x + C·Aᵀ·(R·(p - A·x))
-        # A @ x：正向投影（用当前估计值模拟弦图）
-        # R * residual：对每条射线按其路径长度归一化
-        # A.T @ ...：反投影（将射线残差分配回各像素）
-        # C * ...：对每个像素按其被覆盖总权重归一化
-        x = x + C * (A.T @ (R * (p_vec - A @ x)))
-        x = np.clip(x, 0.0, None)  # 非负约束
-        if progress_cb is not None:
-            progress_cb(it)
+    # errstate：macOS 的 Accelerate BLAS 在 matmul 后会误置浮点异常标志——已最小复现，
+    # 纯随机 float32 数组相乘同样报 divide-by-zero/overflow 而结果完全正确（无 nan/inf）。
+    # 本循环每迭代含两次 matmul，20 轮会向终端刷上百条无意义警告，故局部抑制。
+    # 不用全局 seterr：真正的数值异常仍由末尾的 _finite_clip 兜住并可见。
+    with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+        for it in range(n_iter):
+            if cancel_check is not None and cancel_check():
+                break
+            # x ← x + C·Aᵀ·(R·(p - A·x))
+            # A @ x：正向投影（用当前估计值模拟弦图）
+            # R * residual：对每条射线按其路径长度归一化
+            # A.T @ ...：反投影（将射线残差分配回各像素）
+            # C * ...：对每个像素按其被覆盖总权重归一化
+            x = x + C * (A.T @ (R * (p_vec - A @ x)))
+            x = np.clip(x, 0.0, None)  # 非负约束
+            if progress_cb is not None:
+                progress_cb(it)
     elapsed_ms = (time.perf_counter() - start_t) * 1000
 
     img_recon = _finite_clip(x, n)
