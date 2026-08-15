@@ -22,7 +22,7 @@ A desktop **CT imaging workstation** (PySide6/Qt6) that unites a clinical DICOM 
 - **AI multi-organ segmentation** — background sliding-window ONNX inference (25 classes, incl. 5 lung lobes). The shipped model was undocumented; its provenance was **recovered by measurement** — identified as TotalSegmentator v2 `class_map_part_organs`, with **mean Dice ≈ 0.92** over 21 organs on one ground-truth case (*n = 1*).
 - **Reconstruction lab (teaching)** — forward Radon and analytic inverses (BP, FBP with 5 apodisation filters) via scikit-image; **DFR, DMR, ART and SIRT inverse solvers implemented from first principles.**
 - **Two quantitative studies** — a reconstruction dose–quality characterisation (with a non-obvious filter-inversion finding) and an AI-model provenance/Dice validation, both driving the production code, fully reproducible, using no patient data.
-- **Engineered for review** — a God-object decomposed into 5 UI mixins + 7 Qt-free compute modules; a **219-check** offscreen-Qt regression suite with CI (reconstruction algorithms carry numerical-correctness assertions, not just "finite"); defensive DICOM handling.
+- **Engineered for review** — a God-object decomposed into 5 UI mixins + 7 Qt-free compute modules; a **222-check** offscreen-Qt regression suite with CI (reconstruction algorithms carry numerical-correctness assertions, not just "finite"); defensive DICOM handling.
 
 ## Screenshots
 
@@ -65,13 +65,13 @@ Reproduce via [`experiments/`](experiments/README.md) (scripts + figures + CSVs)
 ## Testing
 
 ```bash
-python tests/test_gui.py                     # full suite: 219 checks (needs local RIDER data)
+python tests/test_gui.py                     # full suite: 222 checks (needs local RIDER data)
 SKIP_REAL_DATA=1 python tests/test_gui.py    # data-independent subset (used by CI)
 ruff check .                                 # lint
 coverage run tests/test_gui.py && coverage report
 ```
 
-Offscreen Qt; exit code 0 = all pass. Coverage ≈ 70%; the seven Qt-free compute modules (`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d`) are unit-tested in isolation. CI runs the data-independent subset on every push/PR — so a green CI is **not** the full 219 checks (interaction-layer tests need local data).
+Offscreen Qt; exit code 0 = all pass. Coverage ≈ 70%; the seven Qt-free compute modules (`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d`) are unit-tested in isolation. CI runs the data-independent subset on every push/PR — so a green CI is **not** the full 222 checks (interaction-layer tests need local data).
 
 ## Documentation
 

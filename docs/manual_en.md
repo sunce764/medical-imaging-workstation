@@ -13,7 +13,7 @@
 **Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
 **Operating environment**: Windows / macOS / Linux desktop systems, Python 3.10; depends on PySide6, pydicom, NumPy, SciPy, scikit-image, ONNX Runtime.
 **Development language**: Python.
-**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 219 automated regression checks.
+**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 222 automated regression checks.
 **Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
 
 ---
@@ -154,11 +154,11 @@ The "Automated AI engine" area lists each detected organ's **volume (mL) and mea
 
 ### 7.5 3D Surface Reconstruction
 
-Click **"3D Surface Preview"** and the software extracts an isosurface (marching cubes) for **the organ currently selected as the brush target**, opening a dialog with static renders from four azimuths together with **surface area, volume, sphericity and face count**. From there the mesh can be **exported as STL** (ASCII, millimetre units, ready for 3D printing or external software).
+Click **"3D Surface Preview"** and the software reconstructs a 3-D surface for **the organ currently selected as the brush target**, opening a dialog with static renders from four azimuths together with **surface area, volume, sphericity and face count**. From there the mesh can be **exported as STL** (ASCII, millimetre units, ready for 3D printing or external software).
 
-Rendering is implemented in pure numpy (orthographic projection + Lambert shading + painter's-algorithm depth sorting), with no dependency on OpenGL or VTK, so no GPU is required. The trade-off is no perspective, no shadows and no interactive rotation — static multi-angle preview only.
+The pipeline is **isosurface extraction (marching cubes) → Taubin smoothing → vertex-clustering decimation**, matching the surface-model workflow used by 3D Slicer. Rendering is implemented in pure numpy (orthographic projection + Lambert shading + painter's-algorithm depth sorting), with no dependency on OpenGL or VTK, so no GPU is required. The trade-off is no perspective, no shadows and no interactive rotation — static multi-angle preview only.
 
-> **Accuracy**: validated against an analytic sphere — **mesh volume is within 1% and can be used directly**; **surface area is systematically overestimated by roughly 9%** (the staircase effect of marching cubes on voxelised surfaces), which also depresses sphericity slightly. Surface area and sphericity are therefore best used for **relative comparison under matched conditions** (different organs in the same case, or the same organ across follow-up), not quoted as absolute geometric quantities.
+> **Why smoothing matters**: marching cubes alone leaves a voxel staircase, which inflates surface area. Measured on an analytic sphere (R = 20, spacing 1 mm): without smoothing the surface area is **+9.3%** high and sphericity is 0.915; after 10 Taubin iterations these become **+1.2%** and 0.988, while **volume shifts by only +0.08%**. Taubin alternates a positive and a negative pass so the shrinkage cancels — plain Laplacian smoothing would steadily shrink the mesh and corrupt the volume measurement. Decimation (roughly halving the face count by default) halves render time at a volume error on the order of 0.1%.
 
 ### 7.6 Segmentation Editing
 

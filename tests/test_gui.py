@@ -1034,19 +1034,27 @@ def test_mesh3d():
     zz, yy, xx = np.ogrid[:N, :N, :N]
     c = (N - 1) / 2
     mask = (((zz - c) ** 2 + (yy - c) ** 2 + (xx - c) ** 2) <= R * R).astype(np.uint8) * 7
+    v_exact, a_exact = 4 / 3 * np.pi * R ** 3, 4 * np.pi * R ** 2
+    # 默认流程 = 提取 → Taubin 平滑 → 顶点聚类减面（与 3D Slicer 表面模型工作流一致）
     verts, faces = M.extract_surface(mask, 7, (1.0, 1.0, 1.0), step=1)
     check(len(verts) > 0 and faces.shape[1] == 3, f"提取出三角网格 (顶点 {len(verts)}, 面 {len(faces)})")
     s = M.mesh_shape_stats(verts, faces)
-    # 体积对解析解 4/3πR³ 必须很准——这是网格几何正确性的硬指标
-    v_exact = 4 / 3 * np.pi * R ** 3
     err_v = abs(s['volume_mm3'] - v_exact) / v_exact
-    check(err_v < 0.02, f"网格体积对解析球体误差 <2% (得 {err_v * 100:.2f}%, {s['volume_mm3']:.0f} vs {v_exact:.0f})")
-    # 表面积对解析解 4πR² 系统性高估约 9%（marching cubes 阶梯效应，非缺陷）：
-    # 断言它落在合理带内，既确认量级正确、又如实承认这个偏差不会消失
-    a_exact = 4 * np.pi * R ** 2
-    ratio = s['surface_area_mm2'] / a_exact
-    check(1.0 < ratio < 1.20, f"网格表面积/解析值 ∈ (1.0,1.20]，反映 MC 的系统性高估 (得 {ratio:.3f})")
-    check(0.85 < s['sphericity'] < 1.0, f"球体的球形度接近 1（受表面积高估影响略低）(得 {s['sphericity']:.4f})")
+    check(err_v < 0.02, f"默认流程体积对解析球体误差 <2% (得 {err_v * 100:.2f}%)")
+    # 平滑是否真起作用：关掉后处理，表面积必须明显更差。这条同时钉住
+    # 「平滑不可省」与「体积不被平滑破坏」两件事，是本模块最关键的断言。
+    vr, fr = M.extract_surface(mask, 7, (1.0, 1.0, 1.0), step=1, smooth=0, decimate_grid=0)
+    sr = M.mesh_shape_stats(vr, fr)
+    ratio_raw = sr['surface_area_mm2'] / a_exact
+    ratio_sm = s['surface_area_mm2'] / a_exact
+    check(ratio_raw > 1.05, f"未平滑时表面积高估 >5%（体素阶梯效应确实存在）(得 {(ratio_raw - 1) * 100:+.2f}%)")
+    # 比的是【误差】(ratio-1) 而非 ratio 本身：ratio 恒接近 1，直接比会永假
+    check((ratio_sm - 1) < (ratio_raw - 1) / 2,
+          f"平滑把面积误差压掉一半以上 ({(ratio_raw - 1) * 100:+.2f}% → {(ratio_sm - 1) * 100:+.2f}%)")
+    check(abs(s['volume_mm3'] - sr['volume_mm3']) / sr['volume_mm3'] < 0.01,
+          "Taubin 平滑几乎不改变体积（正负交替抵消收缩，非纯 Laplacian 的持续缩水）")
+    check(len(faces) < len(fr), f"减面确实减少了面数 ({len(fr):,} → {len(faces):,})")
+    check(s['sphericity'] > sr['sphericity'], f"平滑后球形度更接近 1 ({sr['sphericity']:.4f} → {s['sphericity']:.4f})")
     # 各向异性 spacing：层厚翻倍则体积翻倍——验证 spacing 确实按 (z,y,x) 传对了
     s2 = M.mesh_shape_stats(*M.extract_surface(mask, 7, (1.0, 1.0, 2.0), step=1))
     check(abs(s2['volume_mm3'] / s['volume_mm3'] - 2.0) < 0.05,
