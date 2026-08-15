@@ -28,9 +28,12 @@ import main as m
 from constants import AXIAL, CORONAL, MANUAL_TRACK_LABEL, TOOL_POINTER
 from graphics_view import ROIGraphicsItem
 
-# 静音弹窗，避免离屏阻塞
+# 静音弹窗，避免离屏阻塞。三个都必须 stub：question 曾被遗漏，导致触发
+# 「矩形截取 → 是否保存?」的测试挂死（模态框弹出后无人应答，进程永久阻塞）。
+# question 返回 No：测试默认不触发保存副作用，需要保存路径的用例自行临时改写。
 QMessageBox.information = staticmethod(lambda *a, **k: None)
 QMessageBox.warning = staticmethod(lambda *a, **k: None)
+QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.No)
 
 _FAILS = []
 
@@ -1223,6 +1226,133 @@ def test_mpr_geometry():
     check(g.nearest_slice([0, 5, 10, 15, 20], 100) == 4, "超出范围取最末切片")
 
 
+def test_mouse_interaction(app):
+    """鼠标交互逐工具验证：完整 press→move→release 序列，断言发出的信号与其载荷。
+
+    graphics_view 的三个鼠标事件处理器（press/move/release 共约 190 行）此前
+    一行未测——所有工具的实际交互逻辑都在里面，是覆盖率最大的盲区。
+    只断言"不崩"没有意义，故这里捕获信号并核对载荷内容。
+
+    刻意使用**独立的 MedicalGraphicsView 实例**而非主窗口里的那个：
+      1) 被测对象就是 view 自身的交互逻辑，不该连带触发 MedicalViewer 的重处理器
+         （3D 追踪会扫描整卷、矩形截取会弹 QMessageBox.question 阻塞测试——
+          实测确实因此挂死，测试顶部只 stub 了 information/warning 两个）；
+      2) 不依赖真实数据，可进 SKIP_REAL_DATA 子集。
+    """
+    print("[鼠标交互逐工具]")
+    from PySide6.QtGui import QPixmap
+
+    from constants import (
+        TOOL_AI_TRACK,
+        TOOL_CROP,
+        TOOL_DRAW,
+        TOOL_POINTER,
+        TOOL_RECT_CROP,
+        TOOL_ROI,
+        TOOL_RULER,
+        TOOL_SEG_BRUSH,
+        TOOL_SEG_ERASE,
+    )
+    from graphics_view import MedicalGraphicsView
+    view = MedicalGraphicsView(1)              # 独立实例：不连 MedicalViewer 的任何处理器
+    pm = QPixmap(256, 256); pm.fill(Qt.black)  # 需要有图元，坐标映射与命中检测才有意义
+    view.set_image(pm)
+    view.resize(300, 300); view.show()
+    app.processEvents()
+
+    def press(x, y, btn=Qt.LeftButton):
+        view.mousePressEvent(QMouseEvent(QEvent.MouseButtonPress, QPointF(x, y), btn, btn, Qt.NoModifier))
+    def move(x, y, btn=Qt.LeftButton):
+        view.mouseMoveEvent(QMouseEvent(QEvent.MouseMove, QPointF(x, y), Qt.NoButton, btn, Qt.NoModifier))
+    def release(x, y, btn=Qt.LeftButton):
+        view.mouseReleaseEvent(QMouseEvent(QEvent.MouseButtonRelease, QPointF(x, y), btn, Qt.NoButton, Qt.NoModifier))
+
+    def drag(tool, x0, y0, x1, y1, btn=Qt.LeftButton, steps=3):
+        """选中工具后完整拖拽一次，返回该过程中捕获到的各信号载荷。"""
+        view.current_tool = tool
+        got = {}
+        conns = []
+        for sig_name in ('clicked_pos', 'annotation_added', 'crop_requested',
+                         'track_requested', 'window_changed', 'seg_paint_requested', 'mouse_hovered'):
+            sig = getattr(view, sig_name)
+            got[sig_name] = []
+            # 默认参数绑定当前 key，避免闭包全部捕获到最后一个 sig_name
+            slot = (lambda *a, _k=sig_name, _g=got: _g[_k].append(a))
+            sig.connect(slot); conns.append((sig, slot))
+        try:
+            press(x0, y0, btn)
+            for i in range(1, steps + 1):
+                move(x0 + (x1 - x0) * i / steps, y0 + (y1 - y0) * i / steps, btn)
+            release(x1, y1, btn)
+            app.processEvents()
+        finally:
+            for sig, slot in conns:
+                sig.disconnect(slot)
+        return got
+
+    # 指针：单击应发出 clicked_pos（用于读取该点 HU）
+    g = drag(TOOL_POINTER, 120, 120, 120, 120, steps=1)
+    check(len(g['clicked_pos']) >= 1, f"指针工具单击发出 clicked_pos ({len(g['clicked_pos'])} 次)")
+    # 卡尺：拖拽应产出 ruler 标注，且两端点即拖拽起止
+    g = drag(TOOL_RULER, 100, 100, 200, 160)
+    ann = [a[0] for a in g['annotation_added'] if a[0].get('type') == 'ruler']
+    check(len(ann) == 1, f"卡尺拖拽产出 1 条 ruler 标注 (得 {len(ann)})")
+    if ann:
+        # 标注记的是【场景坐标】，而拖拽给的是 view 坐标——fitInView 缩放后两者不等，
+        # 故不能断言绝对值。改断言方向性：终点必在起点的右下方，与拖拽方向一致。
+        p1, p2 = ann[0]['p1'], ann[0]['p2']
+        check(p2[0] > p1[0] and p2[1] > p1[1],
+              f"卡尺端点方向与拖拽一致（右下）(p1={tuple(round(c) for c in p1)} → p2={tuple(round(c) for c in p2)})")
+    # 画笔：自由绘制产出的类型是 'path'（不是 'draw'），载荷含逐点轨迹
+    g = drag(TOOL_DRAW, 80, 80, 180, 180, steps=5)
+    dr = [a[0] for a in g['annotation_added'] if a[0].get('type') == 'path']
+    check(len(dr) == 1 and len(dr[0].get('points', [])) >= 3,
+          f"画笔产出 path 标注且含多点 (得 {len(dr[0].get('points', [])) if dr else 0} 点)")
+    # 套索：闭合后应发 crop_requested，携带多边形顶点
+    g = drag(TOOL_CROP, 90, 90, 150, 150, steps=4)
+    check(len(g['crop_requested']) == 1 and len(g['crop_requested'][0][0]) >= 3,
+          f"套索发出 crop_requested 且顶点 ≥3 (得 {len(g['crop_requested'][0][0]) if g['crop_requested'] else 0})")
+    # 矩形截取：同样走 crop_requested，但顶点应是矩形四角
+    g = drag(TOOL_RECT_CROP, 100, 100, 180, 150)
+    check(len(g['crop_requested']) == 1, f"矩形截取发出 crop_requested ({len(g['crop_requested'])} 次)")
+    # 3D 追踪：应发 track_requested，携带框选矩形
+    g = drag(TOOL_AI_TRACK, 110, 110, 170, 160)
+    check(len(g['track_requested']) == 1, f"3D 追踪发出 track_requested ({len(g['track_requested'])} 次)")
+    if g['track_requested']:
+        r = g['track_requested'][0][0]
+        check(r.width() > 0 and r.height() > 0, f"追踪矩形非退化 ({r.width():.0f}×{r.height():.0f})")
+    # 分割画笔 / 橡皮：应发 seg_paint_requested，第二参数区分补画与擦除
+    g = drag(TOOL_SEG_BRUSH, 120, 120, 160, 160, steps=4)
+    check(len(g['seg_paint_requested']) == 1 and g['seg_paint_requested'][0][1] is False,
+          "分割画笔发出 seg_paint_requested 且 erase=False")
+    g = drag(TOOL_SEG_ERASE, 120, 120, 160, 160, steps=4)
+    check(len(g['seg_paint_requested']) == 1 and g['seg_paint_requested'][0][1] is True,
+          "分割橡皮发出 seg_paint_requested 且 erase=True")
+    # 右键拖拽调窗宽窗位：应发 window_changed
+    g_win = drag(TOOL_POINTER, 100, 100, 200, 150, btn=Qt.RightButton, steps=3)
+    check(len(g_win['window_changed']) >= 1, f"右键拖拽发出 window_changed ({len(g_win['window_changed'])} 次)")
+    # 调窗期间【有意不发】mouse_hovered——见 graphics_view 注释「调窗期间不更新十字线，
+    # 避免光标移动引起视图混乱」。这条断言把该设计意图钉住，防止日后被"顺手补上"。
+    check(len(g_win['mouse_hovered']) == 0, "调窗拖拽期间不发 mouse_hovered（有意设计，避免十字线乱跳）")
+    # 非调窗的左键拖拽则必须持续发 mouse_hovered，MPR 联动十字线依赖它
+    g_hov = drag(TOOL_POINTER, 100, 100, 180, 140, steps=3)
+    check(len(g_hov['mouse_hovered']) >= 1, f"非调窗移动发出 mouse_hovered ({len(g_hov['mouse_hovered'])} 次)")
+    # ROI：椭圆图元由 MedicalViewer 依 annotation_added(type='roi') 创建，
+    # 独立 view 中没有那个处理器，故此处断言信号载荷而非场景图元。
+    g_roi = drag(TOOL_ROI, 130, 130, 190, 180)
+    roi = [a[0] for a in g_roi['annotation_added'] if a[0].get('type') == 'roi']
+    check(len(roi) == 1, f"ROI 拖拽发出 type='roi' 的 annotation_added (得 {len(roi)})")
+    # 退化拖拽（起止同点）不得产出标注，也不得崩
+    crashed = False
+    try:
+        g = drag(TOOL_RULER, 150, 150, 150, 150, steps=1)
+    except Exception:
+        crashed = True
+    check(not crashed, "零长度拖拽不崩")
+    view.close()          # 独立实例用完即弃，无需还原状态，也不会污染主窗口
+    app.processEvents()
+
+
 def test_mesh3d_ui(v, app):
     """三维重建接入：按钮随器官有无启停，端到端不崩，网格体积与体素法互相印证。"""
     print("[三维重建接入]")
@@ -1416,7 +1546,7 @@ def main_run():
         for t in (test_ai_engine, test_mixed_shape_dicom, test_recon_finite,
                   test_close_cancels_ai, test_malformed_pixels, test_empty_dicom_tags,
                   test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent,
-                  test_hu_conversion, test_mask_cache_roundtrip):
+                  test_hu_conversion, test_mask_cache_roundtrip, test_mouse_interaction):
             t(app)
         test_quantify()      # 纯函数单测，无需 app / 真实数据
         test_lung_fallback()
@@ -1458,6 +1588,7 @@ def main_run():
         test_mesh3d_ui(v, app)
         test_hu_conversion(app)
         test_mask_cache_roundtrip(app)
+        test_mouse_interaction(app)
         test_quantify()
         test_lung_fallback()
         test_followup()
