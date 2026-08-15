@@ -1124,6 +1124,80 @@ def test_dicom_sort_consistency(app):
             vs.ai_thread.cancel()
 
 
+def test_dialog_i18n_coverage(app):
+    """所有用户可见的 QMessageBox 都必须带语言分支。
+
+    对话框不像常驻控件那样能被 test_i18n_persistent 扫到——它们只在特定操作时弹出，
+    逐个触发既慢又难覆盖全。故改用静态扫描源码：凡 QMessageBox.xxx( 调用，其参数里
+    必须出现语言分支——self.is_english，或项目惯用的局部别名 e（e = self.is_english）。
+    此前实测漏了 8 处：既有英文硬编码（"Project Saved."、"Save Failed" 等，中文界面
+    也弹英文），也有反向的中文硬编码（3D 追踪的「仅支持 Axial」提示，英文用户会看到
+    中文）。双语切换是对外宣传的功能，对话框漏译等于功能没做完。
+    纯静态分析，不依赖真实数据与 Qt 显示。
+    """
+    print("[对话框 i18n 覆盖]")
+    import re
+    src_dir = _ROOT
+    call_re = re.compile(r'QMessageBox\.(information|warning|critical|question)\s*\(')
+    bad = []
+    for fn in ('main.py', 'annotation_lab.py', 'compare_lab.py', 'recon_lab.py',
+               'interaction.py', 'ui_builder.py', 'graphics_view.py'):
+        fp = os.path.join(src_dir, fn)
+        if not os.path.exists(fp):
+            continue
+        text = open(fp, encoding='utf-8').read()
+        for mt in call_re.finditer(text):
+            # 从调用起点向后取到括号配平处，得到完整实参串
+            i = text.index('(', mt.start()); depth = 0; j = i
+            while j < len(text):
+                if text[j] == '(': depth += 1
+                elif text[j] == ')':
+                    depth -= 1
+                    if depth == 0: break
+                j += 1
+            args = text[i:j + 1]
+            # 判据认「语言分支」而非字面量：项目惯例是先取局部别名 e = self.is_english，
+            # 只认 is_english 会把这类写法误报（初版即如此，误报 3 处）。
+            if 'is_english' not in args and not re.search(r'\bif e\b', args):
+                line = text[:mt.start()].count('\n') + 1
+                bad.append(f"{fn}:{line} {mt.group(1)}")
+    check(not bad, f"每个 QMessageBox 都有语言分支（缺失 {len(bad)} 处"
+                   + (f"：{'; '.join(bad[:4])}" if bad else "") + "）")
+
+    # 静态扫描保证「有分支」，再抽一条端到端确认分支方向没写反
+    import re as _re
+
+    from PySide6.QtCore import QRectF
+    from PySide6.QtWidgets import QMessageBox as _QMB
+
+    from constants import CORONAL
+    seen = []
+    saved_info = _QMB.information
+    _QMB.information = staticmethod(lambda p, t, msg='', *a, **k: seen.append((t, msg)))
+    vi = None
+    try:
+        vi = m.MedicalViewer(); app.processEvents()
+        if vi.ai_thread: vi.ai_thread.cancel()
+        vi.volume_hu = np.zeros((4, 32, 32), np.float32)
+        vi.dicom_datasets = [None] * 4
+        vi.views[1]['plane'] = CORONAL          # 触发「3D 追踪仅支持 Axial」提示
+        cjk = _re.compile(r'[一-鿿]')
+        for en in (False, True):
+            vi.is_english = en; seen.clear()
+            vi.handle_3d_track_requested(1, QRectF(1, 1, 5, 5))
+            txt = "".join(str(t) + str(msg) for t, msg in seen)
+            has_cjk = bool(cjk.search(txt))
+            check(bool(seen) and has_cjk != en,
+                  f"{'英文' if en else '中文'}界面下该提示语言正确"
+                  f"（含中文={has_cjk}，文案「{txt[:34]}」）")
+    finally:
+        _QMB.information = saved_info
+        if vi is not None:
+            if vi.ai_thread: vi.ai_thread.cancel()
+            vi.close()
+        app.processEvents()
+
+
 def test_i18n_persistent(app):
     """切换到英文后，所有常驻控件不得残留中文（语言按钮与瞬态视图标题除外）。
     用独立 viewer，避免继承其它用例故意制造的越界状态。"""
@@ -1860,7 +1934,7 @@ def main_run():
         for t in (test_ai_engine, test_mixed_shape_dicom, test_recon_finite,
                   test_close_cancels_ai, test_malformed_pixels, test_empty_dicom_tags,
                   test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent,
-                  test_nonfinite_dicom_tags,
+                  test_nonfinite_dicom_tags, test_dialog_i18n_coverage,
                   test_hu_conversion, test_mask_cache_roundtrip, test_mouse_interaction,
                   test_mesh_view, test_ai_failure_visible):
             t(app)
@@ -1902,6 +1976,7 @@ def main_run():
         test_nonfinite_dicom_tags(app)
         test_export_path_safety(app)
         test_dicom_sort_consistency(app)
+        test_dialog_i18n_coverage(app)
         test_i18n_persistent(app)
         test_projection_ui(v, app)
         test_mesh3d_ui(v, app)

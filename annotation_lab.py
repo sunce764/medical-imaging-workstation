@@ -125,7 +125,9 @@ class AnnotationMixin:
         if self.volume_hu is None or self.recon_mode_active or self.compare_mode_active:
             return
         if self.views[vid]['plane'] != AXIAL:
-            QMessageBox.information(self, "提示", "目前智能追踪仅支持在 Axial 进行。")
+            QMessageBox.information(self, "Info" if self.is_english else "提示",
+                                    "3D tracking is only available on the axial plane."
+                                    if self.is_english else "目前智能追踪仅支持在 Axial 进行。")
             return
         idx = self.current_3d_pos[0]
         x1, y1, x2, y2 = int(rect.left()), int(rect.top()), int(rect.right()), int(rect.bottom())
@@ -234,8 +236,9 @@ class AnnotationMixin:
         rh = hu[bm == 1]
         if len(rh) > 0:
             area = len(rh) * sp[0] * sp[1]
-            if QMessageBox.question(self, "Stats",
-                                    f"Area: {area:.2f} mm2\nMean: {np.mean(rh):.1f} HU\nSave?") == QMessageBox.Yes:
+            _msg = (f"Area: {area:.2f} mm²\nMean: {np.mean(rh):.1f} HU\nSave?" if self.is_english
+                    else f"面积: {area:.2f} mm²\n均值: {np.mean(rh):.1f} HU\n是否保存？")
+            if QMessageBox.question(self, "Stats" if self.is_english else "统计", _msg) == QMessageBox.Yes:
                 # 软组织窗归一化：-1250~250 HU 映射到 0~255（保存为 PNG）
                 img = np.clip(hu, -1250, 250)
                 img = ((img + 1250) / 1500 * 255).astype(np.uint8)
@@ -252,7 +255,9 @@ class AnnotationMixin:
                             writer = csv.writer(f)
                             writer.writerow([os.path.basename(s_p), idx + 1, round(area, 2), round(np.mean(rh), 2)])
                     except OSError as e:
-                        QMessageBox.warning(self, "Export Warning", f"Image saved but log write failed:\n{e}")
+                        QMessageBox.warning(self, "Export Warning" if self.is_english else "导出警告",
+                                            (f"Image saved but log write failed:\n{e}" if self.is_english
+                                             else f"图像已保存，但日志写入失败：\n{e}"))
 
     # =========================================================================
     # 标注 CRUD
@@ -392,9 +397,12 @@ class AnnotationMixin:
                 np.savez_compressed(os.path.join(ed, f"{pid}_mask.npz"),
                                     mask=self.volume_mask,
                                     series_uid=np.array(self._current_series_uid()))
-            QMessageBox.information(self, "Success", "Project Saved.")
+            QMessageBox.information(self, "Success" if self.is_english else "成功",
+                                    "Project saved." if self.is_english else "标注工程已保存。")
         except Exception as e:
-            QMessageBox.warning(self, "Save Failed", f"Failed to save project:\n{e}")
+            QMessageBox.warning(self, "Save Failed" if self.is_english else "保存失败",
+                                (f"Failed to save project:\n{e}" if self.is_english
+                                 else f"标注工程保存失败：\n{e}"))
 
     # =========================================================================
     # 器官定量 / 图例
@@ -550,7 +558,9 @@ class AnnotationMixin:
         try:
             with open(fp, 'wb') as f:
                 f.write(mesh3d.to_stl_bytes(verts, faces, self._safe_name(nm)))
-            QMessageBox.information(self, "Success", f"Saved: {os.path.basename(fp)}")
+            QMessageBox.information(self, "Success" if self.is_english else "成功",
+                                    (f"Saved: {os.path.basename(fp)}" if self.is_english
+                                     else f"已保存：{os.path.basename(fp)}"))
         except Exception as ex:
             QMessageBox.warning(self, "Export Failed" if e else "导出失败", str(ex))
 
@@ -592,9 +602,11 @@ class AnnotationMixin:
                                 f"{r['volume_ml']:.2f}", f"{r['mean_hu']:.1f}", f"{r['sd_hu']:.1f}",
                                 f"{r['median_hu']:.1f}", f"{r['p5_hu']:.1f}", f"{r['p95_hu']:.1f}",
                                 f"{r['min_hu']:.1f}", f"{r['max_hu']:.1f}"])
-            QMessageBox.information(self, "Success", f"Saved: {os.path.basename(fp)}")
+            QMessageBox.information(self, "Success" if self.is_english else "成功",
+                                    (f"Saved: {os.path.basename(fp)}" if self.is_english
+                                     else f"已保存：{os.path.basename(fp)}"))
         except Exception as ex:
-            QMessageBox.warning(self, "Export Failed", str(ex))
+            QMessageBox.warning(self, "Export Failed" if self.is_english else "导出失败", str(ex))
 
     def _update_legend(self, labels):
         """刷新图例：每个器官为可点击项（色块+名称），点击切换其在蒙版叠加中的显隐。
