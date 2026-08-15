@@ -33,9 +33,20 @@ def can_compare(a: np.ndarray, b: np.ndarray) -> tuple[bool, str]:
     return True, ""
 
 
+def _finite(a: np.ndarray) -> np.ndarray:
+    """中和 NaN / ±Inf，返回有限的 float32 副本。
+
+    畸形 DICOM（异常 RescaleSlope、损坏像素）可能产出非有限 HU；若不中和，
+    差值统计会整片变成 nan/inf 并直接显示到界面上（"Δnan 绝对差 nan"），
+    差值图转 uint8 时更是未定义行为。与 recon._finite_clip 同一防御思路。
+    ±Inf 映射到 HU 的合理极值而非 0：置 0 会把"极端密度"伪装成"无差异"。
+    """
+    return np.nan_to_num(a.astype(np.float32), nan=0.0, posinf=3071.0, neginf=-1024.0)
+
+
 def diff_map(cur: np.ndarray, prev: np.ndarray) -> np.ndarray:
-    """当前切片 − 既往切片的 HU 差值图（float32，正值=密度升高）。"""
-    return cur.astype(np.float32) - prev.astype(np.float32)
+    """当前切片 − 既往切片的 HU 差值图（float32，正值=密度升高）。非有限值先中和。"""
+    return _finite(cur) - _finite(prev)
 
 
 def compare_slices(cur: np.ndarray, prev: np.ndarray, hu_range: float = 2000.0) -> dict:
@@ -55,9 +66,9 @@ def compare_slices(cur: np.ndarray, prev: np.ndarray, hu_range: float = 2000.0) 
     ok, why = can_compare(cur, prev)
     if not ok:
         raise ValueError(why)
-    d = diff_map(cur, prev)
-    flat_c = cur.astype(np.float64).ravel()
-    flat_p = prev.astype(np.float64).ravel()
+    d = diff_map(cur, prev)                       # 内部已中和非有限值
+    flat_c = _finite(cur).astype(np.float64).ravel()
+    flat_p = _finite(prev).astype(np.float64).ravel()
     # 任一方无变化时相关系数无定义（分母为 0），显式返回 nan 而非让 numpy 报警
     if flat_c.std() == 0 or flat_p.std() == 0:
         corr = float('nan')
@@ -82,7 +93,9 @@ def diff_to_rgba(d: np.ndarray, clip_hu: float = 200.0) -> np.ndarray:
     """
     if clip_hu <= 0:
         raise ValueError("clip_hu 必须为正")
-    t = np.clip(d / clip_hu, -1.0, 1.0)
+    # 先中和再 clip：np.clip 对 NaN 无效（NaN 会穿透），而 NaN → uint8 是未定义行为，
+    # 实测会产生任意像素值，即把"无法计算"渲染成看似真实的颜色。
+    t = np.clip(_finite(d) / clip_hu, -1.0, 1.0)
     out = np.zeros(d.shape + (4,), dtype=np.uint8)
     mag = np.abs(t)
     pos, neg = t > 0, t < 0

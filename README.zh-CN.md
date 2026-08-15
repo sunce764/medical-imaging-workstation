@@ -22,7 +22,7 @@
 - **AI 多器官分割** —— 后台滑窗 ONNX 推理（25 类，含 5 个肺叶）。所用模型原本来源未知，其出处经**实测反推确证** —— 即 TotalSegmentator v2 `class_map_part_organs`，在一例带真值的公开 CT 上 21 个在场器官**平均 Dice ≈ 0.92**（*n = 1*）。
 - **重建实验室（教学）** —— 正向 Radon 与解析反投影（BP、含 5 种滤波器的 FBP）基于 scikit-image；**DFR、DMR、ART、SIRT 四种反解算法为本项目从零实现**。
 - **两项量化研究** —— 重建剂量-质量权衡（含一个反直觉的滤波器翻转发现）与 AI 模型出处/Dice 验证，均直调产品代码、完全可复现、不使用患者数据。
-- **面向审阅的工程** —— God-object 拆分为 5 个 UI mixin + 7 个无 Qt 计算模块；**222 项**离屏 Qt 回归测试 + CI（重建算法有数值正确性断言，而非仅验「有限」）；防御式 DICOM 处理。
+- **面向审阅的工程** —— God-object 拆分为 5 个 UI mixin + 7 个无 Qt 计算模块；**226 项**离屏 Qt 回归测试 + CI（重建算法有数值正确性断言，而非仅验「有限」）；防御式 DICOM 处理。
 
 ## 界面
 
@@ -65,13 +65,13 @@ python main.py --data /path/to/dicom_dir # 或启动即加载指定 DICOM 目录
 ## 测试
 
 ```bash
-python tests/test_gui.py                     # 完整回归：222 项（需同目录 RIDER 真实数据）
+python tests/test_gui.py                     # 完整回归：226 项（需同目录 RIDER 真实数据）
 SKIP_REAL_DATA=1 python tests/test_gui.py    # 数据无关子集（CI 使用）
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```
 
-离屏 Qt，退出码 0 = 全部通过。覆盖率 ≈ 70%；七个无 Qt 计算模块（`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d`）均有独立单测。CI 每次 push/PR 只跑数据无关子集 —— 故「CI 全绿」**不等于**全部 222 项都跑过（交互层测试需本地真实数据）。
+离屏 Qt，退出码 0 = 全部通过。覆盖率 ≈ 70%；七个无 Qt 计算模块（`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d`）均有独立单测。CI 每次 push/PR 只跑数据无关子集 —— 故「CI 全绿」**不等于**全部 226 项都跑过（交互层测试需本地真实数据）。
 
 ## 文档
 

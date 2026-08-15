@@ -1152,6 +1152,17 @@ def test_followup():
     check(int(rgba[0, 0, 3]) == 0 and int(rgba[1, 1, 3]) == 0, "零差异处完全透明")
     check(int(rgba[0, 1, 0]) > int(rgba[0, 1, 2]) and int(rgba[1, 0, 2]) > int(rgba[1, 0, 0]),
           "正差值偏暖色、负差值偏冷色（超阈值已 clip）")
+    # 非有限输入防御：畸形 DICOM（异常 RescaleSlope / 损坏像素）可产出 NaN/±Inf HU。
+    # 不中和的话统计量整片变 nan 并直接显示到界面（"Δnan 绝对差 nan"），
+    # 差值图转 uint8 更是未定义行为——会把"无法计算"渲染成看似真实的颜色。
+    for nm, bad in (("NaN", np.nan), ("+Inf", np.inf), ("-Inf", -np.inf)):
+        a = np.zeros((3, 3), np.float32); a[0, 0] = bad
+        st = F.compare_slices(a, np.zeros((3, 3), np.float32))
+        finite = all(np.isfinite(v) for k, v in st.items() if k != 'corr')
+        check(finite, f"切片含 {nm} → 差值统计仍全为有限值 (mean_diff={st['mean_diff']:.1f})")
+    img_bad = F.diff_to_rgba(np.array([[np.nan, np.inf], [-np.inf, 0.0]], np.float32))
+    check(img_bad.dtype == np.uint8 and img_bad.shape == (2, 2, 4),
+          "差值图对 NaN/±Inf 输入仍产出合法 uint8 RGBA")
 
 
 def test_lung_fallback():
