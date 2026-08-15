@@ -225,6 +225,12 @@ class UiBuilderMixin:
         self.btn_export_stats.setEnabled(False)
         self.btn_export_stats.clicked.connect(self.export_organ_stats)
         ai_lay.addWidget(self.btn_export_stats)
+        # 三维表面重建：对选中器官做 marching cubes，多视角预览 + 形状特征 + STL 导出
+        self.btn_mesh3d = QPushButton("三维重建预览")
+        self.btn_mesh3d.setProperty("class", "ActionBtn")
+        self.btn_mesh3d.setEnabled(False)
+        self.btn_mesh3d.clicked.connect(self.show_mesh3d)
+        ai_lay.addWidget(self.btn_mesh3d)
         # 合规免责声明：AI 结果非诊断依据，常驻显示
         self.lbl_disclaimer = QLabel("⚠ AI 结果与器官标签为自动推断，仅供参考，非诊断依据。")
         self.lbl_disclaimer.setWordWrap(True)

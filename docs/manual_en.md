@@ -13,7 +13,7 @@
 **Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
 **Operating environment**: Windows / macOS / Linux desktop systems, Python 3.10; depends on PySide6, pydicom, NumPy, SciPy, scikit-image, ONNX Runtime.
 **Development language**: Python.
-**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 201 automated regression checks.
+**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 219 automated regression checks.
 **Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
 
 ---
@@ -152,7 +152,15 @@ The "Automated AI engine" area lists each detected organ's **volume (mL) and mea
 
 > Why not the mean alone: a mean says nothing about how dispersed the density is inside an organ, and that dispersion is what tells you whether the segmentation has absorbed neighbouring tissue — and is a precondition for any statistical comparison. The 5th/95th percentiles are more robust to single-voxel noise than the extremes.
 
-### 7.5 Segmentation Editing
+### 7.5 3D Surface Reconstruction
+
+Click **"3D Surface Preview"** and the software extracts an isosurface (marching cubes) for **the organ currently selected as the brush target**, opening a dialog with static renders from four azimuths together with **surface area, volume, sphericity and face count**. From there the mesh can be **exported as STL** (ASCII, millimetre units, ready for 3D printing or external software).
+
+Rendering is implemented in pure numpy (orthographic projection + Lambert shading + painter's-algorithm depth sorting), with no dependency on OpenGL or VTK, so no GPU is required. The trade-off is no perspective, no shadows and no interactive rotation — static multi-angle preview only.
+
+> **Accuracy**: validated against an analytic sphere — **mesh volume is within 1% and can be used directly**; **surface area is systematically overestimated by roughly 9%** (the staircase effect of marching cubes on voxelised surfaces), which also depresses sphericity slightly. Surface area and sphericity are therefore best used for **relative comparison under matched conditions** (different organs in the same case, or the same organ across follow-up), not quoted as absolute geometric quantities.
+
+### 7.6 Segmentation Editing
 
 Using the "Segmentation brush / Segmentation eraser" tools, you can manually add to or erase the AI segmentation result; when painting in, a target organ can be specified (its quantification updates accordingly). All edits support `Ctrl+Z` undo.
 

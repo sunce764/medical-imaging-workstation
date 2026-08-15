@@ -21,17 +21,23 @@ from datetime import datetime
 import numpy as np
 import scipy.ndimage as ndimage
 from PySide6.QtCore import QLineF, QPointF, Qt
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QGraphicsLineItem,
     QGraphicsPathItem,
     QGraphicsTextItem,
+    QHBoxLayout,
+    QLabel,
     QMessageBox,
     QProgressDialog,
+    QPushButton,
+    QVBoxLayout,
 )
 
+import mesh3d
 import quantify
 from constants import AXIAL, LABEL_LUT, MANUAL_TRACK_LABEL
 from graphics_view import ROIGraphicsItem
@@ -370,6 +376,7 @@ class AnnotationMixin:
         if not self._organ_stats:
             self.lbl_ai_stats.setText("")
             self.btn_export_stats.setEnabled(False)
+            self.btn_mesh3d.setEnabled(False)
             return
         e = self.is_english
         lines = []
@@ -381,6 +388,92 @@ class AnnotationMixin:
                          f"{nm}: {r['volume_ml']:.1f} mL / {r['mean_hu']:.0f}±{r['sd_hu']:.0f} HU")
         self.lbl_ai_stats.setText("<br>".join(lines))
         self.btn_export_stats.setEnabled(True)
+        self.btn_mesh3d.setEnabled(True)
+
+    def show_mesh3d(self):
+        """对当前画笔目标所指器官做三维表面重建，弹窗展示四视角预览 + 形状特征 + STL 导出。
+
+        取 cb_paint_target 的选中项作为对象，与画笔编辑保持同一"当前器官"语义，
+        不再单设一个下拉——多一个状态就多一处可能不同步。
+        """
+        if self.volume_mask is None or not self._organ_stats:
+            return
+        lid = self.cb_paint_target.currentData()
+        e = self.is_english
+        if lid is None or not (self.volume_mask == lid).any():
+            QMessageBox.information(self, "3D", "Selected target has no voxels." if e
+                                    else "所选目标在当前蒙版中没有体素。")
+            return
+        ds = self.dicom_datasets[0] if self.dicom_datasets else None
+        ps = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0) if ds is not None else 1.0
+        st = self._dcm_float(ds, 'SliceThickness', ps * 3) if ds is not None else 1.0
+        # marching cubes 在 512² 体积上 step=1 约 1.4s、step=2 约 0.11s（实测），
+        # 故取 2：这是交互预览，不是几何精算；耗时与精度的取舍在 mesh3d 模块注释里说明。
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            verts, faces = mesh3d.extract_surface(self.volume_mask, lid, (ps, ps, st), step=2)
+            stats = mesh3d.mesh_shape_stats(verts, faces)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if len(faces) == 0:
+            QMessageBox.information(self, "3D", "Too few voxels to build a surface." if e
+                                    else "体素过少，无法构成表面。")
+            return
+        self._show_mesh_dialog(lid, verts, faces, stats)
+
+    def _show_mesh_dialog(self, lid, verts, faces, stats):
+        """三维预览弹窗：四个方位角的静态渲染 + 形状特征 + STL 导出。"""
+        e = self.is_english
+        nm = next((r['name_en'] if e else r['name_zh'] for r in self._organ_stats if r['id'] == lid),
+                  f"label {lid}")
+        rgb = (int(LABEL_LUT[lid][0]), int(LABEL_LUT[lid][1]), int(LABEL_LUT[lid][2]))
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"3D · {nm}")
+        lay = QVBoxLayout(dlg)
+        grid = QHBoxLayout()
+        for az, el in ((30, 20), (120, 20), (210, 20), (300, 20)):
+            arr = np.ascontiguousarray(mesh3d.render_mesh(verts, faces, size=240,
+                                                          azimuth=az, elevation=el, rgb=rgb))
+            h, w = arr.shape[:2]
+            qi = QImage(arr.data, w, h, w * 4, QImage.Format_RGBA8888).copy()
+            lb = QLabel(); lb.setPixmap(QPixmap.fromImage(qi)); grid.addWidget(lb)
+        lay.addLayout(grid)
+        # 形状特征：体积可信；表面积/球形度受 marching cubes 阶梯效应系统性影响，
+        # 故在界面上直接标注"相对比较用"，避免被当作绝对几何量引用。
+        txt = (f"Surface {stats['surface_area_mm2'] / 100:.1f} cm² · "
+               f"Volume {stats['volume_mm3'] / 1000:.1f} mL · "
+               f"Sphericity {stats['sphericity']:.3f} · "
+               f"{stats['n_faces']:,} faces" if e else
+               f"表面积 {stats['surface_area_mm2'] / 100:.1f} cm² · "
+               f"体积 {stats['volume_mm3'] / 1000:.1f} mL · "
+               f"球形度 {stats['sphericity']:.3f} · "
+               f"{stats['n_faces']:,} 面片")
+        lb_s = QLabel(txt); lb_s.setStyleSheet("color:#C9D1D9;"); lay.addWidget(lb_s)
+        note = QLabel("Surface area / sphericity are mesh approximations (marching cubes "
+                      "overestimates area on voxelised surfaces) — use for relative comparison."
+                      if e else
+                      "表面积 / 球形度为网格近似值（marching cubes 对体素化曲面系统性高估面积），"
+                      "宜作相对比较，不宜当作绝对几何量。")
+        note.setWordWrap(True); note.setStyleSheet("color:#8B949E; font-size:10px;")
+        lay.addWidget(note)
+        btn = QPushButton("Export STL" if e else "导出 STL")
+        btn.clicked.connect(lambda: self._export_stl(nm, verts, faces))
+        lay.addWidget(btn)
+        dlg.exec()
+
+    def _export_stl(self, nm, verts, faces):
+        """把网格写为 ASCII STL 到 Exported_Lesions/（文件名经 _safe_name 净化）。"""
+        e = self.is_english
+        ed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Exported_Lesions")
+        os.makedirs(ed, exist_ok=True)
+        pid = "ANON" if self.anonymize else str(getattr(self.dicom_datasets[0], 'PatientID', 'Unknown'))
+        fp = os.path.join(ed, f"{self._safe_name(pid)}_{self._safe_name(nm)}.stl")
+        try:
+            with open(fp, 'wb') as f:
+                f.write(mesh3d.to_stl_bytes(verts, faces, self._safe_name(nm)))
+            QMessageBox.information(self, "Success", f"Saved: {os.path.basename(fp)}")
+        except Exception as ex:
+            QMessageBox.warning(self, "Export Failed" if e else "导出失败", str(ex))
 
     def _refresh_paint_target(self):
         """刷新画笔目标下拉：手动标注 + 当前蒙版中检出的各器官。

@@ -1026,6 +1026,51 @@ def test_quantify():
           "空蒙版返回空列表")
 
 
+def test_mesh3d():
+    """器官三维表面重建纯函数直接单测——用解析球体验算，不构造 MedicalViewer。"""
+    print("[三维表面重建纯函数 mesh3d]")
+    import mesh3d as M
+    N, R = 48, 15.0
+    zz, yy, xx = np.ogrid[:N, :N, :N]
+    c = (N - 1) / 2
+    mask = (((zz - c) ** 2 + (yy - c) ** 2 + (xx - c) ** 2) <= R * R).astype(np.uint8) * 7
+    verts, faces = M.extract_surface(mask, 7, (1.0, 1.0, 1.0), step=1)
+    check(len(verts) > 0 and faces.shape[1] == 3, f"提取出三角网格 (顶点 {len(verts)}, 面 {len(faces)})")
+    s = M.mesh_shape_stats(verts, faces)
+    # 体积对解析解 4/3πR³ 必须很准——这是网格几何正确性的硬指标
+    v_exact = 4 / 3 * np.pi * R ** 3
+    err_v = abs(s['volume_mm3'] - v_exact) / v_exact
+    check(err_v < 0.02, f"网格体积对解析球体误差 <2% (得 {err_v * 100:.2f}%, {s['volume_mm3']:.0f} vs {v_exact:.0f})")
+    # 表面积对解析解 4πR² 系统性高估约 9%（marching cubes 阶梯效应，非缺陷）：
+    # 断言它落在合理带内，既确认量级正确、又如实承认这个偏差不会消失
+    a_exact = 4 * np.pi * R ** 2
+    ratio = s['surface_area_mm2'] / a_exact
+    check(1.0 < ratio < 1.20, f"网格表面积/解析值 ∈ (1.0,1.20]，反映 MC 的系统性高估 (得 {ratio:.3f})")
+    check(0.85 < s['sphericity'] < 1.0, f"球体的球形度接近 1（受表面积高估影响略低）(得 {s['sphericity']:.4f})")
+    # 各向异性 spacing：层厚翻倍则体积翻倍——验证 spacing 确实按 (z,y,x) 传对了
+    s2 = M.mesh_shape_stats(*M.extract_surface(mask, 7, (1.0, 1.0, 2.0), step=1))
+    check(abs(s2['volume_mm3'] / s['volume_mm3'] - 2.0) < 0.05,
+          f"层厚×2 → 体积×2（spacing 轴序正确）(得 {s2['volume_mm3'] / s['volume_mm3']:.3f})")
+    # 空网格边界：不存在的标签不得抛异常
+    ev, ef = M.extract_surface(mask, 99, (1.0, 1.0, 1.0))
+    check(len(ev) == 0 and len(ef) == 0, "不存在的标签 → 返回空网格")
+    es = M.mesh_shape_stats(ev, ef)
+    check(es['volume_mm3'] == 0.0 and es['sphericity'] == 0.0, "空网格统计量全 0（不返回 nan）")
+    check(int(M.render_mesh(ev, ef, size=32)[..., 3].sum()) == 0, "空网格渲染为全透明")
+    # 渲染：形状/类型正确，且画出了东西
+    img = M.render_mesh(verts, faces, size=120)
+    check(img.shape == (120, 120, 4) and img.dtype == np.uint8, f"渲染输出 RGBA {img.shape}")
+    check(int((img[..., 3] > 0).sum()) > 120 * 120 * 0.1, "渲染覆盖足够像素（球体应占可观面积）")
+    # 不同视角应给出不同图像——否则说明旋转没生效
+    img2 = M.render_mesh(verts, faces, size=120, azimuth=90.0, elevation=60.0)
+    check(not np.array_equal(img, img2), "不同 azimuth/elevation 渲染结果不同（旋转生效）")
+    # STL：facet 数必须等于面数，且首尾为 solid/endsolid
+    stl = M.to_stl_bytes(verts, faces, "sphere")
+    check(stl.count(b'facet normal') == len(faces), f"STL facet 数 = 面数 {len(faces)}")
+    check(stl.startswith(b'solid sphere') and stl.rstrip().endswith(b'endsolid sphere'), "STL 首尾标记正确")
+    check(M.to_stl_bytes(ev, ef, "empty").count(b'facet normal') == 0, "空网格导出合法的空 STL")
+
+
 def test_projection():
     """厚层投影纯函数直接单测——合成体积，断言值均可手算。"""
     print("[厚层投影纯函数 projection]")
@@ -1135,6 +1180,47 @@ def test_mpr_geometry():
     check(g.voxel_to_crosshair(SAGITTAL, 10, 20, 30) == (20, 10), "Sagittal 十字线 (y,z)")
     check(g.nearest_slice([0, 5, 10, 15, 20], 12) == 2, "最近解剖切片 = 索引2 (z=10)")
     check(g.nearest_slice([0, 5, 10, 15, 20], 100) == 4, "超出范围取最末切片")
+
+
+def test_mesh3d_ui(v, app):
+    """三维重建接入：按钮随器官有无启停，端到端不崩，网格体积与体素法互相印证。"""
+    print("[三维重建接入]")
+    from PySide6.QtWidgets import QDialog
+
+    import mesh3d as M
+    saved_mask = v.volume_mask
+    saved_exec = QDialog.exec
+    QDialog.exec = lambda self: None            # 不阻塞在模态窗
+    try:
+        v.volume_mask = np.zeros(v.volume_hu.shape, np.uint8)
+        v._update_organ_stats(); app.processEvents()
+        check(not v.btn_mesh3d.isEnabled(), "无器官时三维重建按钮禁用")
+        Z, H, W = v.volume_hu.shape
+        zz, yy, xx = np.ogrid[:Z, :H, :W]
+        v.volume_mask[((zz - Z // 2) ** 2 / 20 ** 2 + (yy - H // 2) ** 2 / 50 ** 2
+                       + (xx - W // 2) ** 2 / 40 ** 2) <= 1] = 5
+        v._update_organ_stats(); app.processEvents()
+        check(v.btn_mesh3d.isEnabled(), "检出器官后三维重建按钮启用")
+        v.cb_paint_target.setCurrentIndex(v.cb_paint_target.findData(5))
+        crashed = False
+        try:
+            v.show_mesh3d(); app.processEvents()
+        except Exception as ex:
+            crashed = True; print("   ", type(ex).__name__, ex)
+        check(not crashed, "show_mesh3d 端到端不崩（提取+渲染+弹窗）")
+        # 网格体积须与体素计数法互相印证——两种独立算法，差异应在 2% 内
+        ds = v.dicom_datasets[0]
+        ps = v._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
+        st = v._dcm_float(ds, 'SliceThickness', ps * 3)
+        verts, faces = M.extract_surface(v.volume_mask, 5, (ps, ps, st), step=2)
+        mesh_ml = M.mesh_shape_stats(verts, faces)['volume_mm3'] / 1000.0
+        vox_ml = int((v.volume_mask == 5).sum()) * ps * ps * st / 1000.0
+        rel = abs(mesh_ml - vox_ml) / vox_ml
+        check(rel < 0.02, f"网格体积与体素法互印证，相对差 <2% (得 {rel * 100:.2f}%: {mesh_ml:.1f} vs {vox_ml:.1f} mL)")
+    finally:
+        QDialog.exec = saved_exec
+        v.volume_mask = saved_mask
+        v._update_organ_stats(); app.processEvents()
 
 
 def test_projection_ui(v, app):
@@ -1295,6 +1381,7 @@ def main_run():
         test_lung_fallback()
         test_followup()
         test_projection()
+        test_mesh3d()
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
@@ -1327,12 +1414,14 @@ def main_run():
         test_dicom_sort_consistency(app)
         test_i18n_persistent(app)
         test_projection_ui(v, app)
+        test_mesh3d_ui(v, app)
         test_hu_conversion(app)
         test_mask_cache_roundtrip(app)
         test_quantify()
         test_lung_fallback()
         test_followup()
         test_projection()
+        test_mesh3d()
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
