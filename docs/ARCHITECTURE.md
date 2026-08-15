@@ -4,7 +4,7 @@ Technical reference for the module layout, the segmentation-model reverse-engine
 
 ## Module layout
 
-The main window is a `MedicalViewer` **God object** decomposed into five UI mixins plus seven Qt-free compute modules that are unit-tested in isolation.
+The main window is a `MedicalViewer` **God object** decomposed into five UI mixins plus eight Qt-free compute modules that are unit-tested in isolation.
 
 ```
 main.py            MedicalViewer + entry point (--data load, clinical render, W/L, tools, layout, AI scheduling, i18n, keyboard nav)
@@ -23,7 +23,7 @@ segmentation.py    classical fallback segmentation (lung connected-components)
 mpr_geometry.py    MPR coordinate mapping + dual-series z-registration
 followup.py        follow-up comparison metrics (HU difference map + per-slice statistics)
 projection.py      slab projection (MIP / MinIP / AIP) across the three planes
-mesh3d.py          organ surface reconstruction (marching cubes), shape features, numpy renderer, STL export
+mesh3d.py          organ surface reconstruction (marching cubes), shape features, numpy renderer (drives the drag-to-rotate preview), STL export
 registration.py    2-D rigid registration (phase correlation + rotation search) with an NCC safety valve
 constants.py       tool / plane constants + multi-organ palette
 —— resources ——

@@ -20,7 +20,7 @@ from datetime import datetime
 
 import numpy as np
 import scipy.ndimage as ndimage
-from PySide6.QtCore import QLineF, QPointF, Qt
+from PySide6.QtCore import QLineF, QPointF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QApplication,
@@ -41,6 +41,47 @@ import mesh3d
 import quantify
 from constants import AXIAL, LABEL_LUT, MANUAL_TRACK_LABEL
 from graphics_view import ROIGraphicsItem
+
+
+class MeshView(QLabel):
+    """可用鼠标拖动旋转的三维预览控件。
+
+    横向拖动改方位角、纵向拖动改俯仰角，灵敏度 0.5°/px（实测这个值在 360px 视图上
+    拖过半屏正好转半圈，手感接近常见的三维查看器）。俯仰角夹在 ±89°：到 ±90° 时
+    视线与旋转轴共线，方位角失去意义（万向节锁），画面会在拖动中突然翻转。
+
+    自身只负责「把像素位移换算成角度并发信号」，不碰网格与渲染——渲染策略
+    （拖动降质、松手提质）由弹窗持有，因为只有它知道两套网格。
+    """
+    rotated = Signal(float, float)   # (azimuth, elevation)，已累积的绝对角度
+    settled = Signal()               # 松开鼠标：可以做高质量重渲染了
+
+    def __init__(self, azimuth=30.0, elevation=20.0, parent=None):
+        super().__init__(parent)
+        self.azimuth, self.elevation = float(azimuth), float(elevation)
+        self._last = None
+        self.setCursor(Qt.OpenHandCursor)
+
+    def mousePressEvent(self, ev):
+        self._last = ev.position(); self.setCursor(Qt.ClosedHandCursor)
+
+    def mouseMoveEvent(self, ev):
+        if self._last is None: return
+        p = ev.position(); dx = p.x() - self._last.x(); dy = p.y() - self._last.y()
+        self._last = p
+        self.azimuth = (self.azimuth + dx * 0.5) % 360.0
+        self.elevation = max(-89.0, min(89.0, self.elevation - dy * 0.5))
+        self.rotated.emit(self.azimuth, self.elevation)
+
+    def mouseReleaseEvent(self, ev):
+        if self._last is None: return
+        self._last = None; self.setCursor(Qt.OpenHandCursor); self.settled.emit()
+
+    def set_angles(self, azimuth, elevation):
+        """由预设视角按钮调用：直接跳到指定角度（同样走 rotated → settled 两步）。"""
+        self.azimuth = float(azimuth) % 360.0
+        self.elevation = max(-89.0, min(89.0, float(elevation)))
+        self.rotated.emit(self.azimuth, self.elevation); self.settled.emit()
 
 
 def mask_cache_matches(saved_uid, saved_shape, cur_uid, cur_shape):
@@ -422,7 +463,7 @@ class AnnotationMixin:
         self._show_mesh_dialog(lid, verts, faces, stats)
 
     def _show_mesh_dialog(self, lid, verts, faces, stats):
-        """三维预览弹窗：四个方位角的静态渲染 + 形状特征 + STL 导出。"""
+        """三维预览弹窗：可鼠标拖动旋转的渲染视图 + 预设视角 + 形状特征 + STL 导出。"""
         e = self.is_english
         nm = next((r['name_en'] if e else r['name_zh'] for r in self._organ_stats if r['id'] == lid),
                   f"label {lid}")
@@ -430,14 +471,52 @@ class AnnotationMixin:
         dlg = QDialog(self)
         dlg.setWindowTitle(f"3D · {nm}")
         lay = QVBoxLayout(dlg)
-        grid = QHBoxLayout()
-        for az, el in ((30, 20), (120, 20), (210, 20), (300, 20)):
-            arr = np.ascontiguousarray(mesh3d.render_mesh(verts, faces, size=240,
-                                                          azimuth=az, elevation=el, rgb=rgb))
+
+        # 拖动降质、松手提质：实测完整网格渲染约 100–140ms/帧，拖动时会明显顿挫；
+        # 再减一档面到 grid=16（约 2000 面、~55ms）拖起来才跟手。松开鼠标后立刻用
+        # 完整网格重渲染一帧，所以静止时看到的始终是全精度画面。
+        # 这只影响预览显示——形状特征与 STL 导出一律用完整网格 verts/faces。
+        dv, df = mesh3d.decimate_vertex_clustering(verts, faces, grid=16)
+        SZ = 360
+        view = MeshView(azimuth=30.0, elevation=20.0)
+        view.setFixedSize(SZ, SZ)
+        view.setStyleSheet("background:#0D1117; border:1px solid #30363D;")
+        lb_ang = QLabel(); lb_ang.setStyleSheet("color:#8B949E; font-size:10px;")
+
+        def paint(v, f):
+            arr = np.ascontiguousarray(mesh3d.render_mesh(v, f, size=SZ, azimuth=view.azimuth,
+                                                          elevation=view.elevation, rgb=rgb))
             h, w = arr.shape[:2]
-            qi = QImage(arr.data, w, h, w * 4, QImage.Format_RGBA8888).copy()
-            lb = QLabel(); lb.setPixmap(QPixmap.fromImage(qi)); grid.addWidget(lb)
-        lay.addLayout(grid)
+            view.setPixmap(QPixmap.fromImage(
+                QImage(arr.data, w, h, w * 4, QImage.Format_RGBA8888).copy()))
+            lb_ang.setText(("Azimuth %.0f° · Elevation %.0f° — drag to rotate" if e else
+                            "方位角 %.0f° · 俯仰角 %.0f° —— 按住拖动可旋转")
+                           % (view.azimuth, view.elevation))
+
+        # 防重入：鼠标移动事件比一帧渲染密得多，不设闸门会积压成越拖越卡的事件队列。
+        # 丢弃渲染中到达的中间帧不影响正确性——下一帧用的是控件里最新的绝对角度。
+        busy = {'v': False}
+        def on_rotate(_az, _el):
+            if busy['v']: return
+            busy['v'] = True
+            try: paint(dv, df)
+            finally: busy['v'] = False
+        view.rotated.connect(on_rotate)
+        view.settled.connect(lambda: paint(verts, faces))
+
+        row = QHBoxLayout(); row.addWidget(view); row.addStretch()
+        col = QVBoxLayout()
+        col.addWidget(QLabel("View" if e else "视角"))
+        for label_zh, label_en, az, el in (("前", "Ant", 90, 0), ("后", "Post", 270, 0),
+                                           ("左", "Left", 180, 0), ("右", "Right", 0, 0),
+                                           ("上", "Sup", 90, 89), ("斜", "Oblique", 30, 20)):
+            b = QPushButton(label_en if e else label_zh); b.setFixedWidth(74)
+            b.clicked.connect(lambda _=False, a=az, elv=el: view.set_angles(a, elv))
+            col.addWidget(b)
+        col.addStretch(); row.addLayout(col)
+        lay.addLayout(row)
+        lay.addWidget(lb_ang)
+        paint(verts, faces)
         # 形状特征：体积可信；表面积/球形度受 marching cubes 阶梯效应系统性影响，
         # 故在界面上直接标注"相对比较用"，避免被当作绝对几何量引用。
         txt = (f"Surface {stats['surface_area_mm2'] / 100:.1f} cm² · "

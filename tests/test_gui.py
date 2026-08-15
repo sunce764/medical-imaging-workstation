@@ -1446,7 +1446,8 @@ def test_mesh3d_ui(v, app):
     import mesh3d as M
     saved_mask = v.volume_mask
     saved_exec = QDialog.exec
-    QDialog.exec = lambda self: None            # 不阻塞在模态窗
+    dlgs = []
+    QDialog.exec = lambda self: dlgs.append(self)   # 不阻塞在模态窗，同时留下弹窗以便检查
     try:
         v.volume_mask = np.zeros(v.volume_hu.shape, np.uint8)
         v._update_organ_stats(); app.processEvents()
@@ -1473,10 +1474,100 @@ def test_mesh3d_ui(v, app):
         vox_ml = int((v.volume_mask == 5).sum()) * ps * ps * st / 1000.0
         rel = abs(mesh_ml - vox_ml) / vox_ml
         check(rel < 0.02, f"网格体积与体素法互印证，相对差 <2% (得 {rel * 100:.2f}%: {mesh_ml:.1f} vs {vox_ml:.1f} mL)")
+        # 弹窗里必须真的装着可拖动的视图，并且拖动后画面确实换了一帧——
+        # 只测 MeshView 单体不够，接线断了（信号没连、paint 没绑）单体测试照样全绿
+        # 真实器官规模下的降质比例——拖动跟不跟手全看这一条（合成小体积测不出来）
+        dv, df = M.decimate_vertex_clustering(verts, faces, grid=16)
+        check(0 < len(df) < len(faces) * 0.5,
+              f"真实器官规模下粗网格减面过半（{len(faces):,} → {len(df):,} 面）")
+        from annotation_lab import MeshView
+        mvs = dlgs[-1].findChildren(MeshView) if dlgs else []
+        check(len(mvs) == 1, f"三维弹窗内含 1 个可拖动视图（得 {len(mvs)}）")
+        if mvs:
+            mv = mvs[0]
+            before = mv.pixmap().toImage()
+            check(not before.isNull(), "弹窗打开即已渲染出画面（不是空白等交互）")
+            mv.set_angles(mv.azimuth + 90.0, mv.elevation)
+            app.processEvents()
+            check(mv.pixmap().toImage() != before, "转 90° 后视图画面确实刷新（信号已接通）")
     finally:
         QDialog.exec = saved_exec
         v.volume_mask = saved_mask
         v._update_organ_stats(); app.processEvents()
+
+
+def test_mesh_view(app):
+    """三维预览的鼠标拖动旋转：角度换算、夹紧、回绕、信号，以及画面确实随角度变。
+
+    用独立的 MeshView 实例（同 test_mouse_interaction 的理由）：被测的是控件自身的
+    交互换算，不依赖真实数据也不需要弹窗，故可进 SKIP_REAL_DATA 子集。
+    """
+    print("[三维交互旋转]")
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    import mesh3d as M
+    from annotation_lab import MeshView
+
+    def drag(view, dx, dy):
+        """合成 press → move → release，驱动真实的事件处理器而非直接改属性。"""
+        def mk(kind, x, y, btn):
+            return QMouseEvent(kind, QPointF(x, y), Qt.LeftButton, btn, Qt.NoModifier)
+        view.mousePressEvent(mk(QMouseEvent.Type.MouseButtonPress, 100.0, 100.0, Qt.LeftButton))
+        view.mouseMoveEvent(mk(QMouseEvent.Type.MouseMove, 100.0 + dx, 100.0 + dy, Qt.LeftButton))
+        view.mouseReleaseEvent(mk(QMouseEvent.Type.MouseButtonRelease,
+                                  100.0 + dx, 100.0 + dy, Qt.NoButton))
+
+    vw = MeshView(azimuth=30.0, elevation=20.0)
+    rot, stl = [], []
+    vw.rotated.connect(lambda a, e: rot.append((a, e)))
+    vw.settled.connect(lambda: stl.append(1))
+    drag(vw, 60.0, -40.0)
+    # 灵敏度 0.5°/px；纵向取负（鼠标下拉 = 视角下移 = elevation 减小，符合直觉）
+    check(abs(vw.azimuth - 60.0) < 1e-6 and abs(vw.elevation - 40.0) < 1e-6,
+          f"拖 (+60,-40)px 后角度 = (60, 40)（得 {vw.azimuth:.1f}, {vw.elevation:.1f}）")
+    check(len(rot) == 1 and len(stl) == 1, "拖动发 rotated、松手发 settled 各一次")
+
+    vw2 = MeshView(azimuth=30.0, elevation=20.0)
+    vw2.mouseMoveEvent(QMouseEvent(QMouseEvent.Type.MouseMove, QPointF(200.0, 200.0),
+                                   Qt.NoButton, Qt.NoButton, Qt.NoModifier))
+    check((vw2.azimuth, vw2.elevation) == (30.0, 20.0), "未按下时移动鼠标不旋转")
+
+    vw3 = MeshView(azimuth=0.0, elevation=0.0)
+    drag(vw3, 0.0, -1000.0)                     # 猛推：不夹紧就会越过 90° 万向节锁翻面
+    check(vw3.elevation == 89.0, f"俯仰角上夹到 +89（得 {vw3.elevation:.1f}）")
+    drag(vw3, 0.0, 2000.0)
+    check(vw3.elevation == -89.0, f"俯仰角下夹到 -89（得 {vw3.elevation:.1f}）")
+    vw4 = MeshView(azimuth=350.0, elevation=0.0)
+    drag(vw4, 100.0, 0.0)
+    check(abs(vw4.azimuth - 40.0) < 1e-6, f"方位角越过 360 回绕到 40（得 {vw4.azimuth:.1f}）")
+
+    vw5 = MeshView()
+    vw5.set_angles(400.0, 200.0)                # 预设视角按钮走的这条路，同样须夹紧/回绕
+    check(vw5.azimuth == 40.0 and vw5.elevation == 89.0, "set_angles 同样回绕并夹紧")
+
+    # 旋转不能是摆设：画面必须真的不同，且同角度须逐像素可复现
+    N = 48; c = (N - 1) / 2
+    zz, yy, xx = np.ogrid[:N, :N, :N]
+    # 椭球而非球——球从任何角度看都一样，根本测不出旋转是否生效
+    ell = ((((zz - c) / 1.8) ** 2 + ((yy - c) / 1.0) ** 2 + ((xx - c) / 0.7) ** 2) <= 14.0 ** 2)
+    vt, fc = M.extract_surface(ell.astype(np.uint8) * 3, 3, (1.0, 1.0, 1.0), step=2)
+    a0 = M.render_mesh(vt, fc, size=160, azimuth=30, elevation=20)
+    a1 = M.render_mesh(vt, fc, size=160, azimuth=120, elevation=20)
+    a2 = M.render_mesh(vt, fc, size=160, azimuth=30, elevation=20)
+    d01 = float(np.abs(a0.astype(int) - a1.astype(int)).mean())
+    check(d01 > 1.0, f"换方位角后画面确实改变（平均像素差 {d01:.1f}）")
+    check(bool(np.array_equal(a0, a2)), "同角度渲染逐像素一致（渲染确定性）")
+
+    # 拖动降质的前提：粗网格必须真的少很多面，且形状不能跑偏
+    # 只断言方向（更少且非空）：减面比例随网格规模变化，这个 48³ 合成体本就面数不多
+    # （实测减 31%），而真实器官规模减得多得多——比例断言放在有真实数据的 test_mesh3d_ui。
+    dv, df = M.decimate_vertex_clustering(vt, fc, grid=16)
+    check(0 < len(df) < len(fc), f"拖动用粗网格面数更少且非空（{len(fc):,} → {len(df):,}）")
+    v_full = M.mesh_shape_stats(vt, fc)['volume_mm3']
+    v_low = M.mesh_shape_stats(dv, df)['volume_mm3']
+    rel = abs(v_low - v_full) / v_full
+    check(rel < 0.05, f"粗网格体积偏差 <5%，拖动中看到的仍是同一形状（得 {rel * 100:.1f}%）")
 
 
 def test_projection_ui(v, app):
@@ -1631,7 +1722,8 @@ def main_run():
         for t in (test_ai_engine, test_mixed_shape_dicom, test_recon_finite,
                   test_close_cancels_ai, test_malformed_pixels, test_empty_dicom_tags,
                   test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent,
-                  test_hu_conversion, test_mask_cache_roundtrip, test_mouse_interaction):
+                  test_hu_conversion, test_mask_cache_roundtrip, test_mouse_interaction,
+                  test_mesh_view):
             t(app)
         test_quantify()      # 纯函数单测，无需 app / 真实数据
         test_lung_fallback()
@@ -1672,6 +1764,7 @@ def main_run():
         test_i18n_persistent(app)
         test_projection_ui(v, app)
         test_mesh3d_ui(v, app)
+        test_mesh_view(app)
         test_hu_conversion(app)
         test_mask_cache_roundtrip(app)
         test_mouse_interaction(app)
