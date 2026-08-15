@@ -26,6 +26,7 @@ class _AISignals(QObject):
     （不能用 QTimer.singleShot：它依附调用它的子线程，而子线程无 Qt 事件循环，回调不 fire。）"""
     finished = Signal(object, float)   # (label_map, elapsed_ms)
     progress = Signal(int, int)        # (done_slices, total_slices)
+    failed = Signal(str)               # 推理彻底失败（含兜底路径），载荷为原因摘要
 
 try:
     import onnxruntime as ort
@@ -57,7 +58,8 @@ class AutoAIEngineThread:
     def __init__(self, volume_hu: np.ndarray,
                  callback: Callable[[np.ndarray, float], None],
                  model_path: str = MODEL_PATH,
-                 progress_callback: Callable[[int, int], None] | None = None) -> None:
+                 progress_callback: Callable[[int, int], None] | None = None,
+                 failed_callback: Callable[[str], None] | None = None) -> None:
         # volume_hu: 完整的 3D HU 值体素数组，shape=(Z, H, W)，float32
         # callback: 推理完成后调用，签名为 callback(label_map, elapsed_ms)
         #           label_map 为 uint8 多类标签图（0=背景，1-24=器官类别）
@@ -69,6 +71,7 @@ class AutoAIEngineThread:
         self.callback = callback
         self.model_path = model_path
         self.progress_callback = progress_callback
+        self.failed_callback = failed_callback
         self._thread = None
         # 信号对象在此（主线程）创建，其槽即在主线程执行；子线程 emit 自动排队投递。
         # 【刻意不设 parent，勿"优化"】实测（PySide6 6.11.0，15×15 对照）：不设 parent 时
@@ -80,6 +83,8 @@ class AutoAIEngineThread:
         self._signals.finished.connect(lambda m, t: self.callback(m, t))
         if progress_callback is not None:
             self._signals.progress.connect(lambda d, t: self.progress_callback(d, t))
+        if failed_callback is not None:
+            self._signals.failed.connect(lambda why: self.failed_callback(why))
         # 单次推理约 8.8GB 内存、~100s 且不可中途中断 onnxruntime.run。快速切换数据时
         # 若不作废旧线程，多个推理会并发叠加导致内存翻倍甚至 OOM。cancel() 置位后，
         # 滑窗循环在下一个 z 块边界提前退出并放弃回调，及时释放内存。
@@ -115,6 +120,25 @@ class AutoAIEngineThread:
             return False   # isValid 与 emit 之间宿主被拆卸的 TOCTOU 窗口，同样按拆卸处理
 
     def _run(self) -> None:
+        """推理主体的顶层守卫。真正的工作在 _run_body。
+
+        为何需要这一层：ONNX 分支自带 try，但**兜底的数学降级路径没有**——兜底本身没有
+        兜底。实测（构造 segment_lungs_fallback 抛异常）：异常直接冲出 _run，线程死掉，
+        Python 只在终端打印「Exception in thread」，而界面上 _ai_state 永远停在 'running'、
+        状态栏永远显示「AI 引擎自动运算中…」——用户在等一个永远不会来的结果，且毫无提示。
+
+        失败时刻意**不** emit finished(空 mask)：那会让界面显示「检出 0 个器官」，把
+        「失败了」谎报成「成功了但没找到东西」。日志与界面都必须说实话。
+        """
+        try:
+            self._run_body()
+        except Exception as e:                      # noqa: BLE001 — 顶层守卫，必须兜住一切
+            if self._cancelled:
+                return    # 拆卸/切数据期间的连带异常，不是真失败，静默退出
+            print(f"AI 分割彻底失败（含兜底路径）: {type(e).__name__}: {e}")
+            self._emit_safe(self._signals.failed, f"{type(e).__name__}: {e}")
+
+    def _run_body(self) -> None:
         """推理主体，运行在后台线程，严禁在此处操作任何 Qt 对象（非线程安全）。"""
         start_t = time.perf_counter()
 

@@ -13,7 +13,7 @@
 **Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
 **Operating environment**: Windows / macOS / Linux desktop systems, Python 3.10; depends on PySide6, pydicom, NumPy, SciPy, scikit-image, ONNX Runtime.
 **Development language**: Python.
-**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 222 automated regression checks.
+**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 284 automated regression checks.
 **Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
 
 ---
@@ -182,7 +182,7 @@ When the two series have different matrix sizes, the software **states plainly t
 
 ### 8.2 In-plane rigid registration
 
-The **"Register"** checkbox in the top toolbar (active in comparison mode) rigidly aligns the prior slice to the current one before comparing: translation is estimated by **phase correlation**, then rotation is searched within ±6° in 0.5° steps, keeping whichever maximises normalised cross-correlation (NCC). The title bar reports the estimated angle, translation and the NCC before/after.
+The **"Register"** checkbox in the top toolbar (**enabled only in comparison mode**; disabled until a prior series is loaded) rigidly aligns the prior slice to the current one before comparing: translation is estimated by **phase correlation**, then rotation is searched within ±6° in 0.5° steps, keeping whichever maximises normalised cross-correlation (NCC). The title bar reports the estimated angle, translation and the NCC before/after.
 
 - **Safety valve**: if NCC does not improve (mismatched levels, anatomy changed too much), the transform is **rejected** and the title says so — better no registration than an alignment that makes things worse.
 - **Measured effect**: for a prior series shifted by (12, −9), mean absolute difference drops from **321 HU to 13 HU**, NCC 0.85 → 0.99.

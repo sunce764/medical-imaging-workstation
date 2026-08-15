@@ -112,7 +112,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.ai_thread = None             # AutoAIEngineThread 实例
         # _ai_generation：每次加载新数据自增，回调中比对该值可丢弃旧数据的结果（竞态保护）
         self._ai_generation = 0
-        self._ai_state = 'standby'        # 'standby' | 'running' | 'done'
+        self._ai_state = 'standby'        # 'standby' | 'running' | 'done' | 'failed'
         self._ai_time_ms = 0.0            # 最近一次 AI 推理耗时（毫秒）
 
         # --- 系统矩阵缓存 ---
@@ -225,11 +225,11 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         for g, en, cn in (
             (self.grp_proj, "Projection Generation", "X射线投影生成"),
             (self.grp_algo, "Reconstruction Algorithms", "图像重建算法"),
-            (self.grp_matrix, "Matrix Recon & ART / SIRT", "直接矩阵重建 & ART / SIRT"),
+            (self.grp_matrix, "Matrix Recon && ART / SIRT", "直接矩阵重建 && ART / SIRT"),
             (self.grp_mon, "Performance Monitor", "算法性能监控"),
             (self.grp_patient, "PATIENT INFO", "患者信息"),
             (self.grp_display, "DISPLAY CONTROL", "显示控制"),
-            (self.grp_measure, "MEASURE & CLEAN", "测量与清理"),
+            (self.grp_measure, "MEASURE && CLEAN", "测量与清理"),
             (self.grp_ai, "Automated AI Engine", "自动化 AI 引擎"),
         ):
             g.setTitle(en if e else cn)
@@ -275,6 +275,8 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             self.lbl_ai_status.setText("Processing AI Pipeline..." if e else "状态: AI 引擎自动运算中...")
         elif self._ai_state == 'done':
             self.lbl_ai_status.setText(self._ai_done_text())
+        elif self._ai_state == 'failed':
+            self.lbl_ai_status.setText(self._ai_failed_text())
 
         # 状态相关按钮
         mpr_on = self.btn_mpr.isChecked()
@@ -650,7 +652,8 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.ai_thread = AutoAIEngineThread(
             self.volume_hu,
             callback=lambda mask, t, g=gen: self.on_auto_ai_finished(mask, t, g),
-            progress_callback=lambda d, t, g=gen: self._on_ai_progress(d, t, g)
+            progress_callback=lambda d, t, g=gen: self._on_ai_progress(d, t, g),
+            failed_callback=lambda why, g=gen: self._on_ai_failed(why, g)
         )
         self.ai_thread.start()
 
@@ -670,6 +673,23 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             n = int(((ids != 0) & (ids != MANUAL_TRACK_LABEL)).sum())
         return (f"Ready: {n} organs ({self._ai_time_ms:.0f}ms)" if self.is_english
                 else f"状态: 检出 {n} 个器官 ({self._ai_time_ms:.0f}ms)")
+
+    def _ai_failed_text(self):
+        """AI 失败文案。措辞刻意区别于「检出 0 个器官」——后者意味着跑成功了但没找到，
+        与彻底失败是两回事，混为一谈会误导用户以为这张影像里真的没有器官。"""
+        return ("AI segmentation failed — see console; manual tools still available"
+                if self.is_english else "状态: AI 分割失败 —— 详见控制台；手动工具仍可用")
+
+    def _on_ai_failed(self, why, generation=None):
+        """AI 推理彻底失败（含兜底路径）的回调，经 Qt 信号投递到主线程。
+
+        不弹模态框：分割失败不阻断阅片，测量/标注/重建实验室都还能用，弹窗只会打断。
+        故用醒目的红色状态文字 + 控制台详情。"""
+        if generation is not None and generation != self._ai_generation:
+            return   # 过时的失败回调（用户已切到新数据），静默丢弃
+        self._ai_state = 'failed'
+        self.lbl_ai_status.setStyleSheet("color: #E74C3C; font-weight: bold;")
+        self.lbl_ai_status.setText(self._ai_failed_text())
 
     def on_auto_ai_finished(self, final_mask, time_ms, generation=None):
         """AI 推理完成的回调（由 Qt 信号 QueuedConnection 投递到主线程执行）。

@@ -272,6 +272,8 @@ def test_compare(v, app):
     print("[双序列随访对比]")
     saved_layout = v.combo_layout.currentIndex()   # 本测试会切布局验 V3，退出前必须还原，
     saved_id = id(v.dicom_datasets)                # 否则污染后续测试的可见视图集合
+    # 「配准」只在对比模式下有意义：未加载对比序列时可勾但毫无效果，是误导性控件
+    check(not v.chk_register.isEnabled(), "未进对比模式时「配准」禁用")
     vol, dsets = v._read_compare_dir(os.path.join(_ROOT, "肺癌"))
     check(vol is not None and id(v.dicom_datasets) == saved_id, "读取对比序列不污染主序列")
     v.compare_volume = np.zeros((10, 64, 64), np.float32)
@@ -333,6 +335,12 @@ def test_compare(v, app):
     check('仅z轴对齐' not in t_on and 'z-aligned only' not in t_on,
           "配准生效后标题不再自称「仅 z 轴对齐」（口径随状态变化）")
     v.chk_register.setChecked(False)
+    # 「配准」的启停由进出对比模式驱动（上面的用例直接置 compare_mode_active，绕过了
+    # 这两个方法，故在此单独走一遍真实入口）
+    v._enter_compare_mode(); app.processEvents()
+    check(v.chk_register.isEnabled(), "进入对比模式后「配准」启用")
+    v._exit_compare_mode(); app.processEvents()
+    check(not v.chk_register.isEnabled(), "退出对比模式后「配准」重新禁用")
     v.combo_layout.setCurrentIndex(saved_layout); app.processEvents()   # 还原布局，勿污染后续测试
     v.compare_mode_active = False; v.compare_volume = None
     v.tabs.setCurrentIndex(0); app.processEvents()
@@ -784,6 +792,64 @@ def test_malformed_annotations(v, app):
         if os.path.exists(fp):
             os.remove(fp)
         v.global_annotations = saved
+
+
+def test_ai_failure_visible(app):
+    """AI 彻底失败（含兜底路径）必须如实反映到界面，而不是永远停在「运算中」。
+
+    背景：ONNX 分支自带 try，但兜底的数学降级路径原本没有——异常直接冲出 _run，
+    线程死掉、终端打印 Exception in thread，而界面 _ai_state 永远是 'running'、
+    状态栏永远显示「AI 引擎自动运算中…」，用户在等一个永远不会来的结果。
+    本测试把「失败必须可见」钉死。不依赖真实数据与权重，可进 SKIP_REAL_DATA 子集。
+    """
+    print("[AI 失败可见性]")
+    import time
+
+    import ai_engine
+    import segmentation
+    orig_fb = segmentation.segment_lungs_fallback
+    orig_onnx = ai_engine.AutoAIEngineThread._run_onnx_multiorgan
+
+    def boom(vol):
+        raise ValueError("构造的兜底失败")
+
+    def boom_onnx(self, norm_vol):
+        # 刻意抛非 RuntimeError：RuntimeError 会被 _run_body 当作拆卸期竞态吞掉并置
+        # _cancelled，那是另一条路径。这里要走的是「ONNX 真失败 → 降级 → 降级也失败」。
+        raise ValueError("构造的 ONNX 失败")
+
+    vf = None
+    try:
+        segmentation.segment_lungs_fallback = boom
+        ai_engine.segmentation.segment_lungs_fallback = boom
+        # 不能改 ai_engine.MODEL_PATH 来绕过 ONNX：它是 __init__ 的默认参数值，
+        # 在函数定义时就已绑定，改模块变量对已定义的签名无效（本测试初版即栽在这）。
+        ai_engine.AutoAIEngineThread._run_onnx_multiorgan = boom_onnx
+        vf = m.MedicalViewer(); app.processEvents()
+        if vf.ai_thread: vf.ai_thread.cancel()
+        vf.volume_hu = np.random.RandomState(0).randint(-1000, 400, (6, 48, 48)).astype(np.int16)
+        vf.dicom_datasets = [None] * 6
+        vf._kickoff_ai()                                # 产品路径，不手工构造线程
+        for _ in range(100):
+            app.processEvents()
+            if vf.ai_thread and not vf.ai_thread.isRunning(): break
+            time.sleep(0.03)
+        for _ in range(10):
+            app.processEvents(); time.sleep(0.01)
+        check(vf._ai_state == 'failed', f"兜底路径抛异常后状态机进入 failed（得 '{vf._ai_state}'）")
+        txt = vf.lbl_ai_status.text()
+        check('失败' in txt or 'failed' in txt.lower(), f"状态栏如实写明失败（得「{txt}」）")
+        # 措辞必须与「跑成功了但没检出器官」区分开——混为一谈会让用户以为影像里真没器官
+        check('检出' not in txt and 'Ready' not in txt, "失败文案不冒充「检出 0 个器官」")
+        check('#E74C3C' in vf.lbl_ai_status.styleSheet(), "失败状态用红色，视觉上可区分")
+    finally:
+        segmentation.segment_lungs_fallback = orig_fb
+        ai_engine.segmentation.segment_lungs_fallback = orig_fb
+        ai_engine.AutoAIEngineThread._run_onnx_multiorgan = orig_onnx
+        if vf is not None:
+            if vf.ai_thread: vf.ai_thread.cancel()
+            vf.close()
+        app.processEvents()
 
 
 def test_close_cancels_ai(app):
@@ -1723,7 +1789,7 @@ def main_run():
                   test_close_cancels_ai, test_malformed_pixels, test_empty_dicom_tags,
                   test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent,
                   test_hu_conversion, test_mask_cache_roundtrip, test_mouse_interaction,
-                  test_mesh_view):
+                  test_mesh_view, test_ai_failure_visible):
             t(app)
         test_quantify()      # 纯函数单测，无需 app / 真实数据
         test_lung_fallback()
@@ -1757,6 +1823,7 @@ def main_run():
         test_recon_finite(app)
         test_malformed_annotations(v, app)
         test_close_cancels_ai(app)
+        test_ai_failure_visible(app)
         test_malformed_pixels(app)
         test_empty_dicom_tags(app)
         test_export_path_safety(app)

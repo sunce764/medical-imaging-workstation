@@ -12,6 +12,7 @@
 import os
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -162,8 +163,16 @@ class UiBuilderMixin:
         self.slider_ww.setRange(1, 4000); self.slider_ww.setValue(1500); self.slider_ww.valueChanged.connect(self.update_display)
         self.lbl_wl = QLabel(); self.slider_wl = QSlider(Qt.Horizontal)
         self.slider_wl.setRange(-1200, 1200); self.slider_wl.setValue(-500); self.slider_wl.valueChanged.connect(self.update_display)
+        # 标签宽度按字体实算，不写死：曾硬编码 76px，结果中文「层数: 117 / 233」被裁成
+        # 「117 / 23」、英文「Slice: 117 / 233」更短一截——用户看到的总层数是**错的**，
+        # 比排版难看严重得多。取中英文所有标签的最长文本之最大值，故切换语言时
+        # 宽度不变、三个滑条始终左对齐，也不会因语种不同而重新裁切。
+        w_need = max(QFontMetrics(lbl.font()).horizontalAdvance(s) for lbl in
+                     (self.lbl_slice, self.lbl_ww, self.lbl_wl)
+                     for s in ("Slice: 9999 / 9999", "层数: 9999 / 9999",
+                               "WW: 4000", "WL: -1200")) + 6
         for lbl, slider in [(self.lbl_slice, self.slider_slice), (self.lbl_ww, self.slider_ww), (self.lbl_wl, self.slider_wl)]:
-            lbl.setFixedWidth(76); row = QHBoxLayout(); row.setSpacing(6); row.addWidget(lbl); row.addWidget(slider); dl.addLayout(row)
+            lbl.setFixedWidth(w_need); row = QHBoxLayout(); row.setSpacing(6); row.addWidget(lbl); row.addWidget(slider); dl.addLayout(row)
         self.lbl_ww_hint = QLabel(); self.lbl_ww_hint.setStyleSheet("color: #5C677D; font-size: 10px;")
         dl.addWidget(self.lbl_ww_hint)
 
@@ -196,12 +205,27 @@ class UiBuilderMixin:
         self.btn_compare.clicked.connect(self.toggle_compare)
         # 对比模式的平面内刚性配准开关：默认关闭，因为配准会改变 V2 显示的像素
         # （重采样），用户应当明确知道自己看的是配准后的图而不是原始层面。
-        self.chk_register = QCheckBox("配准"); self.chk_register.setObjectName("ViewOption")
+        # 刻意不设 objectName="ViewOption"：qss 里那条规则是 `min-width/max-width: 60px`，
+        # 为视图顶部「显示 / 锁定」两个短标签复选框而写。本控件英文作 "Register"（需 72px），
+        # 套上会被样式表钉死在 60px 裁成「Regist」——qss 的 max-width 优先级高于
+        # setMinimumWidth，光调布局 stretch 是修不动的。外观仍继承通用 QCheckBox 样式。
+        self.chk_register = QCheckBox("配准")
+        # 只在对比模式下有意义：未加载对比序列时它无事可做，可勾但毫无效果，
+        # 属于会误导用户的控件，故默认禁用，由 _enter/_exit_compare_mode 启停。
+        self.chk_register.setEnabled(False)
+        self.chk_register.setMinimumWidth(max(
+            QFontMetrics(self.chk_register.font()).horizontalAdvance(s)
+            for s in ("Register", "配准")) + 30)
         self.chk_register.setToolTip("对比模式：平面内刚性配准（平移+旋转）后再算差异")
         self.chk_register.stateChanged.connect(self.update_display)
-        h_nav.addWidget(self.btn_cine); h_nav.addWidget(self.cb_cine_speed)
-        h_nav.addWidget(self.btn_compare); h_nav.addWidget(self.chk_register)
+        # 拆成两行：原先四个控件挤一行，英文下「Load Comparison」被裁成「d Compari」、
+        # 「Register」裁成「Regist」、速度下拉只剩一个字符。且这一行本就混了两个功能域
+        # ——Cine 是单序列内的播放导航，对比/配准属于双序列随访——分行后语义也更清楚。
+        h_nav.addWidget(self.btn_cine, 2); h_nav.addWidget(self.cb_cine_speed, 1)
         dl.addLayout(h_nav)
+        h_cmp = QHBoxLayout()
+        h_cmp.addWidget(self.btn_compare, 3); h_cmp.addWidget(self.chk_register, 1)
+        dl.addLayout(h_cmp)
         self.grp_display.setLayout(dl)
         t1_lay.addWidget(self.grp_display)
 
@@ -339,7 +363,7 @@ class UiBuilderMixin:
             b.setEnabled(False)
 
         # 矩阵重建分组：尺寸 / 方法 / 迭代次数 / DMR / ART 按钮
-        self.grp_matrix = QGroupBox("直接矩阵重建 & ART / SIRT")
+        self.grp_matrix = QGroupBox("直接矩阵重建 && ART / SIRT")
         mxlay = QVBoxLayout(); mxlay.setSpacing(8)
         h_ms = QHBoxLayout()
         self.lbl_matrix_size = QLabel("图像尺寸:"); self.lbl_matrix_size.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)

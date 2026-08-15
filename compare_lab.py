@@ -81,6 +81,7 @@ class CompareMixin:
             vd['view'].draw_crosshair(0, 0, show=False)
         self.combo_layout.setCurrentIndex(1)   # 1x2 双窗
         self.btn_compare.setText("Exit Compare" if self.is_english else "退出对比")
+        self.chk_register.setEnabled(True)      # 配准只在对比模式下有意义
         self.update_display()
 
     def _exit_compare_mode(self):
@@ -90,6 +91,8 @@ class CompareMixin:
         self.compare_datasets = []
         self._primary_zpos = self._compare_zpos = None
         self.btn_compare.setText("Load Comparison" if self.is_english else "加载对比序列")
+        # 勾选状态刻意保留（下次进入对比仍是用户上次的偏好），只收回可操作性
+        self.chk_register.setEnabled(False)
         self.combo_layout.setCurrentIndex(self._pre_compare_layout)
         self.update_display()
 
