@@ -215,6 +215,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             (self.lbl_ww_hint, "Right-drag on image to adjust WW/WL", "在图像上右键拖拽可快速调节窗宽/窗位"),
             (self.chk_overlay, "Overlay", "信息叠加"),
             (self.chk_invert, "Invert", "反色"),
+            (self.chk_register, "Register", "配准"),
             (self.chk_anon, "De-ID", "脱敏"),
             (self.chk_global_scope, "New anno → all slices", "新标注穿透所有切片"),
         ):

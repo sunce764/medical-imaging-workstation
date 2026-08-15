@@ -176,7 +176,14 @@ After registration, the V2 title bar reports the HU difference for the current s
 
 When the two series have different matrix sizes, the software **states plainly that they are not comparable rather than force-resampling them** — interpolation would introduce error and create the illusion of a valid comparison.
 
-> **Important limitation**: this feature aligns along the **z axis only**; **no rigid or deformable registration is performed in-plane**. The reported difference therefore mixes true density change with uncorrected posture and respiratory-phase differences, and is **a qualitative indicator, not a clinical measurement of lesion change**. Genuine follow-up quantification requires rigid/deformable registration, which this software does not implement. In addition, the prior series is not run through AI inference, so **organ-level volume change is not provided**.
+### 8.2 In-plane rigid registration
+
+The **"Register"** checkbox in the top toolbar (active in comparison mode) rigidly aligns the prior slice to the current one before comparing: translation is estimated by **phase correlation**, then rotation is searched within ±6° in 0.5° steps, keeping whichever maximises normalised cross-correlation (NCC). The title bar reports the estimated angle, translation and the NCC before/after.
+
+- **Safety valve**: if NCC does not improve (mismatched levels, anatomy changed too much), the transform is **rejected** and the title says so — better no registration than an alignment that makes things worse.
+- **Measured effect**: for a prior series shifted by (12, −9), mean absolute difference drops from **321 HU to 13 HU**, NCC 0.85 → 0.99.
+
+> **Important limitation**: rigid registration corrects **posture only** (translation + rotation); there is **no deformable registration**, so respiratory organ deformation is not corrected. Choosing rigid over deformable is deliberate — deformable registration absorbs breathing motion but also warps away **genuine lesion change**, which defeats the purpose of a follow-up comparison. The reported difference therefore **remains a qualitative indicator, not a clinical measurement of lesion change**. In addition, the prior series is not run through AI inference, so **organ-level volume change is not provided**.
 
 ---
 

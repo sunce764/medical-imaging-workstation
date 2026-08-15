@@ -24,6 +24,7 @@ mpr_geometry.py    MPR coordinate mapping + dual-series z-registration
 followup.py        follow-up comparison metrics (HU difference map + per-slice statistics)
 projection.py      slab projection (MIP / MinIP / AIP) across the three planes
 mesh3d.py          organ surface reconstruction (marching cubes), shape features, numpy renderer, STL export
+registration.py    2-D rigid registration (phase correlation + rotation search) with an NCC safety valve
 constants.py       tool / plane constants + multi-organ palette
 —— resources ——
 style.qss          dark theme
@@ -32,7 +33,7 @@ models/organs.onnx segmentation model graph (external weights not committed — 
 
 ### Design: why the compute modules are Qt-free
 
-Anything numerically testable is factored out of the Qt widgets into a pure module (`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d`), so it can be exercised with synthetic data in the data-independent test subset — no display, no real DICOM, no 119 MB weights. New testable logic follows the same pattern rather than being buried in a Qt- or data-dependent path.
+Anything numerically testable is factored out of the Qt widgets into a pure module (`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d` / `registration`), so it can be exercised with synthetic data in the data-independent test subset — no display, no real DICOM, no 119 MB weights. New testable logic follows the same pattern rather than being buried in a Qt- or data-dependent path.
 
 ## Segmentation model
 

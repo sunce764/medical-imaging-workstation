@@ -22,7 +22,7 @@
 - **AI 多器官分割** —— 后台滑窗 ONNX 推理（25 类，含 5 个肺叶）。所用模型原本来源未知，其出处经**实测反推确证** —— 即 TotalSegmentator v2 `class_map_part_organs`，在一例带真值的公开 CT 上 21 个在场器官**平均 Dice ≈ 0.92**（*n = 1*）。
 - **重建实验室（教学）** —— 正向 Radon 与解析反投影（BP、含 5 种滤波器的 FBP）基于 scikit-image；**DFR、DMR、ART、SIRT 四种反解算法为本项目从零实现**。
 - **两项量化研究** —— 重建剂量-质量权衡（含一个反直觉的滤波器翻转发现）与 AI 模型出处/Dice 验证，均直调产品代码、完全可复现、不使用患者数据。
-- **面向审阅的工程** —— God-object 拆分为 5 个 UI mixin + 7 个无 Qt 计算模块；**246 项**离屏 Qt 回归测试 + CI（重建算法有数值正确性断言，而非仅验「有限」）；防御式 DICOM 处理。
+- **面向审阅的工程** —— God-object 拆分为 5 个 UI mixin + 8 个无 Qt 计算模块；**262 项**离屏 Qt 回归测试 + CI（重建算法有数值正确性断言，而非仅验「有限」）；防御式 DICOM 处理。
 
 ## 界面
 
@@ -65,13 +65,13 @@ python main.py --data /path/to/dicom_dir # 或启动即加载指定 DICOM 目录
 ## 测试
 
 ```bash
-python tests/test_gui.py                     # 完整回归：246 项（需同目录 RIDER 真实数据）
+python tests/test_gui.py                     # 完整回归：262 项（需同目录 RIDER 真实数据）
 SKIP_REAL_DATA=1 python tests/test_gui.py    # 数据无关子集（CI 使用）
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```
 
-离屏 Qt，退出码 0 = 全部通过。覆盖率 ≈ 79% —— 七个无 Qt 计算模块（`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d`）均有独立单测，覆盖 77–100%；鼠标交互以合成的 press/move/release 序列驱动并断言发出的信号载荷（`graphics_view` 91%）。重建实验室的 UI 调度（`recon_lab` 44%）是目前覆盖最低的一层。CI 每次 push/PR 只跑数据无关子集 —— 故「CI 全绿」**不等于**全部 246 项都跑过（交互层测试需本地真实数据）。
+离屏 Qt，退出码 0 = 全部通过。覆盖率 ≈ 79% —— 八个无 Qt 计算模块（`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d` / `registration`）均有独立单测，覆盖 77–100%；鼠标交互以合成的 press/move/release 序列驱动并断言发出的信号载荷（`graphics_view` 91%）。重建实验室的 UI 调度（`recon_lab` 44%）是目前覆盖最低的一层。CI 每次 push/PR 只跑数据无关子集 —— 故「CI 全绿」**不等于**全部 262 项都跑过（交互层测试需本地真实数据）。
 
 ## 文档
 
@@ -91,7 +91,7 @@ coverage run tests/test_gui.py && coverage report
 - **脱敏为显示层** —— 隐去屏幕与导出文件名中的 PHI，但**不清洗**底层 DICOM 标签与烧录文字。
 - **Dice ≈ 0.92 基于单一带真值序列（*n = 1*）** —— 标签映射已确证，但该数字不应被当作总体估计。
 - 矩阵重建（DMR/ART）受 `lstsq` 成本限制，实用上限约 64×64（教学用途）；AI/重建/标注默认作用于当前主序列。
-- **随访对比仅沿 z 轴配准。** 两序列按解剖 z 坐标配准后逐层比较（Δ均值、平均绝对差、RMSE、差值图），但**平面内未做任何刚性或形变配准**——所报差异混有未校正的体位与呼吸相位差异，只能作定性参考，不是临床意义上的变化量。器官级体积变化不可用，因为既往序列没有分割结果。
+- **随访对比可做平面内刚性配准，但无形变配准。** 两序列先按解剖 z 坐标对齐，勾选「配准」后再做平面内刚性配准（相位相关求平移 + 旋转搜索，实测把整体平移造成的 MAE 从 321 降到 13 HU），随后给出 Δ均值 / 平均绝对差 / RMSE / 差值图。**但呼吸导致的器官形变不会被校正**——刚性配准只处理体位,不改变解剖内部的相对关系。所报差异仍只宜作定性参考，不是临床意义上的变化量。器官级体积变化不可用，因为既往序列没有分割结果。
 
 ## 许可 · 版权
 

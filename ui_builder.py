@@ -194,7 +194,13 @@ class UiBuilderMixin:
         self.cb_cine_speed.currentIndexChanged.connect(self._on_cine_speed_changed)
         self.btn_compare = QPushButton("加载对比序列"); self.btn_compare.setProperty("class", "ActionBtn")
         self.btn_compare.clicked.connect(self.toggle_compare)
-        h_nav.addWidget(self.btn_cine); h_nav.addWidget(self.cb_cine_speed); h_nav.addWidget(self.btn_compare)
+        # 对比模式的平面内刚性配准开关：默认关闭，因为配准会改变 V2 显示的像素
+        # （重采样），用户应当明确知道自己看的是配准后的图而不是原始层面。
+        self.chk_register = QCheckBox("配准"); self.chk_register.setObjectName("ViewOption")
+        self.chk_register.setToolTip("对比模式：平面内刚性配准（平移+旋转）后再算差异")
+        self.chk_register.stateChanged.connect(self.update_display)
+        h_nav.addWidget(self.btn_cine); h_nav.addWidget(self.cb_cine_speed)
+        h_nav.addWidget(self.btn_compare); h_nav.addWidget(self.chk_register)
         dl.addLayout(h_nav)
         self.grp_display.setLayout(dl)
         t1_lay.addWidget(self.grp_display)

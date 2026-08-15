@@ -307,6 +307,32 @@ def test_compare(v, app):
     v._render_compare(); app.processEvents()
     check(not v.views[3]['container'].isHidden() and "差值图" in v.views[3]['title_label'].text()
           or "Difference" in v.views[3]['title_label'].text(), "切四窗后 V3 渲染差值图不崩")
+    # 平面内刚性配准：造一个整体平移的"既往序列"，勾选配准后差异必须显著下降。
+    # 这条端到端钉住 registration 与 compare_lab 的接线方向——符号接反时差异会更大。
+    import re as _re
+
+    import scipy.ndimage as _ndi
+    v.compare_volume = np.stack([_ndi.shift(sl, (12, -9), order=1, mode='nearest')
+                                 for sl in v.volume_hu])
+    v._primary_zpos = np.arange(Zp).astype(float)
+    v._compare_zpos = np.arange(Zp).astype(float)
+    v.chk_register.setChecked(False)
+    v._render_compare(); app.processEvents()
+    t_off = v.views[2]['title_label'].text()
+    v.chk_register.setChecked(True)
+    v._render_compare(); app.processEvents()
+    t_on = v.views[2]['title_label'].text()
+
+    def _mae(t):
+        mm = _re.search(r'(?:绝对差|MAE) (\d+)', t)
+        return int(mm.group(1)) if mm else None
+    m_off, m_on = _mae(t_off), _mae(t_on)
+    check(m_off is not None and m_on is not None and m_on < m_off / 3,
+          f"勾选配准后 MAE 大幅下降 ({m_off} → {m_on} HU)")
+    check('12' in t_on and '-9' in t_on, f"标题标出估计位移 (+12,-9) (得 ...{t_on[-70:]})")
+    check('仅z轴对齐' not in t_on and 'z-aligned only' not in t_on,
+          "配准生效后标题不再自称「仅 z 轴对齐」（口径随状态变化）")
+    v.chk_register.setChecked(False)
     v.combo_layout.setCurrentIndex(saved_layout); app.processEvents()   # 还原布局，勿污染后续测试
     v.compare_mode_active = False; v.compare_volume = None
     v.tabs.setCurrentIndex(0); app.processEvents()
@@ -1142,6 +1168,65 @@ def test_projection():
     check(bad, "非法投影模式抛 ValueError")
 
 
+def test_registration():
+    """二维刚性配准纯函数单测——合成位移/旋转，断言可手算的量与方向。"""
+    print("[刚性配准纯函数 registration]")
+    import scipy.ndimage as ndi
+
+    import registration as REG
+    rng = np.random.default_rng(3)
+    # 造一个有结构的图（纯噪声无法配准；纯常数则相关系数无定义）
+    base = np.zeros((96, 96), np.float32)
+    base[20:60, 25:70] = 300.0
+    base[35:45, 40:55] = -200.0
+    base += rng.normal(0, 5, base.shape).astype(np.float32)
+    check(abs(REG.normalized_cross_correlation(base, base) - 1.0) < 1e-9, "NCC(自身)=1")
+    check(REG.normalized_cross_correlation(base, np.zeros_like(base)) == 0.0,
+          "NCC 对常数图返回 0（无定义时不返回 nan）")
+    # 平移估计：返回的必须是「moving 相对 ref 的位移」，符号与构造一致。
+    # 这条方向断言极其重要——符号写反时位移【数值仍完全正确】、图看着也动了，
+    # 但对齐结果会更歪（实测 MAE 从 262 涨到 355），属静默失真。
+    for ts in ((7, -5), (-11, 8), (0, 0)):
+        moved = ndi.shift(base, ts, order=1, mode='nearest')
+        est = REG.estimate_translation(base, moved)
+        check(est == ts, f"平移估计 {ts} → {est}（符号即 moving 相对 ref 的位移）")
+    # apply_rigid 必须把图对回去：MAE 应大幅下降、NCC 应逼近 1
+    moved = ndi.shift(base, (9, -6), order=1, mode='nearest')
+    r = REG.register_rigid(base, moved, max_angle=0)          # 只搜平移
+    aligned = REG.apply_rigid(moved, r['angle_deg'], r['shift_yx'])
+    mae0 = float(np.abs(base - moved).mean())
+    mae1 = float(np.abs(base - aligned).mean())
+    check(r['shift_yx'] == (9, -6) and r['applied'], f"仅平移模式估出 (9,-6) 并采用 (得 {r['shift_yx']})")
+    check(mae1 < mae0 / 3, f"配准后 MAE 大幅下降 ({mae0:.1f} → {mae1:.1f} HU)")
+    check(r['ncc_after'] > r['ncc_before'], f"配准后 NCC 提升 ({r['ncc_before']:.4f} → {r['ncc_after']:.4f})")
+    # 旋转+平移：角度应被搜到（步长 0.5°，故允许半步误差）
+    moved2 = ndi.shift(ndi.rotate(base, 3.0, reshape=False, order=1, mode='nearest'),
+                       (6, -4), order=1, mode='nearest')
+    r2 = REG.register_rigid(base, moved2, max_angle=5.0, angle_step=0.5)
+    check(abs(r2['angle_deg'] - 3.0) <= 0.5, f"刚性模式估出旋转 ≈3.0° (得 {r2['angle_deg']:+.1f}°)")
+    check(r2['ncc_after'] > r2['ncc_before'],
+          f"刚性配准提升 NCC ({r2['ncc_before']:.4f} → {r2['ncc_after']:.4f})")
+    # 安全阀：两张无关的图配不出提升时，必须拒绝而不是硬套一个变换
+    other = rng.normal(0, 50, base.shape).astype(np.float32)
+    r3 = REG.register_rigid(base, other, max_angle=0)
+    if not r3['applied']:
+        check(r3['angle_deg'] == 0.0 and r3['shift_yx'] == (0, 0),
+              "配准无提升时安全阀生效：变换归零且 applied=False")
+    else:
+        check(r3['ncc_after'] >= r3['ncc_before'], "若采用配准，则 NCC 必不低于配准前")
+    # 尺寸不同必须显式报错，而非静默给出无意义结果
+    raised = False
+    try:
+        REG.register_rigid(base, np.zeros((50, 50), np.float32))
+    except ValueError:
+        raised = True
+    check(raised, "尺寸不同抛 ValueError")
+    # 非有限输入不得让估计崩溃（畸形 DICOM 可产出 NaN/Inf）
+    bad = base.copy(); bad[0, 0] = np.nan; bad[1, 1] = np.inf
+    est_bad = REG.estimate_translation(base, bad)
+    check(isinstance(est_bad, tuple) and len(est_bad) == 2, f"含 NaN/Inf 时仍返回合法位移 {est_bad}")
+
+
 def test_followup():
     """随访对比定量纯函数直接单测——合成切片，不构造 MedicalViewer。断言值均可手算。"""
     print("[随访对比定量纯函数 followup]")
@@ -1551,6 +1636,7 @@ def main_run():
         test_quantify()      # 纯函数单测，无需 app / 真实数据
         test_lung_fallback()
         test_followup()
+        test_registration()
         test_projection()
         test_mesh3d()
         test_mpr_geometry()
@@ -1592,6 +1678,7 @@ def main_run():
         test_quantify()
         test_lung_fallback()
         test_followup()
+        test_registration()
         test_projection()
         test_mesh3d()
         test_mpr_geometry()

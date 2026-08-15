@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 import followup
 import mpr_geometry
+import registration
 
 
 class CompareMixin:
@@ -108,13 +109,31 @@ class CompareMixin:
         else:
             z2 = min(Z2 - 1, max(0, int(round(z / max(1, Z1 - 1) * (Z2 - 1)))))
             reg = "比例" if not self.is_english else "ratio"
-        self._show_windowed(2, self.compare_volume[z2], ww, wl)
+        prior = self.compare_volume[z2]
+        rtag = ''
+        # 平面内刚性配准：勾选后先把既往层对齐到当前层，再显示与算差异。
+        # 只在同尺寸时尝试；registration 内部带安全阀，NCC 不升则不采用（applied=False），
+        # 此时 rtag 明确标出"未采用"，避免用户以为已配准。
+        if getattr(self, 'chk_register', None) is not None and self.chk_register.isChecked():
+            if prior.shape == self.volume_hu[z].shape:
+                r = registration.register_rigid(self.volume_hu[z], prior)
+                if r['applied']:
+                    prior = registration.apply_rigid(prior, r['angle_deg'], r['shift_yx'])
+                    dy, dx = r['shift_yx']
+                    rtag = (f" · reg {r['angle_deg']:+.1f}° ({dy:+d},{dx:+d}) NCC {r['ncc_before']:.2f}→{r['ncc_after']:.2f}"
+                            if self.is_english else
+                            f" · 配准 {r['angle_deg']:+.1f}° ({dy:+d},{dx:+d}) NCC {r['ncc_before']:.2f}→{r['ncc_after']:.2f}")
+                else:
+                    rtag = " · reg not applied" if self.is_english else " · 配准未采用"
+            else:
+                rtag = " · reg n/a (size)" if self.is_english else " · 配准不适用（尺寸不同）"
+        self._show_windowed(2, prior, ww, wl)
         # 标题带既往检查日期（脱敏时隐去——检查日期属可识别信息）
         date = '' if self.anonymize else (str(getattr(self.compare_datasets[0], 'StudyDate', '')) if self.compare_datasets else '')
         dtag = f" {date[:4]}-{date[4:6]}-{date[6:8]}" if len(date) == 8 else ''
-        stat = self._compare_stat_text(self.volume_hu[z], self.compare_volume[z2])
-        self.set_view_title(2, (f"V2 [Prior{dtag} {z2 + 1}/{Z2} · {reg}]{stat}" if self.is_english
-                                else f"V2 [既往{dtag} {z2 + 1}/{Z2} · {reg}]{stat}"))
+        stat = self._compare_stat_text(self.volume_hu[z], prior)
+        self.set_view_title(2, (f"V2 [Prior{dtag} {z2 + 1}/{Z2} · {reg}]{rtag}{stat}" if self.is_english
+                                else f"V2 [既往{dtag} {z2 + 1}/{Z2} · {reg}]{rtag}{stat}"))
 
     def _compare_stat_text(self, cur, prev):
         """本层 HU 差异定量，返回可直接拼进 V2 标题的一段文字（无差异可比时返回提示）。
@@ -123,10 +142,16 @@ class CompareMixin:
         差值图另在 V3 渲染——但对比模式默认是 1×2 双窗，V3 处于隐藏状态，
         故仅当用户切到四窗（V3 可见）时才渲染，避免为看不见的视图做无用计算。
 
-        【勿夸大】只做了 z 轴层面配准，xy 平面未做刚性/形变配准，故差值中混有体位与
-        呼吸相位差异，仅供定性参考，不是临床意义上的病灶变化量——标题里如实标注。
+        【勿夸大】未勾选「配准」时只做了 z 轴层面对齐，平面内未校正，差值中混有体位
+        与呼吸相位差异；勾选后已做平面内刚性配准（平移+旋转），但仍无形变配准，
+        呼吸导致的器官形变不会被校正。两种情况都只宜作定性参考，不是临床意义上的
+        病灶变化量——故标题按当前状态如实标注是哪一种。
         """
         e = self.is_english
+        registered = (getattr(self, 'chk_register', None) is not None
+                      and self.chk_register.isChecked())
+        scope = ("rigid-aligned, no deformable" if registered else "z-aligned only") if e else \
+                ("已刚性配准，无形变校正" if registered else "仅z轴对齐")
         ok, why = followup.can_compare(cur, prev)
         if not ok:
             return f" · Δ n/a ({why})" if e else f" · Δ 不可比（{why}）"
@@ -142,8 +167,8 @@ class CompareMixin:
             v3.set_image(v3.image_item.pixmap(), mq)
             self.set_view_title(3, "V3 [Difference map · warm = denser now]" if e
                                 else "V3 [差值图 · 暖色=当前更致密]")
-        return (f" · Δ{s['mean_diff']:+.0f} MAE {s['mae']:.0f} RMSE {s['rmse']:.0f} HU (z-aligned only)" if e
-                else f" · Δ{s['mean_diff']:+.0f} 绝对差 {s['mae']:.0f} RMSE {s['rmse']:.0f} HU（仅z轴配准）")
+        return (f" · Δ{s['mean_diff']:+.0f} MAE {s['mae']:.0f} RMSE {s['rmse']:.0f} HU ({scope})" if e
+                else f" · Δ{s['mean_diff']:+.0f} 绝对差 {s['mae']:.0f} RMSE {s['rmse']:.0f} HU（{scope}）")
 
     def _show_windowed(self, vid, hu2d, ww, wl):
         """把 2D HU 切片按窗位映射为灰度显示到指定视图（对比模式用，不叠加蒙版/标注/四角信息）。"""
