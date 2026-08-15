@@ -112,6 +112,12 @@ def compute_sinogram(img_norm: np.ndarray, theta: np.ndarray) -> np.ndarray:
     theta:    投影角度数组（度），如 np.linspace(0, 180, 180, endpoint=False)
     返回:     sinogram，shape=(探测器数, 角度数)
     """
+    # 非有限值防护：与 compute_fbp / compute_dfr 保持一致（此前只有那两个做了，是个缺口）。
+    # 一个 NaN 像素经 Radon 的线积分会污染所有穿过它的射线——实测局部 4×4 的 NaN
+    # 就让整幅弦图 100% 非有限，而下游 BP/FBP/DFR 照常「跑通」出图、界面无任何提示。
+    # 源头已在 MedicalViewer._dcm_float 兜住（NaN 的 RescaleSlope/PixelSpacing 退回默认值），
+    # 此处为纵深防御，也保护直接调用本模块的实验脚本。
+    img_norm = np.nan_to_num(img_norm, nan=0.0, posinf=1.0, neginf=0.0)
     # circle=True：只处理图像内切圆区域，与 iradon 默认行为一致，避免角落 padding 引入伪影
     return radon(img_norm, theta=theta, circle=True)
 

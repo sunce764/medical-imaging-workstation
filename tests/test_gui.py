@@ -948,6 +948,65 @@ def test_malformed_pixels(app):
             vm.ai_thread.cancel()
 
 
+def test_nonfinite_dicom_tags(app):
+    """DICOM 数值标签为 NaN/Inf 时不得静默流入下游。
+
+    NaN 是【合法的 float】——_dcm_float 原有的 None 检查与 float() 都拦不住它。
+    实测后果比崩溃更糟，因为全程无任何异常提示：
+      · RescaleSlope=NaN → HU 全 NaN → 弦图 100% 非有限，而 BP/FBP/DFR 照常「跑通」
+        出图，用户看到的是从垃圾数据算出来的图；
+      · PixelSpacing=NaN → 所有距离/面积/体积测量静默变成 nan。
+    不依赖真实数据与权重，可进 SKIP_REAL_DATA 子集。
+    """
+    print("[非有限数值标签 DICOM 防护]")
+    import shutil
+    import tempfile
+
+    import recon as R
+    vn = m.MedicalViewer(); app.processEvents()
+    if vn.ai_thread: vn.ai_thread.cancel()
+
+    # 1) _dcm_float 本身：NaN / ±Inf 一律退回 default
+    for bad, tag in ((float('nan'), 'NaN'), (float('inf'), '+Inf'), (float('-inf'), '-Inf')):
+        ds = type('D', (), {'RescaleSlope': bad, 'PixelSpacing': [bad, 1.0]})()
+        got = vn._dcm_float(ds, 'RescaleSlope', 7.0)
+        got_i = vn._dcm_float(ds, 'PixelSpacing', 7.0, idx=0)
+        check(got == 7.0 and got_i == 7.0,
+              f"_dcm_float 把 {tag} 退回默认值（得 {got} / {got_i}）")
+    # 正常值不受影响——防护不能把好数据也一并兜掉
+    ds_ok = type('D', (), {'RescaleSlope': 2.5, 'PixelSpacing': [0.7, 0.7]})()
+    check(vn._dcm_float(ds_ok, 'RescaleSlope', 1.0) == 2.5
+          and vn._dcm_float(ds_ok, 'PixelSpacing', 1.0, idx=0) == 0.7,
+          "正常有限值仍原样返回（防护未误伤）")
+
+    # 2) 端到端：写一份 RescaleSlope=NaN 的序列，加载后 HU 必须全有限
+    d = tempfile.mkdtemp()
+    try:
+        for i in range(4):
+            _write_min_dcm(os.path.join(d, f"n{i:03d}.dcm"), (32, 32), '9.9.9',
+                           ipp_z=i, inst=i, slope=float('nan'))
+        vn._read_dicom_dir(d); vn._build_volume_hu(); app.processEvents()
+        finite = bool(np.isfinite(vn.volume_hu).all())
+        check(finite, f"RescaleSlope=NaN 的序列加载后 HU 全有限（得 {finite}）")
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+        if vn.ai_thread: vn.ai_thread.cancel()
+
+    # 3) 纵深防御：compute_sinogram 对含 NaN 的输入也须产出全有限弦图
+    #    （一个 NaN 像素经 Radon 线积分会污染所有穿过它的射线——实测局部 4×4 的 NaN
+    #     就让整幅弦图 100% 非有限）
+    img = np.random.RandomState(0).rand(48, 48).astype(np.float32)
+    img[10:14, 10:14] = np.nan
+    sino = R.compute_sinogram(img, R.make_theta(180))
+    check(bool(np.isfinite(sino).all()),
+          f"含 NaN 输入的弦图仍全有限（有限占比 {np.isfinite(sino).mean() * 100:.0f}%）")
+    img2 = np.random.RandomState(1).rand(48, 48).astype(np.float32)
+    s_ref = R.compute_sinogram(img2, R.make_theta(180))
+    s_again = R.compute_sinogram(img2, R.make_theta(180))
+    check(bool(np.allclose(s_ref, s_again)), "无 NaN 时弦图不受防护影响（结果可复现且未改变）")
+    vn.close(); app.processEvents()
+
+
 def test_empty_dicom_tags(app):
     """RescaleSlope/Intercept/PixelSpacing/SliceThickness 存在但为空(None)时，
     加载/定量不得因 float(None) 崩溃。"""
@@ -1801,6 +1860,7 @@ def main_run():
         for t in (test_ai_engine, test_mixed_shape_dicom, test_recon_finite,
                   test_close_cancels_ai, test_malformed_pixels, test_empty_dicom_tags,
                   test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent,
+                  test_nonfinite_dicom_tags,
                   test_hu_conversion, test_mask_cache_roundtrip, test_mouse_interaction,
                   test_mesh_view, test_ai_failure_visible):
             t(app)
@@ -1839,6 +1899,7 @@ def main_run():
         test_ai_failure_visible(app)
         test_malformed_pixels(app)
         test_empty_dicom_tags(app)
+        test_nonfinite_dicom_tags(app)
         test_export_path_safety(app)
         test_dicom_sort_consistency(app)
         test_i18n_persistent(app)

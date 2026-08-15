@@ -11,6 +11,7 @@
 # =============================================================================
 
 import json
+import math
 import os
 import re
 import sys
@@ -807,20 +808,29 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
 
     @staticmethod
     def _dcm_float(ds, tag, default, idx=None):
-        """安全读取 DICOM 数值标签为 float：标签缺失、为空(None)、或无法转 float 时返回 default。
-        idx 非空时取序列第 idx 个元素（如 PixelSpacing[0]）。
-        动机：getattr 的默认值只在属性【缺失】时生效；畸形 DICOM 常把数值标签留空
-        （pydicom 读回 None），此时 float(None) / None[idx] 会抛 TypeError，导致
-        加载/显示/定量全线崩溃。此处统一兜底。"""
+        """安全读取 DICOM 数值标签为 float：标签缺失、为空(None)、非有限值(NaN/±Inf)、
+        或无法转 float 时返回 default。idx 非空时取序列第 idx 个元素（如 PixelSpacing[0]）。
+
+        动机一（None）：getattr 的默认值只在属性【缺失】时生效；畸形 DICOM 常把数值标签
+        留空（pydicom 读回 None），此时 float(None) / None[idx] 会抛 TypeError，导致
+        加载/显示/定量全线崩溃。
+
+        动机二（NaN/Inf）：NaN 是【合法的 float】，上面的 None 检查与 float() 都拦不住它，
+        会一路静默流到下游——这比崩溃更糟：
+          · RescaleSlope=NaN → HU 全 NaN → 弦图 100% 非有限，而 BP/FBP/DFR 照常「跑通」
+            出图，界面无任何异常提示，用户看到的是从垃圾数据算出来的图；
+          · PixelSpacing=NaN → 所有距离/面积/体积测量静默变成 nan。
+        实测确认过上述两条链路，故在此一并兜住：非有限值同样退回 default。"""
         v = getattr(ds, tag, None)
         if v is None:
             return default
         try:
             if idx is not None:
                 v = v[idx]
-            return float(v)
+            f = float(v)
         except (TypeError, ValueError, IndexError):
             return default
+        return f if math.isfinite(f) else default
 
     @staticmethod
     def _safe_name(s, fallback="Unknown"):
