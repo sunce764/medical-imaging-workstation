@@ -107,3 +107,95 @@ The image is normalised to RAS and then converted to the GUI's (Z,H,W) axis orde
 
 ## Segmentation study — one-sentence summary
 No guessing — **a single ground-truth-labelled public CT pins down the model's identity, its label mapping, and pipeline correctness all at once**: organs.onnx is TotalSegmentator `class_map_part_organs`, mean Dice ≈ 0.92.
+
+---
+
+# Study III: Learned sparse-view reconstruction — what does it recover, and what does it invent? (`recon_dl.py`)
+
+## Motivation
+
+Study I measured the ceiling of the classical methods: error saturates beyond a certain number of views, and the optimal FBP filter *inverts* with dose. This study asks the follow-up question: can a small self-implemented network, used as an FBP post-processor, break the linear filter's built-in trade-off between **preserving detail** and **suppressing streaks** — and what does it cost?
+
+**Why hallucination is a headline result, not an appendix.** Classical methods (FBP/ART) fail by producing **artefacts** — ugly, but a reader can see they are artefacts. Learned reconstruction fails by producing **hallucinations** — a clean image that looks like real anatomy where nothing was. Clinically these are entirely different failure modes, so "does it invent structure?" is measured directly rather than assumed away.
+
+## Running
+
+```bash
+python experiments/recon_dl.py                  # everything (~55 min on an M-series MPS backend)
+python experiments/recon_dl.py matrix           # view-count matrix only
+python experiments/recon_dl.py halluc ood res   # the three probes (reuses saved weights)
+python experiments/recon_dl.py plot             # redraw figures from the committed CSVs
+```
+
+Extra dependency: `torch` (see `requirements-experiments.txt`). **The App does not need it** — a model reaching the GUI would be exported to ONNX and served by the `onnxruntime` already in the main requirements.
+
+## Methods
+
+- **Data**: a *family* of random phantoms — random ellipses plus 0–3 small high-contrast "lesions" — generated in code with fixed seeds. A single fixed Shepp-Logan would simply be memorised by the network, so what you would then measure is recall, not reconstruction. **No patient data**; anyone re-running gets the same numbers.
+- **Split**: train / val / test / pairing draw from four **non-overlapping seed bands**, so no phantom instance appears in two sets. Checkpoints are selected on the **validation** set only; the test set never participates in any selection.
+- **Forward model**: `recon.compute_sinogram` → `recon.compute_fbp` — the same production functions the GUI calls.
+- **Network**: a self-implemented residual U-Net (1.9 M params, no MONAI/nnU-Net). It predicts the *artefact* and subtracts it, because sparse-view streaks are sparse and high-frequency — far easier to learn than re-synthesising anatomy, and much less prone to inventing structure. The output layer is zero-initialised, so training starts exactly at "pass the FBP through unchanged", giving a clean zero baseline for "how much did the network change?".
+- **Network input is ramp-FBP, not hann.** Hann has already filtered the high frequencies — and the detail with them — away at the filtering stage; that information is gone and the network cannot recover it. Ramp keeps the information but leaves streaks, and streaks are what can be learned.
+- **Three-tier metrics** (any one tier alone is self-deceiving): global RMSE/SSIM; detail — lesion-contrast retention and bar-pattern modulation transfer (CTF); safety — background streak level and **false-structure rate**.
+
+## Findings
+
+### A — The view-count matrix (128², 80 test phantoms per cell)
+
+| views | FBP-hann RMSE / lesion | FBP-ramp RMSE / lesion | **+CNN** RMSE / lesion |
+|---|---|---|---|
+| 15 | 0.0415 / 0.750 | 0.0525 / 0.867 | **0.0110 / 0.957** |
+| 20 | 0.0339 / 0.758 | 0.0415 / 0.877 | **0.0084 / 0.974** |
+| 30 | 0.0281 / 0.752 | 0.0291 / 0.869 | **0.0059 / 0.987** |
+| 45 | 0.0264 / 0.750 | 0.0220 / 0.864 | **0.0042 / 0.993** |
+| 60 | 0.0260 / 0.751 | 0.0196 / 0.867 | **0.0035 / 0.996** |
+
+**The linear filters' lesion-contrast loss is independent of dose.** Hann sits at 0.750 and ramp at 0.867 across all five view counts — essentially flat. That 25% / 13% loss is therefore **not** caused by undersampling; it is the filter's intrinsic price, and no amount of extra dose buys it back. The CNN instead climbs from 0.957 to 0.996, converging on the ground truth as dose increases.
+
+**Study I's filter inversion reproduces here, on a different phantom family.** At 15 views hann wins (0.0415 < 0.0525); by 45 views ramp wins (0.0220 < 0.0264); the crossover sits between 30 and 45 views. Study I found this on Shepp-Logan — an independent cross-check.
+
+### B — Hallucination: paired phantoms, identical background, lesion present vs absent
+
+| quantity | value |
+|---|---|
+| true lesion signal (the yardstick) | +0.3472 |
+| FBP at the lesion-free site | +0.0017 |
+| **network at the lesion-free site** | **+0.0028** |
+| network at the true-lesion site | +0.3427 (**99% recovered**) |
+| false-structure rate (> 20% / 30% / 50% of a true lesion) | **1.7% / 0% / 0%** |
+
+The network's signal where nothing exists is the same order as FBP's own fluctuation. **It is not inventing structure.** This has to be measured with paired phantoms: the matrix's "background streak std" is a whole-background statistic, in which one isolated fake lesion is diluted by tens of thousands of pixels and cannot be seen at all.
+
+### C — Out-of-distribution: is it generic de-streaking, or memorised shapes?
+
+| test set | FBP RMSE | +CNN | reduction |
+|---|---|---|---|
+| squares (sharp corners, straight edges) | 0.0458 | 0.0084 | **81.6%** |
+| polygons (non-convex) | 0.0348 | 0.0044 | **87.2%** |
+| line gratings (high frequency) | 0.2093 | 0.1590 | **24.1%** |
+
+In-distribution reduction 79.7% → out-of-distribution mean 64.3%, **ratio 0.81**. Not one of these shapes appears in training, yet on both shape families the gain **matches or exceeds** the in-distribution figure. What the network learned is a shape-independent de-streaking operation; the mean is dragged down solely by the high-frequency gratings.
+
+### D — The resolution limit (bar patterns, `+CNN` vs `FBP-ramp`)
+
+Judge by **|CTF − 1|**, not by "higher CTF is better": ramp overshoots at sharp edges (Gibbs ringing), so CTF can exceed 1, and that is distortion, not an advantage.
+
+| period (px) | line width | \|CTF − 1\| FBP → CNN | RMSE reduction |
+|---|---|---|---|
+| 4 | 2 | 0.988 → **0.729** | 28.0% |
+| 6 | 3 | 0.705 → **0.436** | 37.2% |
+| 8 | 4 | 0.316 → **0.155** | 37.4% |
+| 10 | 5 | 0.265 → **0.226** | 37.2% |
+| 12–28 | 6–14 | ≈ level | 36.7–40.3% |
+
+**4 of 8 frequencies land closer to ground truth, 4 are level, none is worse.** The gain concentrates at high frequency, where ramp's overshoot is worst (CTF 1.99 at a 4 px period — nearly double the true modulation) and the CNN corrects it. At low frequency FBP is already close to the truth, so there is little left to fix. RMSE reduction only drops off at the finest line width (2 px, 28.0%) — the sampling limit itself.
+
+## Limitations (stated, not buried)
+
+- **ART/SIRT are not in the matrix.** They need an explicit system matrix, and `lstsq` cost caps the usable size at about 64² — not comparable with this study's 128². Putting them in the same table would manufacture a false equivalence.
+- **Phantoms, not anatomy.** The phantom family is richer than a single Shepp-Logan and the OOD sets probe shapes never trained on, but none of this is real CT. The transfer to clinical images is untested here.
+- **One network size, one loss.** 1.9 M parameters trained with plain MSE. Whether a different capacity or a perceptual/adversarial loss would move the hallucination rate is not measured.
+- **The 24.1% on gratings is a real weakness**, not a rounding artefact: at the sampling limit a post-processor cannot restore information the sparse projections never carried.
+
+## Reconstruction-DL study — one-sentence summary
+A 1.9 M-parameter self-implemented post-processor cuts sparse-view RMSE by **3–6×** versus the best linear filter and lifts lesion-contrast retention from a dose-independent **0.87 ceiling to 0.96–1.00** — and, measured rather than assumed, it does so **without inventing structure** (false-structure rate 1.7% at the loosest threshold, 0% beyond) and **without depending on the training shapes** (out-of-distribution gain ratio 0.81), with its only real limit at the sampling frequency itself.

@@ -21,7 +21,7 @@ A desktop **CT imaging workstation** (PySide6/Qt6) that unites a clinical DICOM 
 - **Clinical reader** — parallel DICOM loading with anatomical sort; tri-planar MPR with linked cross-hairs; 6 clinical window/level presets; measurement, annotation and ellipse-ROI densitometry; dual-series follow-up comparison with anatomical registration.
 - **AI multi-organ segmentation** — background sliding-window ONNX inference (25 classes, incl. 5 lung lobes). The shipped model was undocumented; its provenance was **recovered by measurement** — identified as TotalSegmentator v2 `class_map_part_organs`, with **mean Dice ≈ 0.92** over 21 organs on one ground-truth case (*n = 1*).
 - **Reconstruction lab (teaching)** — forward Radon and analytic inverses (BP, FBP with 5 apodisation filters) via scikit-image; **DFR, DMR, ART and SIRT inverse solvers implemented from first principles.**
-- **Two quantitative studies** — a reconstruction dose–quality characterisation (with a non-obvious filter-inversion finding) and an AI-model provenance/Dice validation, both driving the production code, fully reproducible, using no patient data.
+- **Three quantitative studies** — a reconstruction dose–quality characterisation (with a non-obvious filter-inversion finding), an AI-model provenance/Dice validation, and a **learned sparse-view reconstruction study that measures hallucination rather than assuming it away**. All drive the production code, are fully reproducible, and use no patient data.
 - **Engineered for review** — a God-object decomposed into 5 UI mixins + 8 Qt-free compute modules; a **305-check** offscreen-Qt regression suite with CI (reconstruction algorithms carry numerical-correctness assertions, not just "finite"); defensive DICOM handling.
 
 ## Screenshots
@@ -55,9 +55,10 @@ python main.py --data /path/to/dicom_dir # or load a DICOM directory on launch
 
 ## Quantitative studies
 
-Both studies exercise the shipped production code and use no patient data. See the [technical report](docs/technical_report.md) for methods, figures and results.
+All three studies exercise the shipped production code and use no patient data. See the [technical report](docs/technical_report.md) for methods, figures and results.
 
 - **Study I — dose–quality tradeoffs in CT reconstruction.** On the Shepp-Logan phantom, error saturates beyond ≈ 180 views; the optimal FBP filter *inverts* with dose (smoothing filters win at sparse angles, sharp Ram-Lak at dense); under Poisson photon noise, constrained iteration (ART) is most robust while naive least-squares inversion destabilises near the square-system regime. Written up as a [preprint](docs/preprint_recon.md).
+- **Study III — learned sparse-view reconstruction: what it recovers vs what it invents.** A self-implemented 1.9 M-parameter residual U-Net used as an FBP post-processor cuts sparse-view RMSE by **3–6×** against the best linear filter, and lifts lesion-contrast retention from a **dose-independent 0.87 ceiling** (the filter's intrinsic price — flat across 15–60 views) to **0.96–1.00**. Crucially, the two failure modes people usually assert away are measured: paired lesion-present/absent phantoms put the **false-structure rate at 1.7% (0% beyond a 30% threshold)**, and out-of-distribution shapes never trained on (sharp-cornered squares, non-convex polygons) retain an **0.81 gain ratio** — so the improvement is generic de-streaking, not memorised shapes. The one real limit is the sampling frequency itself.
 - **Study II — provenance recovery & Dice validation.** Running the undocumented ONNX model on one ground-truth-labelled public CT and computing a label-overlap confusion matrix recovers the label map (identity diagonal) and yields mean Dice ≈ 0.92 over 21 organs — simultaneously validating the inference pipeline and correcting two label errors.
 
 Reproduce via [`experiments/`](experiments/README.md) (scripts + figures + CSVs).

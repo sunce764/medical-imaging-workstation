@@ -52,3 +52,7 @@ docs/coop_agreement*
 # 本地 AI 工作上下文 —— 含「当前卡点/导师姓名」，仓库将公开，保持本地不入库
 # ============================================================
 CLAUDE.md
+
+# 研究三的训练权重（每个约 7.6MB，5 档共约 38MB）。产物目录只提交图表与 CSV；
+# 权重可由 `python experiments/recon_dl.py matrix` 以固定种子完整重建，无需入库。
+experiments/results/recon_dl_w*.pt
