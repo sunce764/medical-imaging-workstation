@@ -360,11 +360,32 @@ class UiBuilderMixin:
         for _b in (self.btn_dfr, self.btn_bp, self.btn_fbp):
             _b.setToolTip("需要先点「发射射线生成弦图」——本算法由弦图反解图像")
         alay.addWidget(self.btn_dfr); alay.addWidget(self.btn_bp); alay.addWidget(self.btn_fbp)
+
+        # 学习式后处理（研究三产物）。模型文件缺失或未装 onnxruntime 时保持禁用并说明
+        # 原因——与 organs.onnx 缺权重时同一套处理：功能可以缺，但不能假装能用。
+        self.btn_dl = QPushButton("深度学习重建 (CNN 后处理)"); self.btn_dl.setProperty("class", "ActionBtn")
+        self.btn_dl.setStyleSheet("background-color: #8E44AD; color: white;")
+        self.btn_dl.clicked.connect(self.run_dl_recon)
+        alay.addWidget(self.btn_dl)
         self.grp_algo.setLayout(alay)
         t2_lay.addWidget(self.grp_algo)
-        # DFR/BP/FBP 三个重建按钮在生成弦图前保持禁用，强制工作流顺序：先投影再重建
-        for b in [self.btn_dfr, self.btn_bp, self.btn_fbp]:
+        # DFR/BP/FBP/DL 四个重建按钮在生成弦图前保持禁用，强制工作流顺序：先投影再重建
+        for b in [self.btn_dfr, self.btn_bp, self.btn_fbp, self.btn_dl]:
             b.setEnabled(False)
+        # 模型或 onnxruntime 缺失时，按钮永久禁用并写明原因——比一个点了没反应的按钮诚实
+        import recon as _recon_lib
+        from constants import RECON_DL_MODEL as _DLM
+        from constants import RECON_DL_VIEWS as _DLV
+        self._dl_model_ready = _recon_lib.dl_available(_DLM)
+        if not self._dl_model_ready:
+            self.btn_dl.setToolTip(
+                f"未找到学习式重建模型（models/recon_dl_v{_DLV}.onnx）或未安装 onnxruntime。\n"
+                f"可用 `python experiments/recon_dl.py matrix` 训练后 `... export` 导出。")
+        else:
+            self.btn_dl.setToolTip(
+                f"先点「发射射线生成弦图」。\n"
+                f"注意：模型在 {_DLV} 视角下训练，用于其他视角数时效果会打折。\n"
+                f"输入须为 Ram-Lak(ramp) 滤波的 FBP —— 平滑滤波器已把细节滤掉，网络无从恢复。")
 
         # 矩阵重建分组：尺寸 / 方法 / 迭代次数 / DMR / ART 按钮
         self.grp_matrix = QGroupBox("直接矩阵重建 && ART / SIRT")

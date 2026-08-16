@@ -22,6 +22,7 @@
 #   python experiments/recon_dl.py            # 全跑（矩阵 + 幻觉 + 分布外 + 分辨率）
 #   python experiments/recon_dl.py matrix      # 只跑视角矩阵
 #   python experiments/recon_dl.py halluc ood res   # 按需单跑（复用已存权重）
+#   python experiments/recon_dl.py export           # 把 20 视角模型导出为 ONNX 供 GUI 使用
 #
 # 产出：experiments/results/recon_dl_*.{png,csv}（只新增，不覆盖已有产物）
 # 依赖：torch（见 requirements-experiments.txt）。App 运行不需要它——
@@ -486,6 +487,48 @@ def _plot_resolution(rows):
     print("    → results/recon_dl_resolution.png")
 
 
+def export_onnx(n_views=20, out=None):
+    """把训练好的网络导出为 ONNX，供 GUI 用已有的 onnxruntime 推理。
+
+    这样 App 不需要 torch——与 organs.onnx 同一套技术栈。
+    动态 batch 与空间维：GUI 的重建实验室图像尺寸可变（16/32/64/128…），
+    固定尺寸会让模型在非 128² 时直接拒绝加载。
+    """
+    wp = os.path.join(RESULTS, f"recon_dl_w{n_views}.pt")
+    if not os.path.exists(wp):
+        print(f"  缺少权重 {wp}，请先跑 `python experiments/recon_dl.py matrix`")
+        return None
+    ck = torch.load(wp, map_location='cpu', weights_only=False)
+    net = ResUNet(ck['ch']).cpu().eval()
+    net.load_state_dict({k: v.cpu() for k, v in ck['state'].items()})
+    out = out or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              "models", f"recon_dl_v{n_views}.onnx")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    torch.onnx.export(
+        net, torch.randn(1, 1, SIZE, SIZE), out,
+        input_names=['fbp'], output_names=['recon'], opset_version=17,
+        dynamic_axes={'fbp': {0: 'n', 2: 'h', 3: 'w'}, 'recon': {0: 'n', 2: 'h', 3: 'w'}})
+    mb = os.path.getsize(out) / 1e6
+    # 导出后必须核对数值：ONNX 与 torch 不一致会静默给出不同的重建图
+    try:
+        import onnxruntime as ort
+        sess = ort.InferenceSession(out, providers=['CPUExecutionProvider'])
+        x = np.random.RandomState(0).rand(1, 1, SIZE, SIZE).astype(np.float32)
+        with torch.no_grad():
+            ref = net(torch.from_numpy(x)).numpy()
+        got = sess.run(None, {'fbp': x})[0]
+        d = float(np.abs(ref - got).max())
+        print(f"  导出 {os.path.relpath(out)}  {mb:.1f}MB  "
+              f"ONNX vs torch 最大偏差 {d:.2e} {'✓' if d < 1e-4 else '✗ 偏差过大'}")
+        # 非 128² 也要能跑，否则 GUI 换图像尺寸就崩
+        x64 = np.random.RandomState(1).rand(1, 1, 64, 64).astype(np.float32)
+        sess.run(None, {'fbp': x64})
+        print("  动态尺寸自检：64² 输入可推理 ✓")
+    except ImportError:
+        print(f"  导出 {os.path.relpath(out)}  {mb:.1f}MB（未装 onnxruntime，跳过数值核对）")
+    return out
+
+
 def _read_csv(name):
     with open(os.path.join(RESULTS, name), encoding='utf-8-sig') as f:
         rows = list(csv.DictReader(f))
@@ -507,8 +550,13 @@ def replot():
 
 
 def main():
-    if 'plot' in [a.lower() for a in sys.argv[1:]]:
+    args_l = [a.lower() for a in sys.argv[1:]]
+    if 'plot' in args_l:
         replot(); return 0
+    if 'export' in args_l:
+        if not HAS_TORCH:
+            print("导出需要 torch"); return 1
+        export_onnx(20); return 0
     if not HAS_TORCH:
         print("需要 torch，见 experiments/requirements-experiments.txt"); return 1
     args = [a.lower() for a in sys.argv[1:]] or ['matrix', 'halluc', 'ood', 'res']

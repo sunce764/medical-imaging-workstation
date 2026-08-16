@@ -13,7 +13,7 @@
 **Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
 **Operating environment**: Windows / macOS / Linux desktop systems, Python 3.10; depends on PySide6, pydicom, NumPy, SciPy, scikit-image, ONNX Runtime.
 **Development language**: Python.
-**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 305 automated regression checks.
+**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 325 automated regression checks.
 **Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
 
 ---
@@ -218,7 +218,18 @@ In the "Direct matrix reconstruction & ART / SIRT" area, select the **image size
 - **Direct matrix reconstruction (DMR)**: solves the projection system of equations by least squares;
 - **ART / SIRT iterative reconstruction**: algebraic iterative reconstruction, with an error map and RMSE.
 
-### 9.4 Performance Monitoring
+### 9.4 Deep-Learning Reconstruction (CNN post-processing)
+
+Click **"DL Recon (CNN post-processing)"** to remove sparse-view FBP streak artefacts with a self-implemented residual U-Net. **V3 shows the network's input (ramp-FBP) and V4 its output**, so what the network actually changed can be compared directly.
+
+Method and quantitative results are in the [experiments guide](../experiments/README.md) and Study III of the [technical report](technical_report.md): on a random phantom family, RMSE is 3–6× lower than the best linear filter, lesion-contrast retention rises from a dose-independent 0.87 ceiling to 0.96–1.00, and the measured false-structure (hallucination) rate is 1.7% (0% beyond a 30% threshold).
+
+> **Three limitations are stated in the UI itself, not just in the docs:**
+> - **The model was trained at 20 views.** When the current view count differs, the V4 title is tagged "⚠ view mismatch" — results degrade at other view counts, and the software does not pretend otherwise.
+> - **The input is forced to Ram-Lak (ramp) FBP**, regardless of the filter dropdown above. Smoothing filters (Hann and friends) have already discarded the high frequencies — and the detail with them — at the filtering stage, and the network cannot recover what is gone; ramp keeps the information but leaves streaks, and streaks are what can be learned.
+> - **With the model or onnxruntime missing, the button stays disabled** and the tooltip explains why and how to obtain it. The repository ships only the 20 KB `.onnx` graph; the 7.7 MB weights (`.onnx.data`) must be trained and exported locally — the same convention as `organs.onnx`, and the two files must sit in the same directory.
+
+### 9.5 Performance Monitoring
 
 The "Algorithm performance monitoring" area displays in real time the running time of each reconstruction algorithm (as in Figure 9-1, "FBP (ram-lak) time: 254.9 ms").
 

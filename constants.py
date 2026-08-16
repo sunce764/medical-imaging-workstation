@@ -29,6 +29,13 @@ MODEL_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "models
 # 器官名候选表（由真实数据解剖推断，可被官方标签表替换）
 LABELS_JSON = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "models", "organ_labels_candidate.json")
 
+# 学习式稀疏角重建模型（研究三产物）。文件不存在时重建实验室的对应按钮保持禁用，
+# 与 organs.onnx 缺权重时降级同一套处理方式——功能可缺，但绝不假装能用。
+# 【重要】该模型在 20 视角下训练，用于其他视角数时效果会打折（GUI 会据此提示）。
+RECON_DL_VIEWS = 20
+RECON_DL_MODEL = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
+                               "models", f"recon_dl_v{RECON_DL_VIEWS}.onnx")
+
 # 手动 3D 追踪结果占用的专属标签值，避开 0-24 的模型类别，防止与器官语义冲突
 MANUAL_TRACK_LABEL = 255
 # 数学降级算法（无模型时）分出的肺，复用右肺叶标签以显示为肺色

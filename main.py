@@ -35,6 +35,7 @@ from constants import (
     LABEL_LUT,
     LABELS_JSON,
     MANUAL_TRACK_LABEL,
+    RECON_DL_VIEWS,
     SAGITTAL,
     TOOL_POINTER,
 )
@@ -319,6 +320,23 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         for _b in (self.btn_dfr, self.btn_bp, self.btn_fbp):
             _b.setToolTip("Generate the sinogram first — this algorithm reconstructs from it" if e
                           else "需要先点「发射射线生成弦图」——本算法由弦图反解图像")
+        # 学习式重建按钮：文案与「为什么禁用 / 有什么限制」的说明都要随语言切换
+        self.btn_dl.setText("DL Recon (CNN post-processing)" if e else "深度学习重建 (CNN 后处理)")
+        if getattr(self, '_dl_model_ready', False):
+            self.btn_dl.setToolTip(
+                (f"Generate the sinogram first.\nNote: the model was trained at "
+                 f"{RECON_DL_VIEWS} views; other view counts degrade the result.\n"
+                 f"Input is forced to Ram-Lak (ramp) FBP — smoothing filters have already "
+                 f"discarded the detail, which the network cannot recover.") if e else
+                (f"先点「发射射线生成弦图」。\n注意：模型在 {RECON_DL_VIEWS} 视角下训练，"
+                 f"用于其他视角数时效果会打折。\n输入强制为 Ram-Lak(ramp) 的 FBP —— "
+                 f"平滑滤波器已把细节滤掉，网络无从恢复。"))
+        else:
+            self.btn_dl.setToolTip(
+                (f"Model models/recon_dl_v{RECON_DL_VIEWS}.onnx not found, or onnxruntime "
+                 f"is missing. Train and export it via experiments/recon_dl.py.") if e else
+                (f"未找到模型 models/recon_dl_v{RECON_DL_VIEWS}.onnx，或未安装 onnxruntime。\n"
+                 f"可用 experiments/recon_dl.py 训练并导出。"))
 
         self._refresh_patient_info()   # 脱敏占位文字随语言刷新
         self.on_slice_changed(self.slider_slice.value())
@@ -443,7 +461,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.btn_mpr.setChecked(False)
         self.current_sinogram = None; self.current_theta = None
         self._last_recon_img = None
-        for b in [self.btn_dfr, self.btn_bp, self.btn_fbp]: b.setEnabled(False)
+        for b in [self.btn_dfr, self.btn_bp, self.btn_fbp, self.btn_dl]: b.setEnabled(False)
         # DMR/ART 只要有 DICOM 数据就可以运行（不依赖弦图）
         has_data = self.volume_hu is not None
         for b in [self.btn_dmr, self.btn_art]: b.setEnabled(has_data)

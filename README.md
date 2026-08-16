@@ -22,7 +22,7 @@ A desktop **CT imaging workstation** (PySide6/Qt6) that unites a clinical DICOM 
 - **AI multi-organ segmentation** — background sliding-window ONNX inference (25 classes, incl. 5 lung lobes). The shipped model was undocumented; its provenance was **recovered by measurement** — identified as TotalSegmentator v2 `class_map_part_organs`, with **mean Dice ≈ 0.92** over 21 organs on one ground-truth case (*n = 1*).
 - **Reconstruction lab (teaching)** — forward Radon and analytic inverses (BP, FBP with 5 apodisation filters) via scikit-image; **DFR, DMR, ART and SIRT inverse solvers implemented from first principles.**
 - **Three quantitative studies** — a reconstruction dose–quality characterisation (with a non-obvious filter-inversion finding), an AI-model provenance/Dice validation, and a **learned sparse-view reconstruction study that measures hallucination rather than assuming it away**. All drive the production code, are fully reproducible, and use no patient data.
-- **Engineered for review** — a God-object decomposed into 5 UI mixins + 8 Qt-free compute modules; a **305-check** offscreen-Qt regression suite with CI (reconstruction algorithms carry numerical-correctness assertions, not just "finite"); defensive DICOM handling.
+- **Engineered for review** — a God-object decomposed into 5 UI mixins + 8 Qt-free compute modules; a **325-check** offscreen-Qt regression suite with CI (reconstruction algorithms carry numerical-correctness assertions, not just "finite"); defensive DICOM handling.
 
 ## Screenshots
 
@@ -50,7 +50,7 @@ python main.py --data /path/to/dicom_dir # or load a DICOM directory on launch
 |---|---|
 | **Clinical reading** | Anatomical-sorted DICOM loading · tri-planar MPR + linked cross-hairs · 6 window presets + invert · **slab projection (MIP / MinIP / AIP) on all three planes** · 9 measurement/annotation tools · ellipse ROI (mean±SD / min-max HU / area) · four-corner PACS overlay · Cine playback · dual-series follow-up comparison with difference quantification |
 | **AI segmentation** | Auto background inference · colour overlay on all three planes with clickable legend · cursor HUD (HU / coords / organ) · per-organ quantification (volume mL, mean ± SD, median, p5–p95, min–max HU) with CSV export · **3D surface reconstruction (marching cubes) — drag-to-rotate preview, shape features, STL export** · brush/eraser editing with undo |
-| **Reconstruction lab** | Radon projection (60–360°, 1–4× sampling) · BP / FBP (5 filters) / DFR · DMR (least-squares) / ART / SIRT with error maps + RMSE |
+| **Reconstruction lab** | Radon projection (60–360°, 1–4× sampling) · BP / FBP (5 filters) / DFR · DMR (least-squares) / ART / SIRT with error maps + RMSE · **learned CNN post-processing (Study III), with its training view count and input-filter constraints surfaced in the UI** |
 | **Compliance** | Display-layer de-identification · persistent AI disclaimer · bilingual (EN / 中文) UI toggle |
 
 ## Quantitative studies
@@ -66,13 +66,13 @@ Reproduce via [`experiments/`](experiments/README.md) (scripts + figures + CSVs)
 ## Testing
 
 ```bash
-python tests/test_gui.py                     # full suite: 305 checks (needs local RIDER data)
+python tests/test_gui.py                     # full suite: 325 checks (needs local RIDER data)
 SKIP_REAL_DATA=1 python tests/test_gui.py    # data-independent subset (used by CI)
 ruff check .                                 # lint
 coverage run tests/test_gui.py && coverage report
 ```
 
-Offscreen Qt; exit code 0 = all pass. Coverage ≈ 79% — the eight Qt-free compute modules (`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d` / `registration`) are unit-tested in isolation at 77–100%, and mouse interaction is driven through synthesised press/move/release sequences with the emitted signals asserted (`graphics_view` 91%). The reconstruction-lab UI scheduling (`recon_lab` 44%) remains the least-covered layer. CI runs the data-independent subset on every push/PR — so a green CI is **not** the full 305 checks (interaction-layer tests need local data).
+Offscreen Qt; exit code 0 = all pass. Coverage ≈ 79% — the eight Qt-free compute modules (`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d` / `registration`) are unit-tested in isolation at 77–100%, and mouse interaction is driven through synthesised press/move/release sequences with the emitted signals asserted (`graphics_view` 91%). The reconstruction-lab UI scheduling (`recon_lab` 44%) remains the least-covered layer. CI runs the data-independent subset on every push/PR — so a green CI is **not** the full 325 checks (interaction-layer tests need local data).
 
 ## Documentation
 

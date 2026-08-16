@@ -10,6 +10,10 @@ Exported_Lesions/
 # ============================================================
 models/organs.onnx.data
 organs.onnx.data
+# 学习式重建模型的外部权重（7.7MB）。与 organs.onnx 同一套约定：仓库只提交 .onnx 图，
+# 权重由 `python experiments/recon_dl.py matrix && ... export` 以固定种子重建。
+# 注意 ONNX 按【相对 .onnx 的路径】解析 .data，两者必须同目录。
+models/recon_dl_v*.onnx.data
 
 # ============================================================
 # 缓存与生成物

@@ -599,6 +599,56 @@ def _roi_corr(a, b, n):
     return float(np.mean(x * y))
 
 
+def test_dl_recon_guard():
+    """学习式重建的可用性守卫与推理契约（纯函数，无 Qt / 真实数据）。
+
+    重点不是「模型好不好」——那是 experiments/recon_dl.py 的事——而是：
+    模型或 onnxruntime 缺失时必须如实返回不可用（调用方据此保持按钮禁用），
+    而不是让用户点一个会报错的按钮；模型在场时推理须保形状、保有限、保值域。
+    """
+    print("[学习式重建守卫]")
+    import recon as R
+    from constants import RECON_DL_MODEL, RECON_DL_VIEWS
+    check(RECON_DL_VIEWS == 20, f"模型训练视角常量为 20（得 {RECON_DL_VIEWS}）")
+    check(R.dl_available("/nonexistent/model.onnx") is False, "模型文件不存在 → 报告不可用")
+    check(R.dl_available("") is False, "空路径 → 报告不可用")
+    have = R.dl_available(RECON_DL_MODEL)
+    print(f"    本机模型就绪={have}（缺失时下列推理断言自动跳过，不算失败）")
+    if not have:
+        return
+    rng = np.random.RandomState(0)
+    for shape, tag in (((128, 128), '128²·训练尺寸'), ((64, 64), '64²·更小'),
+                       ((100, 100), '100²·非8倍数')):
+        x = rng.rand(*shape).astype(np.float32)
+        out, ms = R.compute_dl_recon(x, RECON_DL_MODEL)
+        check(out.shape == shape, f"{tag} 输出形状与输入一致（得 {out.shape}）")
+        check(bool(np.isfinite(out).all()), f"{tag} 输出全为有限值")
+    # 值域必须【还原到输入的量级】，不能只验「没跑飞」——初版断言写成 -3000<out<3000，
+    # 而实现里误用了 _finite_clip（为 DMR/ART 而写，硬 clip 到 [0,1]），输出被压成
+    # [0,1] 却照样满足那个宽松区间，bug 就这样被放过了。显示时又会重新归一化，肉眼看不出。
+    hu = (rng.rand(64, 64).astype(np.float32) * 1400 - 1000)
+    out, _ = R.compute_dl_recon(hu, RECON_DL_MODEL)
+    check(bool(np.isfinite(out).all()), "HU 量级输入输出全有限")
+    check(out.min() < -100 and out.max() > 100,
+          f"HU 输入的输出仍在 HU 量级，未被压到 [0,1]（得 [{out.min():.0f}, {out.max():.0f}]）")
+    # 与输入量级同阶：允许网络改变数值，但不该整体漂移一个数量级
+    check(abs(out.mean() - hu.mean()) < abs(hu.max() - hu.min()),
+          f"输出均值与输入同阶（输入 {hu.mean():.0f} vs 输出 {out.mean():.0f}）")
+    # NaN 防护：与 compute_fbp/compute_sinogram 一致，NaN 经卷积会扩散到整幅输出
+    bad = rng.rand(64, 64).astype(np.float32); bad[10:14, 10:14] = np.nan
+    out, _ = R.compute_dl_recon(bad, RECON_DL_MODEL)
+    check(bool(np.isfinite(out).all()), "含 NaN 输入仍产出全有限结果")
+    # 会话缓存：第二次调用不应重建 InferenceSession（否则每次重建白等数百毫秒）
+    import time as _t
+    x = rng.rand(128, 128).astype(np.float32)
+    R.compute_dl_recon(x, RECON_DL_MODEL)
+    t0 = _t.perf_counter(); R.compute_dl_recon(x, RECON_DL_MODEL)
+    t1 = _t.perf_counter(); R.compute_dl_recon(x, RECON_DL_MODEL)
+    t2 = _t.perf_counter()
+    check(abs((t2 - t1) - (t1 - t0)) < max(t1 - t0, 1e-3) * 3,
+          "重复调用耗时稳定（会话已缓存，未每次重建）")
+
+
 def test_recon_numerics():
     """重建算法数值正确性——解析可知的模体 + 已知性质，在 "finite" 之外真正验算法对不对。
 
@@ -1814,6 +1864,38 @@ def test_mesh_view(app):
     check(rel < 0.05, f"粗网格体积偏差 <5%，拖动中看到的仍是同一形状（得 {rel * 100:.1f}%）")
 
 
+def test_dl_recon_ui(v, app):
+    """学习式重建接入重建实验室：按钮状态随工作流与模型可用性，视角不匹配须标注。"""
+    print("[学习式重建接入]")
+    import recon as R
+    from constants import RECON_DL_MODEL, RECON_DL_VIEWS
+    saved_tab = v.tabs.currentIndex()
+    try:
+        v.tabs.setCurrentIndex(1); app.processEvents()
+        check(not v.btn_dl.isEnabled(), "未生成弦图时「深度学习重建」禁用")
+        ready = R.dl_available(RECON_DL_MODEL)
+        v.generate_sinogram(); app.processEvents()
+        check(v.btn_dl.isEnabled() == ready,
+              f"生成弦图后按钮状态 == 模型可用性（模型就绪={ready}，按钮={v.btn_dl.isEnabled()}）")
+        if not ready:
+            print("    本机无模型，跳过端到端断言"); return
+        # 视角不匹配：默认 180°×1 采样 ≠ 模型训练的 20 视角，标题必须标注出来
+        v.run_dl_recon(); app.processEvents()
+        t4 = v.views[4]['title_label'].text()
+        n_now = len(v.current_theta)
+        if n_now != RECON_DL_VIEWS:
+            check('不匹配' in t4 or 'mismatch' in t4.lower(),
+                  f"视角不匹配（{n_now} vs {RECON_DL_VIEWS}）时标题明确标注（得 …{t4[-40:]}）")
+        check('CNN' in t4, f"V4 标题标明是 CNN 后处理（得 {t4[:40]}）")
+        t3 = v.views[3]['title_label'].text()
+        check('ramp' in t3.lower(), f"V3 标明网络输入是 ramp-FBP（得 {t3[:40]}）")
+        # 换切片后按钮须重新禁用——旧弦图已作废，不能拿旧图配新层
+        v.slider_slice.setValue(v.slider_slice.value() + 1); app.processEvents()
+        check(not v.btn_dl.isEnabled(), "换切片后按钮重新禁用（旧弦图作废）")
+    finally:
+        v.tabs.setCurrentIndex(saved_tab); app.processEvents()
+
+
 def test_projection_ui(v, app):
     """厚层投影接入渲染路径：默认单层必须与原行为完全一致，切到 MIP 才改变画面。"""
     print("[厚层投影接入渲染]")
@@ -1980,6 +2062,7 @@ def main_run():
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
+        test_dl_recon_guard()
         test_recon_pipeline_helpers()
     else:
         v = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌"))
@@ -2012,6 +2095,7 @@ def main_run():
         test_dialog_i18n_coverage(app)
         test_i18n_persistent(app)
         test_projection_ui(v, app)
+        test_dl_recon_ui(v, app)
         test_mesh3d_ui(v, app)
         test_mesh_view(app)
         test_hu_conversion(app)
@@ -2027,6 +2111,7 @@ def main_run():
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
+        test_dl_recon_guard()
         test_recon_pipeline_helpers()
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0

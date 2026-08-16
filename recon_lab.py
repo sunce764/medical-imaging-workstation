@@ -19,6 +19,7 @@ from PySide6.QtGui import QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox, QProgressDialog
 
 import recon as recon_lib
+from constants import RECON_DL_MODEL, RECON_DL_VIEWS
 
 
 class ReconLabMixin:
@@ -50,7 +51,7 @@ class ReconLabMixin:
         """退出重建实验室：清空弦图缓存与按钮、恢复每视图工具栏控件、还原原布局。"""
         self.current_sinogram = None
         self._cached_bp = None; self._cached_bp_sino = None
-        for b in [self.btn_dfr, self.btn_bp, self.btn_fbp]:
+        for b in [self.btn_dfr, self.btn_bp, self.btn_fbp, self.btn_dl]:
             b.setEnabled(False)
         for vid, v in self.views.items():
             v['view'].image_item.setPixmap(QPixmap())
@@ -93,7 +94,7 @@ class ReconLabMixin:
             self.current_sinogram = None
             self._last_recon_img = None   # 换切片清链式源图，下次"生成弦图"从新层原图开始
             self._cached_bp = None; self._cached_bp_sino = None
-            for b in [self.btn_dfr, self.btn_bp, self.btn_fbp]:
+            for b in [self.btn_dfr, self.btn_bp, self.btn_fbp, self.btn_dl]:
                 b.setEnabled(False)
             self._set_recon_pending_titles()
 
@@ -200,6 +201,9 @@ class ReconLabMixin:
         self.set_view_title(2, f"V2 [Sinogram - {src_label}]")
         for b in [self.btn_dfr, self.btn_bp, self.btn_fbp]:
             b.setEnabled(True)
+        # DL 按钮额外要求模型与 onnxruntime 就绪——缺任一就一直禁用，不给用户
+        # 一个点了报错的按钮
+        self.btn_dl.setEnabled(bool(getattr(self, '_dl_model_ready', False)))
         # 生成新弦图后，V3/V4 的旧重建结果已作废，清空并更新提示标题
         self.views[3]['view'].image_item.setPixmap(QPixmap())
         self.views[4]['view'].image_item.setPixmap(QPixmap())
@@ -258,6 +262,40 @@ class ReconLabMixin:
         self.set_view_title(3, "V3 [BP Comparison]" if self.is_english else "V3 [未滤波反投影对比]")
         self.display_numpy_image(4, recon_fbp)
         self.set_view_title(4, f"V4 [FBP - {filter_name}]" if self.is_english else f"V4 [滤波反投影 FBP - {filter_name}]")
+
+    def run_dl_recon(self):
+        """学习式后处理重建：把 ramp-FBP 的条纹伪影交给 CNN 去除（研究三产物）。
+
+        V3 显示作为输入的 ramp-FBP，V4 显示网络输出，便于直接对比"改了什么"。
+
+        三处刻意的诚实处理，都写在界面上而非只写在文档里：
+          1) 输入**强制**用 ramp 而非下拉框里选的滤波器——模型以 ramp 为输入训练，
+             喂 hann 会偏，而这种偏差在图上看不出来，只会让结果悄悄变差；
+          2) 当前视角数与模型训练视角不一致时，标题明确标注"视角不匹配"——
+             模型只在 20 视角下训练过，用在别处效果打折，不能装作通用；
+          3) 缺模型或缺 onnxruntime 时按钮本就禁用，不会走到这里。
+        """
+        if self.current_sinogram is None or not getattr(self, '_dl_model_ready', False):
+            return
+        self._fit_recon_views(smooth=True)
+        # 强制 ramp：模型的训练输入就是 ramp-FBP
+        _, fbp_in = recon_lib.compute_fbp(self.current_sinogram, self.current_theta, 'ramp')
+        try:
+            out, ms = recon_lib.compute_dl_recon(fbp_in, RECON_DL_MODEL)
+        except Exception as ex:                       # 推理失败要说出来，不能静默留着旧图
+            QMessageBox.warning(self, "DL Recon Failed" if self.is_english else "深度学习重建失败",
+                                str(ex))
+            return
+        n_now = len(self.current_theta) if self.current_theta is not None else 0
+        mism = n_now != RECON_DL_VIEWS
+        e = self.is_english
+        self.lbl_time.setText(f"DL recon time: {ms:.1f} ms" if e else f"深度学习重建耗时: {ms:.1f} ms")
+        self.display_numpy_image(3, fbp_in)
+        self.set_view_title(3, "V3 [FBP ramp — network input]" if e else "V3 [FBP ramp — 网络输入]")
+        self.display_numpy_image(4, out)
+        tag = ((f" ⚠ view mismatch: model trained at {RECON_DL_VIEWS}, now {n_now}" if e
+                else f" ⚠ 视角不匹配：模型训练于 {RECON_DL_VIEWS} 视角，当前 {n_now}") if mism else "")
+        self.set_view_title(4, ("V4 [CNN post-processing]" if e else "V4 [CNN 后处理重建]") + tag)
 
     def run_dfr(self):
         """直接傅里叶重建法 (Direct Fourier Reconstruction, DFR)。

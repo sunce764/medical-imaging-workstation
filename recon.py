@@ -519,3 +519,69 @@ def compute_sirt(A: np.ndarray, p_vec: np.ndarray, n: int, n_iter: int,
 
     img_recon = _finite_clip(x, n)
     return img_recon, elapsed_ms
+
+
+# -------------------------------------------------------------------------
+# 学习式后处理重建（研究三产物，见 experiments/recon_dl.py）
+# -------------------------------------------------------------------------
+
+_DL_SESSION = None          # onnxruntime 会话缓存：每次重建都重建会话会白等数百毫秒
+_DL_SESSION_PATH = None
+
+
+def dl_available(model_path: str) -> bool:
+    """模型图、外部权重、onnxruntime 三者是否都就位。缺任一则调用方应保持功能禁用——
+    功能可以缺，但不能假装能用。
+
+    【为什么必须查 .data】torch.onnx 对超过阈值的权重采用外部数据格式：`.onnx` 只有
+    20KB 图，真正的 7.7MB 权重在同名 `.onnx.data` 里，且 ONNX 按【相对 .onnx 的路径】
+    解析它。仓库只提交图、不提交权重（与 organs.onnx / organs.onnx.data 同一套约定），
+    所以只查 `.onnx` 存在会让按钮在权重缺失时假装可用，点下去才报错。
+    """
+    if not model_path or not os.path.exists(model_path):
+        return False
+    ext_data = model_path + ".data"
+    if os.path.exists(ext_data) is False and os.path.getsize(model_path) < 1_000_000:
+        # 图很小又没有伴生权重文件 → 权重必然缺失
+        return False
+    try:
+        import onnxruntime  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def compute_dl_recon(fbp_img: np.ndarray, model_path: str) -> tuple[np.ndarray, float]:
+    """用学习式后处理网络去除稀疏角 FBP 的条纹伪影，返回 (重建图, 耗时ms)。
+
+    输入必须是 **ramp 滤波** 的 FBP：模型即以此为输入训练。喂 hann 的结果会偏——
+    hann 已在滤波阶段把高频连同细节滤掉，网络无从恢复那些信息。
+
+    归一化：模型在 [0,1] 值域的模体上训练，故按输入自身的极值线性映射进 [0,1]，
+    推理后再映射回原值域。不这样做的话，HU 量级的输入会完全落在训练分布之外。
+
+    非有限值防护：与 compute_fbp/compute_dfr 一致——NaN 经卷积会扩散到整幅输出。
+    """
+    import onnxruntime as ort
+    global _DL_SESSION, _DL_SESSION_PATH
+    start_t = time.perf_counter()
+    x = np.nan_to_num(np.asarray(fbp_img, np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    lo, hi = float(x.min()), float(x.max())
+    span = hi - lo if hi > lo else 1.0
+    xn = ((x - lo) / span).astype(np.float32)[None, None]
+    # 网络有 3 次 2× 下采样，边长须为 8 的倍数；不足则右下补零，推理后裁回
+    h, w = xn.shape[2], xn.shape[3]
+    ph, pw = (-h) % 8, (-w) % 8
+    if ph or pw:
+        xn = np.pad(xn, ((0, 0), (0, 0), (0, ph), (0, pw)), mode='edge')
+    if _DL_SESSION is None or _DL_SESSION_PATH != model_path:
+        _DL_SESSION = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+        _DL_SESSION_PATH = model_path
+    y = _DL_SESSION.run(None, {_DL_SESSION.get_inputs()[0].name: xn})[0]
+    y = y[0, 0, :h, :w]
+    out = y * span + lo                      # 映射回输入自身的值域
+    # 刻意不用 _finite_clip：它为 DMR/ART 而写，会把结果硬 clip 到 [0,1] 且只接受方阵。
+    # 本函数的输出必须留在输入的值域里（HU 输入就该给回 HU），clip 到 [0,1] 会把整幅
+    # 图压平——而这种破坏在显示时因为要重新归一化，肉眼完全看不出来。
+    out = np.nan_to_num(out, nan=0.0, posinf=hi, neginf=lo)
+    return out.astype(np.float32), (time.perf_counter() - start_t) * 1000
