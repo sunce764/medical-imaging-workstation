@@ -60,3 +60,10 @@ CLAUDE.md
 # 研究三的训练权重（每个约 7.6MB，5 档共约 38MB）。产物目录只提交图表与 CSV；
 # 权重可由 `python experiments/recon_dl.py matrix` 以固定种子完整重建，无需入库。
 experiments/results/recon_dl_w*.pt
+# 研究四的 3D 分割权重，同理不入库（可由固定种子与固定 commit 的数据重建）
+experiments/results/seg3d_w*.pt
+
+# 研究四的公开数据本地缓存（TotalSegmentator-CT-Lite 子集，约 2GB）。
+# 不入库：外部数据一律不随仓库分发；可由 `python experiments/seg3d_data.py fetch`
+# 从固定 commit 重新抓取，清单里的 SHA256 可验证拿到的是否逐字节相同。
+experiments/.seg3d_cache/

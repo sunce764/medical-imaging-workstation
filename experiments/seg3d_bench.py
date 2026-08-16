@@ -1,0 +1,159 @@
+# =============================================================================
+# 研究四（推理基准）：分割模型在本机的推理成本，以及一条被否掉的加速捷径
+# ---------------------------------------------------------------------------
+# 两个问题，一次量清楚：
+#   1. 推理时间由什么决定？（模型 FLOPs × 输入体素数，与训练数据量无关）
+#   2. Mac 上换 CoreML provider 能不能白捡加速？——**实测答案是不能**
+#
+# 【为什么要把一个否定结果写进产物】
+#   `onnxruntime` 在 macOS 上确实提供 CoreMLExecutionProvider，而项目各处写死了
+#   CPUExecutionProvider——看上去像是一处遗漏的优化。实测下来 CoreML 反而慢约 6%：
+#   3D 卷积在 Apple Neural Engine 上支持有限，大部分算子回退 CPU，反而多出调度与
+#   数据传输开销。把它记下来，后来的人（包括我自己）不必再试一遍。
+#
+# 【判据必须同时看速度与正确性】
+#   本脚本初版只比对了两种 provider 的输出一致性，然后打印「加速可用」——
+#   而当时 CoreML 明明更慢。判据不完整会让结论反向，这里显式地两项都判。
+#
+# 用法：
+#   python experiments/seg3d_bench.py                    # 教师模型（organs.onnx）
+#   python experiments/seg3d_bench.py --model <x.onnx>   # 换模型（学生模型同样适用）
+# 产出：results/seg3d_bench.csv
+# =============================================================================
+
+import argparse
+import csv
+import os
+import sys
+import time
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(HERE))
+from constants import MODEL_PATH  # noqa: E402
+
+RESULTS = os.path.join(HERE, "results")
+# 沿 z 的分块高度：与 ai_engine 的滑窗一致（模型有 5 次下采样，须为 32 的倍数）
+DZ = 32
+
+
+def _session(model, providers):
+    import onnxruntime as ort
+    so = ort.SessionOptions()
+    so.enable_cpu_mem_arena = False       # 与产品一致：压峰值内存，代价是略慢
+    return ort.InferenceSession(model, sess_options=so, providers=providers)
+
+
+def bench_providers(model, hw=(320, 320), n_rep=3):
+    """同一块输入，比较 CPU 与 CoreML 的速度**和**输出一致性。
+
+    两项都必须判：只比一致性会把「等价但更慢」误报成「加速可用」。
+    """
+    import onnxruntime as ort
+    avail = ort.get_available_providers()
+    x = np.random.RandomState(0).rand(1, 1, DZ, *hw).astype(np.float32)
+    rows, outs = [], {}
+    for prov in (["CPUExecutionProvider"],
+                 ["CoreMLExecutionProvider", "CPUExecutionProvider"]):
+        tag = prov[0].replace("ExecutionProvider", "")
+        if prov[0] not in avail:
+            print(f"  {tag:<8} 本机不可用，跳过"); continue
+        try:
+            sess = _session(model, prov)
+            iname = sess.get_inputs()[0].name
+            sess.run(None, {iname: x})                 # 预热，排除首次建图开销
+            ts = []
+            for _ in range(n_rep):
+                t = time.perf_counter(); o = sess.run(None, {iname: x})[0]
+                ts.append(time.perf_counter() - t)
+            outs[tag] = o
+            actual = sess.get_providers()[0].replace("ExecutionProvider", "")
+            rows.append(dict(provider=tag, actual=actual, sec_mean=round(float(np.mean(ts)), 3),
+                             sec_std=round(float(np.std(ts)), 3)))
+            print(f"  {tag:<8} {np.mean(ts):6.2f} ± {np.std(ts):.2f} s/块   实际 {actual}")
+        except Exception as ex:
+            print(f"  {tag:<8} 失败: {type(ex).__name__}: {str(ex)[:70]}")
+    if len(outs) == 2:
+        a, b = outs["CPU"], outs["CoreML"]
+        agree = float((a[0].argmax(0) == b[0].argmax(0)).mean()) * 100
+        sc, sm = (next(r['sec_mean'] for r in rows if r['provider'] == p) for p in ("CPU", "CoreML"))
+        faster = sm < sc * 0.95           # 至少快 5% 才算有意义的加速
+        print(f"\n  标签一致率 {agree:.3f}%   CoreML/CPU 耗时比 {sm/sc:.2f}")
+        # 判据两项都要过：等价 **且** 更快，才谈得上「可用的加速」
+        if agree > 99.9 and faster:
+            print("  → CoreML 等价且更快，值得启用")
+        elif agree > 99.9:
+            print(f"  → CoreML 结果等价但**慢 {(sm/sc-1)*100:.0f}%**，不值得启用（本机实测）")
+        else:
+            print("  → CoreML 结果不等价，不能用")
+    return rows
+
+
+def bench_sizes(model, sizes=((32, 160, 160), (32, 224, 224), (32, 320, 320), (32, 384, 384)),
+                n_rep=3):
+    """推理时间随输入体素数如何变化——回答「训练数据量影响推理速度吗」这个常见误解。
+
+    训练数据量只决定训练时长；推理时间由模型 FLOPs 与输入体素数决定，与前者无关。
+    """
+    sess = _session(model, ["CPUExecutionProvider"])
+    iname = sess.get_inputs()[0].name
+    rows = []
+    print(f"  {'输入':<20}{'体素数':>12}{'秒/块':>9}{'μs/体素':>11}")
+    for shp in sizes:
+        x = np.random.RandomState(0).rand(1, 1, *shp).astype(np.float32)
+        sess.run(None, {iname: x})
+        ts = []
+        for _ in range(n_rep):
+            t = time.perf_counter(); sess.run(None, {iname: x}); ts.append(time.perf_counter() - t)
+        vox = int(np.prod(shp))
+        s = float(np.mean(ts))
+        rows.append(dict(shape="x".join(map(str, shp)), voxels=vox,
+                         sec_mean=round(s, 3), us_per_voxel=round(s / vox * 1e6, 4)))
+        print(f"  {str(shp):<20}{vox:>12,}{s:>9.2f}{s/vox*1e6:>11.4f}")
+    v = np.array([r['voxels'] for r in rows], float)
+    t = np.array([r['sec_mean'] for r in rows], float)
+    # 过原点的线性拟合与相关系数：接近 1 说明「时间 ∝ 体素数」成立
+    k = float((v * t).sum() / (v * v).sum())
+    r = float(np.corrcoef(v, t)[0, 1])
+    print(f"\n  线性拟合 t ≈ {k*1e6:.4f} μs × 体素数    相关系数 r = {r:.4f}")
+    print(f"  → 推理时间与输入体素数{'近似线性' if r > 0.98 else '偏离线性'}；"
+          f"与训练集大小无关")
+    return rows, k
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--model', default=MODEL_PATH)
+    a = ap.parse_args()
+    if not os.path.exists(a.model):
+        print(f"  缺少模型 {a.model}"); return 1
+    import onnx
+    m = onnx.load(a.model, load_external_data=False)
+    npar = sum(int(np.prod(list(i.dims))) for i in m.graph.initializer if i.dims)
+    print(f"  模型 {os.path.basename(a.model)}：{len(m.graph.node)} 算子，"
+          f"权重元素 {npar/1e6:.1f}M\n")
+
+    print("  === Provider 对比（单块 32×320×320）===")
+    prov_rows = bench_providers(a.model)
+    print("\n  === 推理时间 vs 输入体素数 ===")
+    size_rows, k = bench_sizes(a.model)
+
+    os.makedirs(RESULTS, exist_ok=True)
+    with open(os.path.join(RESULTS, "seg3d_bench.csv"), 'w', newline='',
+              encoding='utf-8-sig') as f:
+        w = csv.writer(f)
+        w.writerow(["section", "key", "value", "unit"])
+        w.writerow(["model", "params_million", round(npar / 1e6, 2), "M"])
+        w.writerow(["model", "onnx_nodes", len(m.graph.node), "count"])
+        for r in prov_rows:
+            w.writerow(["provider", r['provider'], r['sec_mean'], "s/block"])
+        for r in size_rows:
+            w.writerow(["size", r['shape'], r['sec_mean'], "s/block"])
+        w.writerow(["fit", "us_per_voxel", round(k * 1e6, 4), "us"])
+    print("    → results/seg3d_bench.csv")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

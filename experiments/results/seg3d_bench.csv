@@ -1,0 +1,10 @@
+﻿section,key,value,unit
+model,params_million,31.19,M
+model,onnx_nodes,77,count
+provider,CPU,5.237,s/block
+provider,CoreML,5.682,s/block
+size,32x160x160,1.363,s/block
+size,32x224x224,2.63,s/block
+size,32x320x320,5.285,s/block
+size,32x384x384,7.638,s/block
+fit,us_per_voxel,1.6192,us
