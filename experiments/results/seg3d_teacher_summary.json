@@ -1,0 +1,53 @@
+{
+ "per_organ": [
+  {
+   "label": 10,
+   "organ": "lung_upper_lobe_left",
+   "n": 52,
+   "mean_dice": 0.8724,
+   "ci_lo": 0.8096,
+   "ci_hi": 0.9252
+  },
+  {
+   "label": 11,
+   "organ": "lung_lower_lobe_left",
+   "n": 53,
+   "mean_dice": 0.9401,
+   "ci_lo": 0.9116,
+   "ci_hi": 0.9637
+  },
+  {
+   "label": 12,
+   "organ": "lung_upper_lobe_right",
+   "n": 31,
+   "mean_dice": 0.7273,
+   "ci_lo": 0.59,
+   "ci_hi": 0.8447
+  },
+  {
+   "label": 13,
+   "organ": "lung_middle_lobe_right",
+   "n": 48,
+   "mean_dice": 0.8734,
+   "ci_lo": 0.8016,
+   "ci_hi": 0.9349
+  },
+  {
+   "label": 14,
+   "organ": "lung_lower_lobe_right",
+   "n": 50,
+   "mean_dice": 0.9565,
+   "ci_lo": 0.9286,
+   "ci_hi": 0.9778
+  }
+ ],
+ "overall_mean": 0.8866940170940171,
+ "overall_ci": [
+  0.8586739957264956,
+  0.9138862820512821
+ ],
+ "n_lobe_instances": 234,
+ "n_cases": 57,
+ "infer_sec_mean": 36.31984214617548,
+ "peak_gb_mean": 4.89474380225466
+}
