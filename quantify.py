@@ -41,11 +41,17 @@ def compute_organ_stats(volume_hu: np.ndarray, volume_mask: np.ndarray,
     # counts=0 的除法，抛 invalid-value 警告——传进去的 present 全都有体素，是 scipy
     # 的实现细节而非本函数的问题（结果已由单测对手算值验证）。局部抑制，避免每次
     # 器官定量都刷警告；不用全局 seterr，以免掩盖别处的真实数值异常。
+    # 标签含 254/255 时必须先加宽类型：scipy 的 _select 内部做 np.zeros(labels.max() + 2)，
+    # labels 为 uint8 时 255+2 溢出回绕成 1，于是分配出长度 1 的数组，再按标签值索引就
+    # IndexError。本项目的 MANUAL_TRACK_LABEL 正是 255（3D 追踪工具的专属标签），
+    # 追踪完立刻调本函数 → 必崩。实测：mask 只要出现 255，无论是否同时含其他标签都会崩。
+    # 仅在真的出现高位标签时才拷贝，正常 AI 分割（标签 1–24）零额外开销。
+    lbl = volume_mask.astype(np.int32) if counts[254:].any() else volume_mask
     with np.errstate(invalid='ignore', divide='ignore'):
-        means = np.atleast_1d(ndimage.mean(volume_hu, labels=volume_mask, index=present))
-        sds = np.atleast_1d(ndimage.standard_deviation(volume_hu, labels=volume_mask, index=present))
-        mins = np.atleast_1d(ndimage.minimum(volume_hu, labels=volume_mask, index=present))
-        maxs = np.atleast_1d(ndimage.maximum(volume_hu, labels=volume_mask, index=present))
+        means = np.atleast_1d(ndimage.mean(volume_hu, labels=lbl, index=present))
+        sds = np.atleast_1d(ndimage.standard_deviation(volume_hu, labels=lbl, index=present))
+        mins = np.atleast_1d(ndimage.minimum(volume_hu, labels=lbl, index=present))
+        maxs = np.atleast_1d(ndimage.maximum(volume_hu, labels=lbl, index=present))
     rows = []
     for i, lid in enumerate(present):
         zh, en = organ_names.get(lid, (f"类{lid}", f"cls{lid}"))

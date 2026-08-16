@@ -1235,6 +1235,38 @@ def test_i18n_persistent(app):
     check(not residue, "英文模式无中文残留常驻控件" + (f" — 残留: {residue}" if residue else ""))
 
 
+def test_quantify_high_label():
+    """标签含 254/255 时的器官定量：scipy 在 uint8 下 labels.max()+2 溢出会崩。
+
+    背景：MANUAL_TRACK_LABEL = 255 是 3D 追踪工具的专属标签，追踪完立刻调用
+    _update_organ_stats() → 必崩。而 299 项测试全绿——因为测试里的定量用例
+    从没用过 255 这一档标签，是纯粹的取值盲区。
+    """
+    print("[高位标签器官定量（uint8 溢出防护）]")
+    import quantify
+    from constants import MANUAL_TRACK_LABEL
+    rng = np.random.RandomState(0)
+    vol = rng.uniform(-1000, 400, (6, 32, 32)).astype(np.float32)
+    names = {5: ("肝", "Liver"), MANUAL_TRACK_LABEL: ("手动追踪", "Manual")}
+    for tag, labels in (("只含 255（3D 追踪后）", [MANUAL_TRACK_LABEL]),
+                        ("同时含 5 与 255", [5, MANUAL_TRACK_LABEL]),
+                        ("只含 254（边界）", [254])):
+        msk = np.zeros(vol.shape, np.uint8)
+        for i, lab in enumerate(labels):
+            msk[i, 4 + i * 8:12 + i * 8, 4:12] = lab
+        crashed, st = False, []
+        try:
+            st = quantify.compute_organ_stats(vol, msk, (1., 1., 1.), names)
+        except Exception as ex:
+            crashed = True; print("   ", type(ex).__name__, ex)
+        check(not crashed and len(st) == len(labels),
+              f"{tag} 定量不崩且返回 {len(labels)} 项（得 {len(st)}）")
+        # 不能只验「不崩」：加宽类型后数值必须仍与逐标签手算一致
+        if st:
+            ok = all(abs(r['mean_hu'] - float(vol[msk == r['id']].mean())) < 1e-3 for r in st)
+            check(ok, f"{tag} 均值与手算逐项一致")
+
+
 def test_quantify():
     """器官定量纯函数直接单测——用合成数组，不构造 MedicalViewer，证明逻辑已解耦。"""
     print("[器官定量纯函数 quantify.compute_organ_stats]")
@@ -1939,6 +1971,7 @@ def main_run():
                   test_mesh_view, test_ai_failure_visible):
             t(app)
         test_quantify()      # 纯函数单测，无需 app / 真实数据
+        test_quantify_high_label()
         test_lung_fallback()
         test_followup()
         test_registration()
@@ -1985,6 +2018,7 @@ def main_run():
         test_mask_cache_roundtrip(app)
         test_mouse_interaction(app)
         test_quantify()
+        test_quantify_high_label()
         test_lung_fallback()
         test_followup()
         test_registration()
