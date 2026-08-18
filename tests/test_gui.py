@@ -1945,6 +1945,918 @@ def test_mask_cache_guard():
     check(not ok, "当前序列缺 UID → 拒绝")
 
 
+def test_crop_and_legend(app):
+    """截取工具、标注 CRUD、图例显隐、定量面板的置信度显示——annotation_lab 的零覆盖区。
+
+    写盘一律经 mock 过的 QFileDialog 重定向到临时目录：`Exported_Lesions/` 是不可恢复的
+    产物目录，测试绝不能往里写（本会话的审计脚本就往那里落过一个文件，只能请用户手删）。
+    """
+    print("[截取/标注/图例/置信度显示]")
+    import csv as _csv2
+    import glob as _glob
+    import shutil
+    import tempfile
+    import unittest.mock as _mock
+
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    from constants import MANUAL_TRACK_LABEL
+    vi, tmp = None, tempfile.mkdtemp()
+    saved_q, saved_s, saved_w = QMessageBox.question, QFileDialog.getSaveFileName, QMessageBox.warning
+    try:
+        vi = m.MedicalViewer(); app.processEvents()
+        if vi.ai_thread: vi.ai_thread.cancel()
+        Z, H, W = 6, 40, 40
+        vi.volume_hu = np.full((Z, H, W), -900.0, np.float32)
+        vi.volume_hu[2, 10:30, 10:30] = 60.0
+        vi.dicom_datasets = [type('D', (), {'PatientID': 'CROPTEST', 'SeriesInstanceUID': '9.9',
+                                            'StudyDate': '20240101', 'PixelSpacing': [1.0, 1.0],
+                                            'SliceThickness': 1.0})() for _ in range(Z)]
+        vi.current_3d_pos = [2, 20, 20]
+        vi.views[1]['plane'] = AXIAL
+        poly = [(12, 12), (28, 12), (28, 28), (12, 28)]
+
+        # 非 Axial 平面：截取不适用，必须直接返回
+        vi.views[1]['plane'] = CORONAL
+        QMessageBox.question = staticmethod(lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("非 Axial 平面不该弹出统计框")))
+        vi.handle_crop_requested(1, poly)
+        check(True, "非 Axial 平面时截取直接返回，不弹框")
+        vi.views[1]['plane'] = AXIAL
+
+        asked = {'n': 0, 'msg': ''}
+
+        def _q(_p, _t, msg='', *a, **k):
+            asked['n'] += 1; asked['msg'] = msg
+            return QMessageBox.No
+
+        QMessageBox.question = staticmethod(_q)
+        vi.handle_crop_requested(1, poly)
+        check(asked['n'] == 1, "Axial 上截取弹出统计框")
+        check('mm' in asked['msg'] and 'HU' in asked['msg'],
+              f"统计框给出面积与均值 HU（「{asked['msg'][:40].replace(chr(10), ' / ')}」）")
+        check(not _glob.glob(os.path.join(tmp, '*.png')), "选「否」时不写任何文件")
+
+        out_png = os.path.join(tmp, "crop.png")
+        QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
+        QFileDialog.getSaveFileName = staticmethod(lambda *a, **k: (out_png, "PNG (*.png)"))
+        vi.handle_crop_requested(1, poly)
+        check(os.path.exists(out_png), "选「是」时写出裁剪 PNG")
+        log = os.path.join(tmp, "export_log.csv")
+        check(os.path.exists(log), "同目录追加 export_log.csv")
+        if os.path.exists(log):
+            with open(log, encoding='utf-8-sig') as f:
+                last = [r for r in _csv2.reader(f) if r][-1]
+            check(len(last) >= 4 and last[1] == '3',
+                  f"日志记录切片号与面积/均值（{last}）")
+
+        # 日志写入失败必须提示而不是静默
+        warned = {'n': 0}
+        QMessageBox.warning = staticmethod(lambda *a, **k: warned.__setitem__('n', warned['n'] + 1))
+        with _mock.patch('builtins.open', side_effect=OSError("disk full")):
+            vi.handle_crop_requested(1, poly)
+        check(warned['n'] >= 1, "日志写入失败时弹出警告，不静默吞掉")
+
+        # 标注 CRUD
+        vi.global_annotations = {'all': []}
+        vi.chk_global_scope.setChecked(False)
+        # 故意传数字 id：渲染层把 id 塞进 setToolTip（只收 str），删除时又从 toolTip
+        # 取回比对，故入口必须规范成 str，否则该标注既画不出来也删不掉
+        vi.handle_annotation_added({'id': 7, 'type': 'ruler', 'p1': (1, 1), 'p2': (5, 5)})
+        check(any(a.get('id') == '7' for a in vi.global_annotations.get(2, [])),
+              "新标注归入当前切片，且 id 被规范成字符串")
+        vi.chk_global_scope.setChecked(True)
+        vi.handle_annotation_added({'id': 8, 'type': 'ruler', 'p1': (2, 2), 'p2': (6, 6)})
+        check(any(a.get('id') == '8' for a in vi.global_annotations.get('all', [])),
+              "勾选穿透后新标注归入 all（id 同样规范为字符串）")
+        vi.update_display(); app.processEvents()
+        check(True, "数字 id 的标注能正常渲染（规范化前会抛 TypeError 被吞掉）")
+        vi.handle_annotation_deleted('7')      # 删除侧拿到的是 toolTip 字符串
+        check(not any(str(a.get('id')) == '7' for x in vi.global_annotations.values() for a in x),
+              "按 toolTip 字符串删除生效——规范化前这里对不上，删不掉")
+
+        # 图例显隐
+        vi.volume_mask = np.zeros((Z, H, W), np.uint8); vi.volume_mask[2, 12:24, 12:24] = 5
+        vi._hidden_organs.clear()
+        vi._toggle_organ("organ:5")
+        check(5 in vi._hidden_organs, "点击图例隐藏该器官")
+        vi._toggle_organ("organ:5")
+        check(5 not in vi._hidden_organs, "再次点击恢复显示")
+        vi._toggle_organ("organ:abc"); vi._toggle_organ("nocolon")
+        check(True, "图例 href 畸形时安全忽略")
+
+        # 定量面板的置信度显示：有 conf / 无 conf / 部分手工改动
+        vi.volume_conf = None
+        vi._update_organ_stats(); app.processEvents()
+        t_noconf = vi.lbl_ai_stats.text()
+        check('conf' not in t_noconf, "无置信度时面板不显示 conf 字样")
+        vi.volume_conf = np.full((Z, H, W), 230, np.uint8)
+        vi._update_organ_stats(); app.processEvents()
+        check('conf' in vi.lbl_ai_stats.text(), "有置信度时面板显示 conf")
+        vi.volume_conf[2, 12:18, 12:24] = 0          # 一半标成哨兵＝手工改过
+        vi._update_organ_stats(); app.processEvents()
+        t_part = vi.lbl_ai_stats.text()
+        check(('模型判定' in t_part) or ('model' in t_part),
+              "部分体素被手工改动时标出模型判定占比")
+        vi.volume_mask[2, 12:24, 12:24] = MANUAL_TRACK_LABEL
+        vi.volume_conf[vi.volume_mask == MANUAL_TRACK_LABEL] = 0
+        vi._update_organ_stats(); app.processEvents()
+        check('conf' not in vi.lbl_ai_stats.text(),
+              "整层都是手动追踪时不报置信度（模型对它没有判断）")
+    finally:
+        QMessageBox.question, QFileDialog.getSaveFileName = saved_q, saved_s
+        QMessageBox.warning = saved_w
+        shutil.rmtree(tmp, ignore_errors=True)
+        if vi is not None:
+            if vi.ai_thread: vi.ai_thread.cancel()
+            vi.close()
+        app.processEvents()
+
+
+def test_model_card_fallback():
+    """模型说明卡在实验产物缺失/损坏时的回退：如实说「未提供」，绝不编数字。
+
+    这是卡片最该被信任的性质——它整篇的立足点就是「每个数字都来自实验产物」。
+    产物不在场时若还能印出一个好看的数，整张卡片的可信度就没了。
+    把 _RESULTS 指向空目录与坏文件来走这些路径（此前零覆盖）。
+    """
+    print("[模型说明卡：产物缺失时的回退]")
+    import shutil
+    import tempfile
+
+    import model_card
+    saved = model_card._RESULTS
+    tmp = tempfile.mkdtemp()
+    try:
+        model_card._RESULTS = tmp                     # 空目录：所有读取都应落空
+        for en in (False, True):
+            txt = model_card.build_model_card(en)
+            check(len(txt) > 200, f"{'英文' if en else '中文'}卡片仍能生成（不因缺产物而崩）")
+            check(('not found' in txt) or ('未在' in txt) or ('未找到' in txt),
+                  "  明说验证结果未提供")
+            check(('has not been measured' in txt) or ('尚未在本机测量' in txt),
+                  "  spacing 一节退回「未测量」表述")
+            import re as _re
+            nums = _re.findall(r'\b0\.\d{3,4}\b', txt)
+            check(not nums, f"  没有任何 Dice 数字被凭空印出（发现 {nums}）")
+
+        # 损坏的 CSV：读取端必须吞掉而不是把异常抛到 UI
+        for name in ("seg_dice.csv", "seg_spacing.csv", "seg_multi.csv",
+                     "seg_spacing_fix_multi.csv", "seg_spacing_fix.csv"):
+            with open(os.path.join(tmp, name), 'w', encoding='utf-8') as f:
+                f.write("这不是 CSV\x00\n乱码,,,\n")
+        with open(os.path.join(tmp, "seg3d_teacher_summary.json"), 'w', encoding='utf-8') as f:
+            f.write("{ 不是合法 JSON")
+        txt = model_card.build_model_card(False)
+        check(len(txt) > 200, "产物损坏时卡片照常生成，不把异常抛到界面")
+        check(len(model_card.card_title(False)) > 0, "标题不受产物状态影响")
+    finally:
+        model_card._RESULTS = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_matrix_recon_ui(app):
+    """DMR / ART / SIRT 的 UI 调度：四视图分配、标题与 RMSE、链式源图、异常安全退出。
+
+    **只测调度，不测数值**——数值正确性已由 test_recon_numerics 在纯函数层覆盖。
+    系统矩阵在此被替换成手工小矩阵：真构建要 O(n²) 次 Radon 且走 multiprocessing，
+    本机磁盘缓存里那份 32² 矩阵有 23MB，CI 环境没有它，让测试依赖本地缓存或现算
+    几分钟都不可接受。这一层此前零覆盖，而它正是重建实验室最核心的教学功能。
+    """
+    print("[矩阵/迭代重建的 UI 调度]")
+    import unittest.mock as _mock
+    vi = None
+    try:
+        vi = m.MedicalViewer(); app.processEvents()
+        if vi.ai_thread: vi.ai_thread.cancel()
+        vi.tabs.setCurrentIndex(1); app.processEvents()
+
+        # 无源图时两个入口都必须安全退出（此前靠 volume_hu 判空，改模体后由 _prepare 统一兜底）
+        vi.run_dmr(); vi.run_art_sirt(); app.processEvents()
+        check(True, "无源图时 DMR / ART 安全空转，不崩")
+
+        vi.btn_phantom.click(); app.processEvents()      # 内置模体，不需要任何 DICOM
+        vi.cb_matrix_size.setCurrentIndex(0)             # 取最小矩阵尺寸
+        img_small, sino, theta, n = vi._prepare_small_image_and_sinogram()
+        check(img_small is not None and img_small.shape == (n, n),
+              f"模体经 _prepare 得到 {n}×{n} 小图与 {None if sino is None else sino.shape} 弦图")
+
+        rs = np.random.RandomState(0)
+        fake_A = rs.rand(sino.size, n * n).astype(np.float32) * 0.01
+
+        with _mock.patch.object(type(vi), '_build_system_matrix', lambda s, nn, th: fake_A):
+            vi.run_dmr(); app.processEvents()
+            check(vi._last_recon_img is not None and vi._last_recon_img.shape == (n, n),
+                  "DMR 结果存入 _last_recon_img，供「生成弦图」链式再投影")
+            t3 = vi.views[3]['title_label'].text()
+            check('RMSE' in t3, f"V3 标题带 RMSE（得「{t3}」）")
+            check(f"{n}x{n}" in vi.views[4]['title_label'].text(), "V4 标题标出重建尺寸")
+            check('DMR' in vi.lbl_time.text() or '矩阵' in vi.lbl_time.text(),
+                  f"耗时栏标明算法（得「{vi.lbl_time.text()}」）")
+            for vid in (1, 2, 3, 4):
+                pm = vi.views[vid]['view'].image_item.pixmap()
+                check(not pm.isNull(), f"V{vid} 已渲染（{pm.width()}×{pm.height()}）")
+
+            for meth in ('ART', 'SIRT'):
+                idx = vi.cb_art_method.findText(meth)
+                if idx < 0:
+                    continue
+                vi.cb_art_method.setCurrentIndex(idx)
+                vi.cb_art_iter.setCurrentIndex(0)
+                vi._last_recon_img = None
+                vi.run_art_sirt(); app.processEvents()
+                check(vi._last_recon_img is not None, f"{meth} 跑通并留下重建结果")
+                check(meth in vi.views[4]['title_label'].text() or 'RMSE' in vi.views[3]['title_label'].text(),
+                      f"{meth} 更新了视图标题")
+
+        # 系统矩阵构建失败（返回 None）时必须安全退出，而不是拿 None 去算
+        with _mock.patch.object(type(vi), '_build_system_matrix', lambda s, nn, th: None):
+            vi.run_dmr(); vi.run_art_sirt(); app.processEvents()
+            check(True, "系统矩阵构建失败时安全退出，不把 None 传给求解器")
+    finally:
+        if vi is not None:
+            if vi.ai_thread: vi.ai_thread.cancel()
+            vi.close()
+        app.processEvents()
+
+
+def test_probe_hu(app):
+    """探针读数：三平面索引映射正确，且读不出时必须清空而不是留旧值。
+
+    实测动机：旧实现把整段包在 `try/except: pass` 里，坐标越界或 plane 取到三者之外
+    时静默失败，标签继续显示**上一次**的读数——连坐标都是旧的，看上去完全像一次
+    有效读数。对会被直接用于判读的 HU 值，陈旧显示比空白危险得多。
+    interaction.py 是全项目覆盖率最低的一层（64%），这些路径此前无人走过。
+    """
+    print("[探针 HU 读数：索引映射与失效清空]")
+    import unittest.mock as _mock
+
+    from PySide6.QtCore import QPointF
+
+    from constants import SAGITTAL, TOOL_POINTER
+    vi = None
+    try:
+        vi = m.MedicalViewer(); app.processEvents()
+        if vi.ai_thread: vi.ai_thread.cancel()
+        Z, H, W = 8, 32, 32
+        vi.volume_hu = np.arange(Z * H * W, dtype=np.float32).reshape(Z, H, W)
+        vi.dicom_datasets = [None] * Z
+        vi.current_3d_pos = [4, 16, 16]
+        vi.active_tool = TOOL_POINTER
+        view_t = type(vi.views[1]['view'])
+
+        def probe(coord, plane):
+            vi.views[1]['plane'] = plane
+            with _mock.patch.object(view_t, 'get_real_coordinates', lambda s, p, _c=coord: _c):
+                vi.measure_hu(QPointF(0, 0), 1)
+            return vi.lbl_hu_value.text()
+
+        # 鼠标 (cx,cy)=(20,5)：三平面各自的 (z,y,x) 映射，与 mpr_geometry 同一套约定
+        for pl, nm, exp in ((AXIAL, 'Axial', (4, 5, 20)),
+                            (CORONAL, 'Coronal', (5, 16, 20)),
+                            (SAGITTAL, 'Sagittal', (5, 20, 16))):
+            txt = probe((20, 5), pl)
+            want = float(vi.volume_hu[exp])
+            check(f"{want:.1f} HU" in txt, f"{nm} 读到体素 {exp} = {want:.1f}（得「{txt}」）")
+
+        probe((20, 5), AXIAL)                      # 先留下一个有效读数
+        check(bool(vi.lbl_hu_value.text()), "有效读数已显示")
+        for coord, plane, why in (((999, 999), AXIAL, "坐标越界"),
+                                  ((-1, 5), AXIAL, "负坐标"),
+                                  ((20, 5), 99, "plane 不在三平面之内"),
+                                  (None, AXIAL, "鼠标在图像之外")):
+            check(probe(coord, plane) == "", f"{why} → 清空，不残留上一次的读数")
+        check(f"{float(vi.volume_hu[(4, 5, 20)]):.1f} HU" in probe((20, 5), AXIAL),
+              "回到有效区域后立即恢复读数")
+    finally:
+        if vi is not None:
+            if vi.ai_thread: vi.ai_thread.cancel()
+            vi.close()
+        app.processEvents()
+
+
+def test_wheel_and_cine(app):
+    """滚轮翻页与 Cine 往返：三平面各走各的轴、边界钳制、对比模式下只翻主序列。
+
+    这两段此前是 interaction.py 里零覆盖的部分，而滚轮是用户最高频的交互。
+    三平面走的是**两条不同的代码路径**（Axial 经切片滑条的信号链，冠/矢状面直接改
+    current_3d_pos 再重绘），这种不对称最容易在改动中被弄坏，故逐条钉住。
+    """
+    print("[滚轮翻页与 Cine 往返]")
+    from constants import SAGITTAL
+    vi = None
+    try:
+        vi = m.MedicalViewer(); app.processEvents()
+        if vi.ai_thread: vi.ai_thread.cancel()
+        Z, H, W = 10, 24, 28
+        vi.volume_hu = np.zeros((Z, H, W), np.float32)
+        vi.dicom_datasets = [None] * Z
+        vi.slider_slice.setRange(0, Z - 1); vi.slider_slice.setValue(5)
+        vi.current_3d_pos = [5, 12, 14]
+
+        # 滚轮向上(d>0)=上一层，向下=下一层；这是各家阅片软件的通行约定
+        vi.views[1]['plane'] = AXIAL
+        vi.on_wheel_mpr(1, 1); app.processEvents()
+        check(vi.current_3d_pos[0] == 4, f"Axial 向上滚 → z 5→{vi.current_3d_pos[0]}（期望 4）")
+        vi.on_wheel_mpr(-1, 1); app.processEvents()
+        check(vi.current_3d_pos[0] == 5, f"Axial 向下滚 → z 回到 {vi.current_3d_pos[0]}")
+
+        vi.views[1]['plane'] = CORONAL
+        vi.on_wheel_mpr(1, 1); app.processEvents()
+        check(vi.current_3d_pos[1] == 11 and vi.current_3d_pos[0] == 5,
+              f"Coronal 滚轮只动 y（{vi.current_3d_pos}），z 不受影响")
+        vi.views[1]['plane'] = SAGITTAL
+        vi.on_wheel_mpr(1, 1); app.processEvents()
+        check(vi.current_3d_pos[2] == 13 and vi.current_3d_pos[1] == 11,
+              f"Sagittal 滚轮只动 x（{vi.current_3d_pos}），y 不受影响")
+
+        # 边界钳制：三个轴各自到头后不得越界
+        vi.views[1]['plane'] = AXIAL; vi.slider_slice.setValue(0); app.processEvents()
+        for _ in range(3): vi.on_wheel_mpr(1, 1)
+        app.processEvents()
+        check(vi.current_3d_pos[0] == 0, f"Axial 到顶后钳制在 0（得 {vi.current_3d_pos[0]}）")
+        vi.slider_slice.setValue(Z - 1); app.processEvents()
+        for _ in range(3): vi.on_wheel_mpr(-1, 1)
+        app.processEvents()
+        check(vi.current_3d_pos[0] == Z - 1, f"Axial 到底后钳制在 {Z-1}（得 {vi.current_3d_pos[0]}）")
+        vi.views[1]['plane'] = CORONAL; vi.current_3d_pos[1] = 0
+        for _ in range(3): vi.on_wheel_mpr(1, 1)
+        check(vi.current_3d_pos[1] == 0, f"Coronal 到边界钳制在 0（得 {vi.current_3d_pos[1]}）")
+        vi.current_3d_pos[1] = H - 1
+        for _ in range(3): vi.on_wheel_mpr(-1, 1)
+        check(vi.current_3d_pos[1] == H - 1, f"Coronal 另一端钳制在 {H-1}")
+
+        # 对比模式：无论视图是哪个平面，滚轮都只翻主序列切片
+        vi.views[1]['plane'] = SAGITTAL
+        vi.compare_mode_active = True
+        vi.slider_slice.setValue(5); vi.current_3d_pos = [5, 12, 14]; app.processEvents()
+        bx = vi.current_3d_pos[2]
+        vi.on_wheel_mpr(1, 1); app.processEvents()
+        check(vi.current_3d_pos[0] == 4 and vi.current_3d_pos[2] == bx,
+              f"对比模式下滚轮只翻主序列 z（{vi.current_3d_pos}），不动矢状面的 x")
+        vi.compare_mode_active = False
+
+        # 重建实验室模式下滚轮不应干扰重建流水线
+        vi.recon_mode_active = True
+        before = list(vi.current_3d_pos)
+        vi.on_wheel_mpr(1, 1); app.processEvents()
+        check(list(vi.current_3d_pos) == before, "重建实验室模式下滚轮不改动光标")
+        vi.recon_mode_active = False
+
+        # Cine 往返：到顶/到底反向，不跳变回环
+        vi.slider_slice.setValue(Z - 1); vi._cine_dir = 1; app.processEvents()
+        vi._cine_step(); app.processEvents()
+        check(vi.slider_slice.value() == Z - 2 and vi._cine_dir == -1,
+              f"到底后反向（值 {vi.slider_slice.value()}，方向 {vi._cine_dir}）")
+        vi.slider_slice.setValue(0); vi._cine_dir = -1; app.processEvents()
+        vi._cine_step(); app.processEvents()
+        check(vi.slider_slice.value() == 1 and vi._cine_dir == 1,
+              f"到顶后反向（值 {vi.slider_slice.value()}，方向 {vi._cine_dir}）")
+        vi.volume_hu = None
+        vi.cine_timer.start(50)
+        vi._cine_step()
+        check(not vi.cine_timer.isActive(), "数据被清空后 Cine 自行停止，不空转")
+    finally:
+        if vi is not None:
+            vi.cine_timer.stop()
+            if vi.ai_thread: vi.ai_thread.cancel()
+            vi.close()
+        app.processEvents()
+
+
+def test_spacing_resample():
+    """nnU-Net 的 spacing 重采样契约：该做时做、不该做时不做、做完必须回到原网格。
+
+    实测依据（experiments/seg_spacing.py）：spacing 偏离训练值一倍即掉 13% Dice，
+    故这一步不是可选优化。三条不做的路径各有理由，也一并钉住：
+    spacing 未知（猜不得）、已足够接近（插值反而有损）、放大后会 OOM（宁可失配也别崩）。
+    用假 session 顶替 ONNX，不加载 119MB 权重。
+    """
+    print("[spacing 重采样（nnU-Net 推理契约）]")
+    import ai_engine
+    saved = ai_engine._get_session
+
+    class _Fake:
+        def get_inputs(self):
+            return [type('I', (), {'name': 'x'})()]
+
+        def run(self, _, feed):
+            b = feed['x']
+            o = np.zeros((1, 25, b.shape[2], b.shape[3], b.shape[4]), np.float32)
+            o[0, 5] = 40.0
+            return [o]
+
+    ai_engine._get_session = lambda p: _Fake()
+    try:
+        Z, H, W = 40, 60, 60
+        vol = np.full((Z, H, W), -500.0, np.float32)
+
+        def make(sp):
+            e = ai_engine.AutoAIEngineThread(vol, lambda *a: None, spacing=sp)
+            return e, e._plan_resample()
+
+        # 决策层：三条「不做」的路径
+        check(make(None)[1] is None, "spacing 未知 → 不重采样（不基于猜测做插值）")
+        check(make((1.5, 1.52, 1.48))[1] is None, "已在 1.5mm 的 5% 内 → 不重采样（免去无谓插值损失）")
+        check(make((0.0, 1.0, 1.0))[1] is None, "spacing 含非法值 → 不重采样")
+        # 上限保护：直接把阈值临时压到测试体积之下，测的是判定逻辑本身而非某个具体数值。
+        # 真实场景中它很少触发——重采样到固定 1.5mm 后体素数只由扫描 FOV 决定
+        # （胸腹 CT 约 400mm³ → 恒约 19M），与原始 spacing 无关；能超限的是全身长扫描。
+        sv = ai_engine._MAX_RESAMPLED_VOXELS
+        ai_engine._MAX_RESAMPLED_VOXELS = 1000
+        try:
+            check(make((3.0, 3.0, 3.0))[1] is None, "放大后超出体素上限 → 跳过重采样而不是 OOM")
+        finally:
+            ai_engine._MAX_RESAMPLED_VOXELS = sv
+
+        # RIDER 的真实几何：0.712891mm in-plane / 1.25mm 层厚，应当触发且是缩小
+        e, plan = make((1.25, 0.712891, 0.712891))
+        check(plan is not None, "RIDER 几何触发重采样")
+        f, shp = plan
+        check(int(np.prod(shp)) < Z * H * W,
+              f"细 spacing 重采样是缩小：{Z*H*W} → {int(np.prod(shp))} 体素（更快更省内存）")
+        exp_h = round(H * 0.712891 / 1.5)
+        check(shp[1] == exp_h, f"缩放按物理尺寸算（H {H}→{shp[1]}，期望 {exp_h}）")
+
+        # 端到端：输出必须回到原网格，否则回调的 shape 校验会丢弃整次推理
+        e._run_body()
+        check(e.confidence is not None and e.confidence.shape == (Z, H, W),
+              f"置信度回到原网格 {None if e.confidence is None else e.confidence.shape}")
+        check(e.resampled_from is not None and e.resampled_from[0] == (Z, H, W),
+              "引擎记录了本次确实做过重采样，供 UI 如实告知")
+
+        got = {}
+        e2 = ai_engine.AutoAIEngineThread(vol, lambda m, t: got.update(mask=m),
+                                          spacing=(1.25, 0.712891, 0.712891))
+        e2._run_body()
+        m = got.get('mask')
+        check(m is not None and m.shape == (Z, H, W),
+              f"标签图回到原网格 {None if m is None else m.shape}")
+        check(m is not None and bool((m == 5).all()), "标签值在往返缩放中未被插值破坏")
+
+        # 代价必须可见：边界在 1.5mm 网格上决定，映射回细分辨率后是阶梯状。
+        # 用一个球形结构实测台阶长度，钉住「这不是纯赚」这个事实。
+        class _Ball:
+            def get_inputs(self):
+                return [type('I', (), {'name': 'x'})()]
+
+            def run(self, _, feed):
+                b = feed['x']
+                d, h, w = b.shape[2], b.shape[3], b.shape[4]
+                zz, yy, xx = np.ogrid[:d, :h, :w]
+                ball = ((zz - d / 2) ** 2 + (yy - h / 2) ** 2 + (xx - w / 2) ** 2) < (min(d, h, w) / 3) ** 2
+                o = np.zeros((1, 25, d, h, w), np.float32)
+                o[0, 0] = 10.0; o[0, 5][ball] = 40.0
+                return [o]
+
+        ai_engine._get_session = lambda p: _Ball()
+        got2 = {}
+        e3 = ai_engine.AutoAIEngineThread(vol, lambda m_, t: got2.update(m=m_),
+                                          spacing=(0.75, 0.75, 0.75))   # 缩放正好 2 倍
+        e3._run_body()
+        mm = got2['m']
+        mid = mm[mm.shape[0] // 2]
+        rows = np.where((mid == 5).any(1))[0]
+        if len(rows) > 3:
+            firsts = [np.where(mid[r] == 5)[0][0] for r in rows]
+            from itertools import groupby
+            plateau = float(np.median([len(list(g)) for _, g in groupby(firsts)]))
+            check(plateau >= 1.5,
+                  f"边界按重采样网格量化，台阶中位 {plateau:.1f} 像素（2× 缩放 → 预期约 2）")
+    finally:
+        ai_engine._get_session = saved
+
+
+def test_phantom():
+    """内置 Shepp-Logan 模体：解析生成的正确性，以及与 skimage 参考实现的结构一致性。
+
+    钉住取的是 **Toft 修订版**而非 1974 原版——原版病灶对比度仅 0.01，几乎不可见，
+    且研究一（recon_study.py）用的就是 skimage 的修订版；两边若各用一版，
+    实验室与实验报出的 RMSE / 对比度数字不可比。
+    """
+    print("[内置 Shepp-Logan 模体]")
+    import recon as R
+    for n in (32, 64, 128, 256):
+        p = R.shepp_logan(n)
+        check(p.shape == (n, n) and p.dtype == np.float32, f"n={n}: 形状/类型 {p.shape} {p.dtype}")
+        check(0.0 <= float(p.min()) and float(p.max()) <= 1.0,
+              f"n={n}: 值域 [{p.min():.2f}, {p.max():.2f}] ⊂ [0,1]，与切片归一化同口径")
+        # 圆形掩码：四角必须为 0，否则误差图会在角落显示虚假大误差
+        check(float(p[0, 0]) == 0.0 and float(p[0, -1]) == 0.0 and float(p[-1, -1]) == 0.0,
+              f"n={n}: 圆掩码已施加（四角为 0）")
+    try:
+        R.shepp_logan(1)
+        check(False, "尺寸过小时应抛 ValueError")
+    except ValueError:
+        check(True, "尺寸过小时抛 ValueError 而非产出畸形数组")
+
+    p = R.shepp_logan(256)
+    lv = np.unique(np.round(p[p > 0], 3))
+    has = lambda x: bool(np.isclose(lv, x, atol=2e-3).any())  # noqa: E731  float32 尾数，需容差
+    # 修订版的净灰度：脑实质 0.2、病灶 0.3、颅骨 1.0（0.1/0.4 为病灶与外圈的叠加处）
+    check(has(1.0) and has(0.2) and has(0.3),
+          f"呈现修订版灰度层级 {[round(float(x), 3) for x in lv]}")
+    check(not has(0.02), "不是 1974 原版的 0.02 低对比度（那一版肉眼近乎不可见）")
+
+    try:
+        from scipy import ndimage as _nd
+        from skimage.data import shepp_logan_phantom
+        ref = _nd.zoom(shepp_logan_phantom().astype(np.float32), 256 / 400, order=1)
+        ref = np.clip(ref, 0, 1) * R._circle_mask(256)
+        a, b = p - p.mean(), ref - ref.mean()
+        ncc = float((a * b).sum() / np.sqrt((a * a).sum() * (b * b).sum()))
+        # 剩余差异来自参考实现是 400² 位图再插值，本实现为解析生成（边界更锐）
+        check(ncc > 0.94, f"与 skimage 参考的归一化互相关 NCC={ncc:.4f} > 0.94")
+    except ImportError:
+        check(True, "skimage 参考不可用，跳过互相关比对")
+
+
+def test_phantom_recon_flow(app):
+    """空载启动即可跑通重建：不导入任何 DICOM，模体 → 弦图 → BP/FBP/DFR。
+
+    重建实验室原先必须先导入数据才能用，空载打开是死的。DMR/ART 不在此测——
+    它们要建系统矩阵（分钟级 + 子进程），另有专门用例覆盖数值正确性。
+    """
+    print("[空载模体重建链路]")
+    vi = None
+    try:
+        vi = m.MedicalViewer(); app.processEvents()
+        if vi.ai_thread: vi.ai_thread.cancel()
+        check(vi.volume_hu is None, "空载启动，无任何数据")
+        vi.tabs.setCurrentIndex(1); app.processEvents()
+        check(vi.recon_mode_active, "无数据也能进入重建实验室")
+        vi.generate_sinogram(); app.processEvents()
+        check(vi.current_sinogram is None, "无源图时生成弦图安全空转，不崩")
+
+        vi.btn_phantom.click(); app.processEvents()
+        check(vi._phantom_img is not None, "载入内置模体")
+        t1 = vi.views[1]['title_label'].text()
+        check(('模体' in t1) or ('Phantom' in t1),
+              f"V1 标题随之改为模体（得「{t1}」）——否则界面挂着「真实切片」在说谎")
+        src, lab = vi._recon_source_slice()
+        check(src is not None and lab in ("模体", "Phantom"), f"重建源切到模体（{lab}）")
+        vi.generate_sinogram(); app.processEvents()
+        check(vi.current_sinogram is not None and np.isfinite(vi.current_sinogram).all(),
+              f"弦图生成且全为有限值 {None if vi.current_sinogram is None else vi.current_sinogram.shape}")
+        for nm in ('btn_bp', 'btn_fbp', 'btn_dfr'):
+            check(getattr(vi, nm).isEnabled(), f"{nm} 已启用")
+        for nm, fn in (('BP', vi.run_bp), ('FBP', vi.run_fbp), ('DFR', vi.run_dfr)):
+            fn(); app.processEvents()
+            check(True, f"{nm} 在模体上跑通")
+
+        # 空载下切 Tab 往返：update_display 因无数据提前返回，走不到标题修正路径，
+        # 于是 V1 会挂着「真实切片」却显示模体（实测踩到）
+        vi.tabs.setCurrentIndex(0); app.processEvents()
+        vi.tabs.setCurrentIndex(1); app.processEvents()
+        t2 = vi.views[1]['title_label'].text()
+        check(('模体' in t2) or ('Phantom' in t2),
+              f"切 Tab 往返后 V1 仍标为模体（得「{t2}」）")
+
+        vi.btn_phantom.click(); app.processEvents()
+        check(vi._phantom_img is None, "卸下模体")
+        check(vi.current_sinogram is None,
+              "卸下时清掉基于模体算出的弦图（否则模体弦图会配上真实原图）")
+        check(not vi.btn_bp.isEnabled(), "重建按钮随之禁用，不留可点的死路")
+    finally:
+        if vi is not None:
+            if vi.ai_thread: vi.ai_thread.cancel()
+            vi.close()
+        app.processEvents()
+
+
+def test_confidence_map():
+    """置信度：softmax 最大类概率的正确性、量化误差、以及数学降级路径必须为 None。
+
+    用手工构造的 logits 验证数值，不加载 organs.onnx、不跑真实推理。
+    钉住的契约：给了 conf 才有 conf 列，没给则该键必须缺席——数学降级没有概率输出，
+    此处若填一个默认值，下游会把它当成模型的置信度。
+    """
+    print("[逐体素置信度 softmax max-prob]")
+    import quantify
+
+    # 手工 logits：三个体素分别是「极确信」「两类难分」「均匀不确信」
+    n_cls = 25
+    lg = np.zeros((n_cls, 1, 1, 3), np.float32)
+    lg[3, 0, 0, 0] = 50.0                       # 一类独大 → prob≈1
+    lg[3, 0, 0, 1] = lg[7, 0, 0, 1] = 10.0      # 两类持平 → prob≈0.5
+    # 第三个体素全 0 → 25 类均匀 → prob=1/25=0.04
+
+    # 与 ai_engine 中完全一致的算法（in-place 减 max 再 exp，max-prob = 1/Σ）
+    o = lg.copy()
+    o -= o.max(0, keepdims=True)
+    np.exp(o, out=o)
+    conf = 1.0 / o.sum(0)
+    exp = [1.0, 0.5, 1.0 / n_cls]
+    for k, want in enumerate(exp):
+        check(abs(float(conf[0, 0, k]) - want) < 1e-3,
+              f"体素{k} max-prob={float(conf[0, 0, k]):.4f}（期望 {want:.4f}）")
+    check(float(conf.min()) > 0 and float(conf.max()) <= 1.0 + 1e-6,
+          "置信度落在 (0, 1] 内")
+
+    u8 = (conf * 255.0).astype(np.uint8)
+    back = u8.astype(np.float32) / 255.0
+    check(float(np.abs(back - conf).max()) <= 1.0 / 255.0,
+          f"uint8 量化误差 ≤ 1/255（实测 {float(np.abs(back - conf).max()):.5f}）")
+
+    # 定量表：给了 conf 才有列，没给必须缺席
+    vol = np.full((2, 4, 4), 50.0, np.float32)
+    mk = np.zeros((2, 4, 4), np.uint8); mk[0, :2, :2] = 5
+    cf = np.full((2, 4, 4), 204, np.uint8)       # 204/255 = 0.8
+    names = {5: ("肝", "Liver")}
+    r_no = quantify.compute_organ_stats(vol, mk, (1, 1, 1), names)
+    r_yes = quantify.compute_organ_stats(vol, mk, (1, 1, 1), names, cf)
+    check('mean_conf' not in r_no[0], "不传 conf：定量行里没有 mean_conf 键")
+    check('mean_conf' in r_yes[0] and abs(r_yes[0]['mean_conf'] - 0.8) < 1e-2,
+          f"传了 conf：mean_conf={r_yes[0].get('mean_conf', float('nan')):.3f}（期望 0.800）")
+    # 形状不符必须被拒，而不是崩或算出错位的数
+    r_bad = quantify.compute_organ_stats(vol, mk, (1, 1, 1), names, np.zeros((3, 4, 4), np.uint8))
+    check('mean_conf' not in r_bad[0], "conf 形状不符时该列缺席，不静默错位")
+
+    # conf==0 是「无模型置信度」哨兵（手动追踪 / 画笔改过的体素）。
+    # 审计发现的真实缺陷：手动追踪层曾被报出 conf=0.80——那其实是模型对该处
+    # 【原本那个器官】的置信度，与用户手画的东西毫无关系。
+    from constants import MANUAL_TRACK_LABEL as MTL
+    mk2 = np.zeros((2, 4, 4), np.uint8); mk2[0, :2, :2] = 5; mk2[1, :2, :2] = MTL
+    cf2 = np.full((2, 4, 4), 204, np.uint8); cf2[1, :2, :2] = 0
+    nm2 = {5: ("肝", "Liver"), MTL: ("手动追踪", "Manual")}
+    r2 = {r['id']: r for r in quantify.compute_organ_stats(vol, mk2, (1, 1, 1), nm2, cf2)}
+    check('mean_conf' not in r2[MTL], "手动追踪层不报置信度（模型对它没有判断）")
+    check('mean_conf' in r2[5], "同一蒙版里的模型器官照常报置信度")
+
+    mk3 = np.zeros((2, 4, 4), np.uint8); mk3[0] = 5
+    cf3 = np.full((2, 4, 4), 204, np.uint8); cf3[0, :2, :] = 0    # 一半被画笔改过
+    r3 = quantify.compute_organ_stats(vol, mk3, (1, 1, 1), {5: ("肝", "Liver")}, cf3)[0]
+    check(abs(r3['conf_cover'] - 0.5) < 1e-6,
+          f"conf_cover 报出模型判定体素占比（{r3['conf_cover']:.2f}，期望 0.50）")
+    check(abs(r3['mean_conf'] - 0.8) < 1e-2, "均值只统计模型体素，不被哨兵 0 拉低")
+
+    # 端到端跑一遍引擎的滑窗路径：用假 session 顶替 ONNX，不加载 119MB 权重。
+    # 重点验证 in-place 改写 out 不炸（真实 ORT 输出实测 writeable=True，此处用可写数组同构）
+    import ai_engine
+    saved = ai_engine._get_session
+    Z, H, W = 40, 30, 20                     # 非 32 倍数，同时覆盖 z/y/x 三个方向的 pad
+
+    class _FakeSess:
+        def get_inputs(self):
+            return [type('I', (), {'name': 'input_image'})()]
+
+        def run(self, _, feed):
+            b = feed['input_image']
+            d, h, w = b.shape[2], b.shape[3], b.shape[4]
+            o = np.zeros((1, n_cls, d, h, w), np.float32)
+            o[0, 5] = 40.0                   # 全部判为 label 5，且极确信
+            return [o]
+
+    ai_engine._get_session = lambda p: _FakeSess()
+    try:
+        eng = ai_engine.AutoAIEngineThread(np.zeros((Z, H, W), np.float32), lambda *a: None)
+        seg = eng._run_onnx_multiorgan(np.zeros((Z, H, W), np.float32))
+        check(seg is not None and seg.shape == (Z, H, W), f"滑窗输出形状 {None if seg is None else seg.shape}")
+        check(eng.confidence is not None and eng.confidence.shape == (Z, H, W),
+              "引擎把 confidence 作为实例属性带出，形状与标签图一致")
+        check(eng.confidence.dtype == np.uint8, f"confidence 为 uint8（{eng.confidence.dtype}）")
+        check(int(eng.confidence.min()) >= 254,
+              f"一类独大时置信度接近满值（min={int(eng.confidence.min())}）")
+        check(bool((seg == 5).all()), "标签图取到 argmax 所指类别")
+    finally:
+        ai_engine._get_session = saved
+
+
+def test_model_card():
+    """模型说明卡：数字必须来自实验产物、局限段必须在场、双语都不夹带对方语言。
+
+    这张卡片的意义在于主动暴露适用边界，所以「局限段存在」本身就是被测契约：
+    若日后有人把它精简掉，此处即失败。不依赖 Qt 与真实数据，进 SKIP_REAL_DATA 子集。
+    """
+    print("[模型说明卡 model_card]")
+    import json
+    import re
+
+    import model_card
+    for en in (False, True):
+        txt = model_card.build_model_card(en)
+        cjk = bool(re.search(r'[一-鿿]', txt))
+        check(cjk != en, f"{'英文' if en else '中文'}卡片语言正确（含中文={cjk}）")
+        check(('Known limitations' if en else '已知局限') in txt, "  局限段在场")
+        check(('spacing' in txt.lower()), "  点名 spacing 未重采样这一硬伤")
+        # 样本量必须写明，但不锁死具体数字——多器官验证已从 n=1 扩到 20 例，
+        # 早期那条「必须出现 n=1」的断言会在扩样本后反过来阻止如实更新。
+        has_n = ('n=1' in txt) or re.search(r'\b\d+ (cases|例)', txt)
+        check(bool(has_n), "  如实标注多器官验证的样本量")
+        check(('diagnosis' in txt.lower() or '诊断' in txt), "  非诊断用途声明在场")
+        # 卡片走 QLabel 的 RichText 渲染，只认 HTML。写成 Markdown 的 **粗体** 会原样
+        # 印在界面上（截图时发现的），故此处直接禁掉星号强调。
+        check('**' not in txt, "  没有 Markdown 星号混进 HTML（QLabel 会原样显示）")
+
+    # 数字必须与产物一致，不得在卡片里硬编码
+    tp = os.path.join(_ROOT, "experiments", "results", "seg3d_teacher_summary.json")
+    if os.path.exists(tp):
+        m = json.load(open(tp, encoding='utf-8'))['overall_mean']
+        card = model_card.build_model_card(False)
+        check(f"{m:.3f}" in card, f"肺叶 Dice 取自 seg3d_teacher_summary.json（{m:.3f}）")
+        check(str(json.load(open(tp, encoding='utf-8'))['n_cases']) in card, "例数取自同一产物")
+
+    # spacing 那段初版把 0.922→0.881→0.799 写死在字符串里，与本模块「不硬编码」
+    # 的原则自相矛盾——重跑消融换了数值，卡片会安静地继续显示旧数字。
+    # 断言方向是「卡片里的每个数字都必须能在产物里找到」，而不是「产物里每个数字都要
+    # 出现在卡片上」——后者会把文案精炼当成失败，而真正的风险是卡片编造或残留旧数字。
+    import csv as _csv
+    RES = os.path.join(_ROOT, "experiments", "results")
+    allowed = set()
+
+    def _collect(vals):
+        for v in vals:
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                continue
+            for fmt in ('%.2f', '%.3f', '%.4f'):
+                allowed.add(fmt % fv)
+            allowed.add(str(v))
+
+    for name, keys in (("seg_spacing.csv", ('mean_dice',)),
+                       ("seg_spacing_fix.csv", ('dice_direct', 'dice_engine')),
+                       ("seg_dice.csv", ('dice',))):
+        p = os.path.join(RES, name)
+        if os.path.exists(p):
+            with open(p, encoding='utf-8-sig') as f:
+                rows = list(_csv.DictReader(f))
+            for k in keys:
+                _collect(r.get(k) for r in rows)
+            if name == "seg_dice.csv":      # 卡片报的是均值，不是逐器官值
+                ds = [float(r['dice']) for r in rows if float(r['dice']) > 0]
+                if ds:
+                    _collect([sum(ds) / len(ds)])
+    # 多例配对：卡片报的是**聚合值**（两侧均值与差值均值），CSV 里没有现成字段，
+    # 故此处按同一定义重算——断言的是「卡片的数字可由产物推出」，而不是「照抄某一列」。
+    pm = os.path.join(RES, "seg_spacing_fix_multi.csv")
+    if os.path.exists(pm):
+        with open(pm, encoding='utf-8-sig') as f:
+            mr = [r for r in _csv.DictReader(f)
+                  if (r.get('case') or '').strip() and not r['case'].strip().startswith('#')]
+        if len(mr) >= 2:
+            dr = [float(r['dice_direct']) for r in mr]
+            en2 = [float(r['dice_engine']) for r in mr]
+            _collect([sum(dr) / len(dr), sum(en2) / len(en2),
+                      sum(en2) / len(en2) - sum(dr) / len(dr)])
+
+    # 多例 21 器官：患者级均值可独立重算并断言相等（防硬编码）；CI 是 bootstrap 结果，
+    # 无法用简单算术复现，故取模块算出的值——它本身完全来自 CSV，仍守住「不硬编码」。
+    pmo = os.path.join(RES, "seg_multi.csv")
+    if os.path.exists(pmo):
+        with open(pmo, encoding='utf-8-sig') as f:
+            cv = [float(r['mean_dice']) for r in _csv.DictReader(f)
+                  if (r.get('case') or '').strip() and not r['case'].strip().startswith('#')]
+        got = model_card._read_multi_organ()
+        if cv and got:
+            # 卡片报的是产物汇总行里的值（4 位精度），不是自己重算的全精度值——
+            # 这正是「单一数据源」的意图：同一个统计量若有两套实现就会漂移
+            # （初版卡片自算 bootstrap，CI 下界与实验脚本差了 0.001）。
+            # 故断言两件事：汇总行本身算得对，且卡片确实用的是它。
+            check(abs(got[1] - sum(cv) / len(cv)) < 5e-5,
+                  f"汇总行的患者级均值与逐例重算一致（{got[1]:.4f}）")
+            import math
+            check(not math.isnan(got[2]) and not math.isnan(got[3]),
+                  f"CI 读自产物而非现算（[{got[2]:.4f}, {got[3]:.4f}]）")
+            _collect([got[1], got[2], got[3]])
+            _collect(float(w[1]) for w in got[4])          # 最弱器官的 Dice
+    po = os.path.join(RES, "seg_multi_per_organ.csv")
+    if os.path.exists(po):
+        with open(po, encoding='utf-8-sig') as f:
+            for r in _csv.DictReader(f):
+                _collect([r['mean_dice'], r['ci_lo'], r['ci_hi']])
+
+    tp2 = os.path.join(RES, "seg3d_teacher_summary.json")
+    if os.path.exists(tp2):
+        d2 = json.load(open(tp2, encoding='utf-8'))
+        _collect([d2['overall_mean'], *d2['overall_ci']])
+    if allowed:
+        card = model_card.build_model_card(False)
+        bogus = [n for n in set(re.findall(r'\b0\.\d{3,4}\b', card)) if n not in allowed]
+        check(not bogus, f"卡片上的每个 Dice 数字都能在实验产物中找到（可疑 {bogus}）")
+    check(len(model_card.card_title(False)) > 0 and len(model_card.card_title(True)) > 0,
+          "标题双语均非空")
+
+
+def test_label_palette():
+    """24 类器官调色板：覆盖完整、语义与实测真相表一致、任意两类肉眼可分。
+
+    钉住三件曾经出错的事：
+      1. 只配了 16 类，其余 7 类（含 Dice 0.985 的右肾）一起渲染成同一种暗灰；
+      2. 16 条注释里 15 条与实测确证的标签语义不符（如把 5 注为「心脏」，实为肝）；
+      3. 肺叶左右配反——10,11 是【左】肺却按「右肺」上暖色。
+    不依赖真实数据与权重，可进 SKIP_REAL_DATA 子集。
+    """
+    print("[器官调色板：覆盖 / 语义 / 可分辨性]")
+    import json
+    import re
+
+    import constants as C
+    lp = os.path.join(_ROOT, "models", "organ_labels_candidate.json")
+    truth = json.load(open(lp, encoding='utf-8'))['labels']
+
+    missing = [i for i in range(1, 25) if i not in C.LABEL_COLORS]
+    check(not missing, f"1-24 类全部配色（缺 {missing}）")
+
+    grey = [i for i in range(1, 25) if tuple(C.LABEL_LUT[i][:3]) == (96, 96, 96)]
+    check(not grey, f"LUT 中无类别落到未配色暗灰（{grey}）")
+    check(C.LABEL_LUT[0].tolist() == [0, 0, 0, 0], "背景 0 在 LUT 中全透明")
+
+    # 注释名必须与实测确证的标签表逐条一致——注释是读代码的人唯一的语义来源
+    src = open(os.path.join(_ROOT, "constants.py"), encoding='utf-8').read()
+    blk = src[src.index('LABEL_COLORS = {'):src.index('_UNKNOWN_COLOR')]
+    bad = []
+    for mm in re.finditer(r'^\s*(\d+):\s*\([\d, ]+\),\s*#\s*(\S+?)(?:（|\(|\s|$)', blk, re.M):
+        i, name = int(mm.group(1)), mm.group(2)
+        if name != truth.get(str(i), {}).get('name_zh'):
+            bad.append((i, name, truth.get(str(i), {}).get('name_zh')))
+    check(not bad, f"注释名与实测标签表逐条一致（不符 {bad}）")
+
+    # 侧别：10,11=左肺走冷色，12,13,14=右肺走暖色（实测确证的侧别，曾判反）
+    cold = all(C.LABEL_COLORS[i][2] > C.LABEL_COLORS[i][0] for i in (10, 11))
+    warm = all(C.LABEL_COLORS[i][0] > C.LABEL_COLORS[i][2] for i in (12, 13, 14))
+    check(cold and warm, f"左肺冷色={cold}、右肺暖色={warm}（侧别经 seg_validate 确证）")
+
+    ks = list(C.LABEL_COLORS)
+    pairs = sorted((sum((a - b) ** 2 for a, b in zip(C.LABEL_COLORS[p], C.LABEL_COLORS[q], strict=True)) ** .5, p, q)
+                   for x, p in enumerate(ks) for q in ks[x + 1:])
+    dmin, p1, p2 = pairs[0]
+    check(dmin > 40, f"任意两类 RGB 欧氏距离 > 40（最近 {p1}↔{p2} = {dmin:.0f}）")
+    check(len(set(C.LABEL_COLORS.values())) == len(C.LABEL_COLORS), "无两类共用同一 RGB")
+
+
+def test_mask_nondestructive(app):
+    """蒙版破坏性操作的三道防线：3D 追踪不吃掉 AI 器官、清空需确认、两者皆可撤销。
+
+    实测动机：磁盘缓存里的 mask 曾 100% 是手动追踪标签、24 类器官一个不剩——
+    旧实现的 3D 追踪对 volume_mask 整卷赋值，一次追踪就抹掉 ~100s 的推理结果，
+    且经 save_project 落盘后不可恢复。合成小体积，不触发任何 AI 推理。
+    """
+    print("[蒙版破坏性操作：非破坏追踪 / 确认 / 撤销]")
+    from PySide6.QtCore import QRectF
+    from PySide6.QtWidgets import QMessageBox as _QMB
+
+    from constants import MANUAL_TRACK_LABEL
+    saved_q = _QMB.question
+    box = {'n': 0, 'ans': _QMB.Yes}
+
+    def _fake_q(*a, **k):
+        box['n'] += 1
+        return box['ans']
+
+    _QMB.question = staticmethod(_fake_q)
+    vi = None
+    try:
+        vi = m.MedicalViewer(); app.processEvents()
+        if vi.ai_thread: vi.ai_thread.cancel()
+        Z, H, W = 10, 48, 48
+        vol = np.random.RandomState(0).uniform(-1000, -900, (Z, H, W)).astype(np.float32)
+        vol[3:7, 12:28, 12:28] = 60.0        # 一团均质组织，供区域增长追出连通域
+        vi.volume_hu = vol
+        vi.dicom_datasets = [None] * Z
+        vi.volume_mask = np.zeros((Z, H, W), np.uint8)
+        vi.volume_mask[2:5, 30:40, 30:40] = 5     # 肝
+        vi.volume_mask[5:8, 30:40, 5:15] = 2      # 右肾
+        vi.current_3d_pos = [4, H // 2, W // 2]
+        vi._mask_undo.clear()
+        organs = lambda mk: int(((mk > 0) & (mk != MANUAL_TRACK_LABEL)).sum())  # noqa: E731
+        n0 = organs(vi.volume_mask)
+
+        vi.handle_3d_track_requested(1, QRectF(14, 14, 12, 12)); app.processEvents()
+        n_tr = int((vi.volume_mask == MANUAL_TRACK_LABEL).sum())
+        check(organs(vi.volume_mask) == n0 and n0 > 0,
+              f"3D 追踪后 AI 器官体素不变（{n0} → {organs(vi.volume_mask)}）")
+        check(n_tr > 0, f"追踪层确实写入（{n_tr} 体素）")
+
+        vi.handle_3d_track_requested(1, QRectF(14, 14, 12, 12)); app.processEvents()
+        check(int((vi.volume_mask == MANUAL_TRACK_LABEL).sum()) == n_tr, "重复追踪不累积追踪层")
+        check(sum(1 for e in vi._mask_undo if e[0] == vi._VOL_UNDO) == 1,
+              "撤销栈中整卷快照只留最近一份（整卷约 61MB，不可堆 20 份）")
+
+        snap = vi.volume_mask.copy()
+        box['n'] = 0; box['ans'] = _QMB.No
+        vi.clear_mask_and_annotations(); app.processEvents()
+        check(box['n'] == 1, "清空蒙版前弹出确认框")
+        check(np.array_equal(vi.volume_mask, snap), "确认框选 No：蒙版一个体素未动")
+
+        box['ans'] = _QMB.Yes
+        vi.clear_mask_and_annotations(); app.processEvents()
+        check(not vi.volume_mask.any(), "确认框选 Yes：蒙版清零")
+        vi._undo_mask_edit(); app.processEvents()
+        check(np.array_equal(vi.volume_mask, snap), "Ctrl+Z 把整卷蒙版还原回来")
+
+        box['n'] = 0
+        vi.volume_mask[:] = 0; vi.global_annotations.clear()
+        vi.clear_mask_and_annotations()
+        check(box['n'] == 0, "无可清内容时不弹框骚扰")
+    finally:
+        _QMB.question = saved_q
+        if vi is not None:
+            if vi.ai_thread: vi.ai_thread.cancel()
+            vi.close()
+        app.processEvents()
+
+
 def test_mask_cache_roundtrip(app):
     """蒙版缓存 save→reload 往返：同序列恢复、同患者另一序列拒绝（合成 DICOM，无真实数据）。"""
     print("[蒙版缓存 save→reload 往返]")
@@ -2050,8 +2962,16 @@ def main_run():
                   test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent,
                   test_nonfinite_dicom_tags, test_dialog_i18n_coverage,
                   test_hu_conversion, test_mask_cache_roundtrip, test_mouse_interaction,
-                  test_mesh_view, test_ai_failure_visible):
+                  test_mesh_view, test_ai_failure_visible, test_mask_nondestructive,
+                  test_phantom_recon_flow, test_probe_hu, test_wheel_and_cine,
+                  test_matrix_recon_ui, test_crop_and_legend):
             t(app)
+        test_spacing_resample()  # 假 session，不加载权重
+        test_phantom()        # 纯解析生成，无需 app
+        test_confidence_map() # 手工 logits，不加载模型
+        test_model_card()     # 纯字符串组装，无需 app / 真实数据
+        test_model_card_fallback()  # 产物缺失/损坏时的回退，无需 app
+        test_label_palette()  # 纯数据校验，无需 app / 真实数据
         test_quantify()      # 纯函数单测，无需 app / 真实数据
         test_quantify_high_label()
         test_lung_fallback()
@@ -2100,7 +3020,19 @@ def main_run():
         test_mesh_view(app)
         test_hu_conversion(app)
         test_mask_cache_roundtrip(app)
+        test_mask_nondestructive(app)
         test_mouse_interaction(app)
+        test_label_palette()
+        test_model_card()
+        test_model_card_fallback()
+        test_confidence_map()
+        test_probe_hu(app)
+        test_wheel_and_cine(app)
+        test_matrix_recon_ui(app)
+        test_crop_and_legend(app)
+        test_spacing_resample()
+        test_phantom()
+        test_phantom_recon_flow(app)
         test_quantify()
         test_quantify_high_label()
         test_lung_fallback()

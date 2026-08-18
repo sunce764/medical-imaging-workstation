@@ -36,17 +36,93 @@ def collect():
     if not os.path.exists(tp):
         print("  缺教师基线，请先跑 seg3d_teacher.py"); return None, []
     teacher = json.load(open(tp))
-    students = []
+    students, skipped = [], []
+    n_ref = teacher.get('n_cases', 0)
     for p in sorted(glob.glob(os.path.join(RESULTS, "seg3d_student_ch*.json"))):
-        students.append(json.load(open(p)))
+        d = json.load(open(p))
+        # 冒烟/中断产物必须挡在报告之外：目录里躺过一份 n_cases=2、best_ep=1、
+        # Dice=0.031 的一轮冒烟结果，glob 会把它与教师的 57 例并排画进权衡曲线，
+        # 看图的人无从分辨。判据取「测试集是否与教师同规模」——不同测试集本就
+        # 不可比，逐例配对检验更要求同一批病例。跳过的必须打印出来，
+        # 静默丢弃只是换一种不诚实。
+        if d.get('n_cases', 0) < n_ref:
+            skipped.append((os.path.basename(p), d.get('n_cases', 0)))
+            continue
+        students.append(d)
     students.sort(key=lambda d: d['params'])
-    return teacher, students
+    return teacher, students, skipped
+
+
+def _read_dice_csv(path):
+    """读逐例逐器官 Dice，返回 {(case, label): dice}。"""
+    if not os.path.exists(path):
+        return None
+    out = {}
+    with open(path, encoding='utf-8-sig') as f:
+        for row in csv.DictReader(f):
+            try:
+                out[(row['case'], int(row['label']))] = float(row['dice'])
+            except (KeyError, ValueError):
+                continue
+    return out
+
+
+def paired_test(tag, n_boot=5000, seed=0):
+    """学生 vs 教师的**逐例配对**检验。
+
+    【为什么必须配对，以及初版错在哪】
+    初版的判据是「两条 bootstrap CI 是否重叠」，两处都错：
+      1. **CI 重叠推不出「无显著差异」**——这是统计学的经典误解。两个 95% CI 重叠
+         时，配对差值的 CI 仍可能完全不含 0。用它下「未发现显著差异」的结论，对
+         研究四的头号结论是**假阴性**。
+      2. 教师与学生跑的是**同一批测试病例**（患者级划分、seed 固定），属配对设计。
+         把它们当成两个独立样本比较，白白丢掉配对带来的方差削减——病例难易度的
+         个体差异本可以被差分消掉。
+    正确做法：按 (病例, 器官) 配对求差值，对**差值**做 bootstrap CI 与 Wilcoxon
+    signed-rank（后者不假设正态，适合 Dice 这种有界且偏斜的量）。
+    差值 CI 不含 0 才谈得上差异显著。
+    """
+    import numpy as np
+    ta = _read_dice_csv(os.path.join(RESULTS, "seg3d_teacher_dice.csv"))
+    st = _read_dice_csv(os.path.join(RESULTS, f"seg3d_student_{tag}.csv"))
+    if not ta or not st:
+        return None
+    keys = sorted(set(ta) & set(st))
+    d = np.array([st[k] - ta[k] for k in keys], float)
+    d = d[np.isfinite(d)]
+    if len(d) < 2:
+        return None
+    rng = np.random.RandomState(seed)
+    boots = [d[rng.randint(0, len(d), len(d))].mean() for _ in range(n_boot)]
+    lo, hi = float(np.percentile(boots, 2.5)), float(np.percentile(boots, 97.5))
+    p = None
+    if len(d) >= 10 and np.any(d != 0):
+        try:
+            from scipy.stats import wilcoxon
+            p = float(wilcoxon(d, zero_method='wilcox').pvalue)
+        except Exception:
+            p = None
+    if lo > 0:
+        verdict = "差值 CI 完全在 0 以上 → 学生显著优于教师"
+    elif hi < 0:
+        verdict = "差值 CI 完全在 0 以下 → 学生显著劣于教师"
+    else:
+        verdict = ("差值 CI 跨 0 → 未能证明存在差异（注意：这是「证据不足」，"
+                   "不是「已证明相同」）")
+    # n<10 时 Wilcoxon 不可靠，如实说明而不是给个假装有效的 p
+    if len(d) < 10:
+        verdict += f"；n={len(d)} 对偏少，检验功效不足"
+    return dict(n=len(d), mean_diff=float(d.mean()), ci_lo=lo, ci_hi=hi,
+                wilcoxon_p=p, verdict=verdict)
 
 
 def main():
-    teacher, students = collect()
+    teacher, students, skipped = collect()
     if teacher is None:
         return 1
+    for name, nc in skipped:
+        print(f"  ⊘ 已排除 {name}：仅 {nc} 例测试集，教师为 {teacher['n_cases']} 例，"
+              f"测试集不同则无从比较（多半是冒烟/中断产物）")
     if not students:
         print("  尚无学生模型结果，请先跑 seg3d_train.py + seg3d_eval.py"); return 1
 
@@ -71,15 +147,21 @@ def main():
               f"{ci:>18}{r['sec_per_case']:>8.1f}{r['peak_gb']:>9.2f}")
 
     t = rows[0]
-    print("\n  === 相对教师 ===")
-    for r in rows[1:]:
-        d_dice = r['dice'] - t['dice']
-        # CI 是否重叠：不重叠才谈得上「差异显著」，否则只能说「未发现差异」
-        overlap = not (r['ci_hi'] < t['ci_lo'] or t['ci_hi'] < r['ci_lo'])
+    print("\n  === 相对教师（逐例配对检验）===")
+    for s in students:
+        r = next(x for x in rows[1:] if x['params_m'] == round(s['params'] / 1e6, 4))
+        pr = paired_test(f"ch{s['ch']}")
         print(f"  {r['model']:<26} 参数 1:{t['params_m']/r['params_m']:>6.0f}   "
-              f"Dice {d_dice:+.4f}   提速 {t['sec_per_case']/r['sec_per_case']:.2f}×   "
-              f"内存 {r['peak_gb']/t['peak_gb']:.2f}×   "
-              f"{'CI 重叠（未发现显著差异）' if overlap else 'CI 不重叠（差异显著）'}")
+              f"提速 {t['sec_per_case']/r['sec_per_case']:.2f}×   "
+              f"内存 {r['peak_gb']/t['peak_gb']:.2f}×")
+        if pr is None:
+            print("      逐例数据缺失，无法做配对检验")
+            continue
+        print(f"      配对差值（学生 − 教师）: {pr['mean_diff']:+.4f}  "
+              f"95%CI [{pr['ci_lo']:+.4f}, {pr['ci_hi']:+.4f}]  n={pr['n']} 对")
+        print(f"      {pr['verdict']}")
+        if pr['wilcoxon_p'] is not None:
+            print(f"      Wilcoxon signed-rank p = {pr['wilcoxon_p']:.4g}")
 
     with open(os.path.join(RESULTS, "seg3d_tradeoff.csv"), 'w', newline='',
               encoding='utf-8-sig') as f:

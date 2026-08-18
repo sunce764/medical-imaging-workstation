@@ -46,8 +46,14 @@ def load_zhw(path):
     return np.transpose(np.asanyarray(v.dataobj), (2, 1, 0))
 
 
+PREP = os.path.join(HERE, ".seg3d_prep")     # 预处理缓存（npy），已 gitignore
+
+
 def prep_case(cid):
-    """返回 (归一化影像 float32, 重映射标签 uint8)。标签 10–14 → 1–5，其余归 0。"""
+    """返回 (归一化影像 float32, 重映射标签 uint8)。标签 10–14 → 1–5，其余归 0。
+
+    整卷载入，供评估使用；训练走 prep_npy + memmap，见下。
+    """
     img = load_zhw(os.path.join(CACHE, f"{cid}_img.nii.gz")).astype(np.float32)
     gt = load_zhw(os.path.join(CACHE, f"{cid}_msk.nii.gz")).astype(np.int32)
     img = np.clip(img, *HU_CLIP)
@@ -58,49 +64,83 @@ def prep_case(cid):
     return img, lab
 
 
-class PatchSampler:
-    """按病例惰性加载并缓存，按 patch 采样。
+def prep_npy(cases, force=False):
+    """把每例预处理成 float16/uint8 的 .npy，供训练时 memmap 按 patch 读取。
 
-    【前景过采样】肺叶只占体积的一小部分，纯随机采 patch 会有大半是全背景，
-    梯度几乎全来自背景，模型很快学会「全预测背景」——Dice 却因背景占比高而
-    看着不差。故一半 patch 强制以某个肺叶体素为中心。
+    【为什么必须做这一步】训练集 207 例、进程内只缓存 8 例，命中率 3.9%——几乎
+    每次采样都要重读一个 18MB 的 .nii.gz、解压、转 float32、归一化。实测第一个
+    epoch 跑了 4 分钟还没出结果，CPU 占用仅 1.6%（全在等 I/O 与解压）。
+    冒烟时训练集只有 70 例、只跑 5 step，这个问题被完全掩盖。
+    改为 memmap 后每次采样只读 patch 那约 1MB，与体积大小无关。
+
+    影像存 float16：归一化后值域 [0,1]，float16 的 ~3 位十进制精度足够，磁盘减半。
+    另存一份前景坐标，避免采样时对整卷做 argwhere（那同样要把整卷读进内存）。
+    """
+    os.makedirs(PREP, exist_ok=True)
+    todo = [c for c in cases
+            if force or not os.path.exists(os.path.join(PREP, f"{c}_lab.npy"))]
+    if not todo:
+        return
+    print(f"  预处理 {len(todo)} 例 → {os.path.relpath(PREP)}（一次性）")
+    for i, cid in enumerate(todo, 1):
+        img, lab = prep_case(cid)
+        np.save(os.path.join(PREP, f"{cid}_img.npy"), img.astype(np.float16))
+        np.save(os.path.join(PREP, f"{cid}_lab.npy"), lab)
+        fg = np.argwhere(lab > 0)
+        # 前景坐标可能上百万，按固定种子降采样到 2 万个——采样只需要「随便一个前景点」
+        if len(fg) > 20000:
+            fg = fg[np.random.RandomState(0).choice(len(fg), 20000, replace=False)]
+        np.save(os.path.join(PREP, f"{cid}_fg.npy"), fg.astype(np.int16))
+        if i % 20 == 0 or i == len(todo):
+            print(f"    {i}/{len(todo)}"); sys.stdout.flush()
+
+
+class PatchSampler:
+    """按 memmap 读 patch，不整卷载入。
+
+    【前景过采样】肺叶只占体积一小部分，纯随机采 patch 会有大半全背景，梯度几乎
+    全来自背景，模型很快学会「全预测背景」——而 Dice 因背景占比高仍看着不差。
+    故一半 patch 强制以某个肺叶体素为中心。
     """
 
-    def __init__(self, cases, seed=0, cache_n=8, fg_ratio=0.5):
+    def __init__(self, cases, seed=0, fg_ratio=0.5):
         self.cases = list(cases)
         self.rng = np.random.RandomState(seed)
-        self.cache, self.cache_n, self.fg_ratio = {}, cache_n, fg_ratio
+        self.fg_ratio = fg_ratio
+        self._mm = {}          # {cid: (img_memmap, lab_memmap, fg_coords)}
 
     def _get(self, cid):
-        if cid not in self.cache:
-            if len(self.cache) >= self.cache_n:          # 简单 FIFO，控内存
-                self.cache.pop(next(iter(self.cache)))
-            self.cache[cid] = prep_case(cid)
-        return self.cache[cid]
+        if cid not in self._mm:
+            # mmap_mode='r'：只把用到的页读进内存，整卷不占常驻内存
+            self._mm[cid] = (np.load(os.path.join(PREP, f"{cid}_img.npy"), mmap_mode='r'),
+                             np.load(os.path.join(PREP, f"{cid}_lab.npy"), mmap_mode='r'),
+                             np.load(os.path.join(PREP, f"{cid}_fg.npy")))
+        return self._mm[cid]
 
     def sample(self, n):
         xs, ys = [], []
         pz, py, px = PATCH
-        while len(xs) < n:
+        guard = 0
+        while len(xs) < n and guard < n * 50:
+            guard += 1
             cid = self.cases[self.rng.randint(len(self.cases))]
-            img, lab = self._get(cid)
+            img, lab, fg = self._get(cid)
             Z, H, W = img.shape
-            if Z < pz or H < py or W < px:               # 体积小于 patch，跳过
+            if Z < pz or H < py or W < px:
                 continue
-            if self.rng.rand() < self.fg_ratio and lab.any():
-                idx = np.argwhere(lab > 0)
-                cz, cy, cx = idx[self.rng.randint(len(idx))]
-                z0 = int(np.clip(cz - pz // 2, 0, Z - pz))
-                y0 = int(np.clip(cy - py // 2, 0, H - py))
-                x0 = int(np.clip(cx - px // 2, 0, W - px))
+            if self.rng.rand() < self.fg_ratio and len(fg):
+                cz, cy, cx = fg[self.rng.randint(len(fg))]
+                z0 = int(np.clip(int(cz) - pz // 2, 0, Z - pz))
+                y0 = int(np.clip(int(cy) - py // 2, 0, H - py))
+                x0 = int(np.clip(int(cx) - px // 2, 0, W - px))
             else:
                 z0 = self.rng.randint(Z - pz + 1)
                 y0 = self.rng.randint(H - py + 1)
                 x0 = self.rng.randint(W - px + 1)
-            xs.append(img[z0:z0 + pz, y0:y0 + py, x0:x0 + px])
-            ys.append(lab[z0:z0 + pz, y0:y0 + py, x0:x0 + px])
-        return (np.stack(xs)[:, None].astype(np.float32),
-                np.stack(ys).astype(np.int64))
+            # 只有这一句真正触碰磁盘，读的是 patch 那约 1MB
+            xs.append(np.asarray(img[z0:z0 + pz, y0:y0 + py, x0:x0 + px], np.float32))
+            ys.append(np.asarray(lab[z0:z0 + pz, y0:y0 + py, x0:x0 + px], np.int64))
+        return np.stack(xs)[:, None], np.stack(ys)
 
 
 def build_net(ch):
@@ -167,6 +207,7 @@ def main():
 
     from seg3d_data import split as make_split
     sp = make_split()
+    prep_npy(sp['train'] + sp['val'])          # 一次性预处理，已存在的会跳过
     tr = PatchSampler(sp['train'], seed=a.seed)
     va = PatchSampler(sp['val'], seed=a.seed + 1, fg_ratio=0.5)
 
