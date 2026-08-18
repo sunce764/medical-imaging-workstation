@@ -60,8 +60,11 @@ CLAUDE.md
 # 研究三的训练权重（每个约 7.6MB，5 档共约 38MB）。产物目录只提交图表与 CSV；
 # 权重可由 `python experiments/recon_dl.py matrix` 以固定种子完整重建，无需入库。
 experiments/results/recon_dl_w*.pt
-# 研究四的 3D 分割权重，同理不入库（可由固定种子与固定 commit 的数据重建）
+# 研究四曾试训一个轻量学生模型以量化「压缩换 Dice」的代价，该方向已撤（本机无 GPU，
+# 教师基线与推理成本两条线已各自闭合，学生线不是证据链的缺口）。训练与评估脚本已删，
+# 下面两条只为拦住本地残留的冒烟产物——它们只训了 1 epoch，不代表任何结论。
 experiments/results/seg3d_w*.pt
+experiments/results/seg3d_student_*
 
 # 研究四的公开数据本地缓存（TotalSegmentator-CT-Lite 子集，约 2GB）。
 # 不入库：外部数据一律不随仓库分发；可由 `python experiments/seg3d_data.py fetch`
@@ -72,4 +75,3 @@ experiments/.seg3d_prep/
 .agents/
 .codex/
 AGENTS.md
-experiments/results/seg3d_student_ch8.*
