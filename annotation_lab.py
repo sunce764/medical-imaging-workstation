@@ -530,13 +530,16 @@ class AnnotationMixin:
                 txt += (f' <span style="color:{col};font-size:10px;">'
                         f"conf {c:.2f}/p5 {r['p5_conf']:.2f}{extra}</span>")
             lines.append(txt)
-        if self._organ_stats and 'mean_conf' in self._organ_stats[0]:
-            lines.append('<span style="color:#7F8C8D;font-size:10px;">'
-                         + ("conf = softmax max-prob; p5 = 5th pct (boundary voxels). "
-                            "Hand-edited voxels keep the model's original confidence."
-                            if e else
-                            "conf = softmax 最大类概率，p5 = 5% 分位（多为边界体素）。"
-                            "手工修改过的体素仍沿用模型原始置信度。") + "</span>")
+        # 置信度的口径说明做成悬停提示而非常驻文字：它是查一次就记住的静态解释，
+        # 常驻会占掉两行并被面板宽度裁断（实测截图里就被裁成「多为边界体…」），
+        # 而它旁边每一行都是随数据变化的实时读数，两者不该抢同样的版面。
+        self.lbl_ai_stats.setToolTip(
+            "conf = softmax max-probability; p5 = 5th percentile, mostly boundary voxels.\n"
+            "Voxels edited by hand or written by 3D tracking are excluded — their stored\n"
+            "value describes the label that was there before the edit."
+            if e else
+            "conf = 模型 softmax 最大类概率；p5 = 5% 分位，多为边界体素。\n"
+            "画笔改过或 3D 追踪写入的体素不计入——它们的原值描述的是改动前那个标签。")
         self.lbl_ai_stats.setText("<br>".join(lines))
         self.btn_export_stats.setEnabled(True)
         self.btn_mesh3d.setEnabled(True)

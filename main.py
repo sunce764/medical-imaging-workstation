@@ -239,8 +239,10 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             (self.grp_matrix, "Matrix Recon && ART / SIRT", "直接矩阵重建 && ART / SIRT"),
             (self.grp_mon, "Performance Monitor", "算法性能监控"),
             (self.grp_patient, "PATIENT INFO", "患者信息"),
-            (self.grp_display, "DISPLAY CONTROL", "显示控制"),
-            (self.grp_measure, "MEASURE && CLEAN", "测量与清理"),
+            (self.grp_display, "READING", "阅片"),
+            (self.grp_view, "VIEW", "视图"),
+            (self.grp_followup, "FOLLOW-UP", "随访对比"),
+            (self.grp_data, "DATA && PRIVACY", "数据与隐私"),
             (self.grp_ai, "Automated AI Engine", "自动化 AI 引擎"),
         ):
             g.setTitle(en if e else cn)

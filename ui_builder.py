@@ -143,7 +143,13 @@ class UiBuilderMixin:
         t1_lay.addWidget(self.grp_patient)
 
         # 显示控制分组（布局下拉、MPR 按钮、三滑条、预设窗口栅格）
-        self.grp_display = QGroupBox("显示控制")
+        # ---------------------------------------------------------------
+        # 分组按**使用频率**排列，而不是按功能名词。旧版一个「显示控制」吞下 18 个
+        # 控件——从每秒都在调的窗位，到几乎不用的脱敏与随访对比，全平铺在同一标题下，
+        # 没有任何视觉层次。拆分依据：手最常去的放最上面，低频与破坏性操作往下沉。
+        # 控件名一律不变，只改归属与顺序，故 i18n 表与测试不受影响。
+        # ---------------------------------------------------------------
+        self.grp_display = QGroupBox("阅片")          # 高频：切片、窗位、播放
         dl = QVBoxLayout(); dl.setContentsMargins(10, 15, 10, 10)
         top_dl = QHBoxLayout()
         self.combo_layout = QComboBox()
@@ -155,7 +161,6 @@ class UiBuilderMixin:
         self.btn_mpr.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         top_dl.addWidget(self.btn_mpr)
         top_dl.setStretch(0, 3); top_dl.setStretch(1, 2)
-        dl.addLayout(top_dl)
 
         self.lbl_slice = QLabel(); self.slider_slice = QSlider(Qt.Horizontal)
         self.slider_slice.valueChanged.connect(self.on_slice_changed)
@@ -185,15 +190,14 @@ class UiBuilderMixin:
             pl.addWidget(b, i // 3, i % 3); self.preset_btns.append(b)
         pl.setColumnStretch(0, 1); pl.setColumnStretch(1, 1); pl.setColumnStretch(2, 1)
         dl.addLayout(pl)
-        # 信息叠加显隐 + 反色（医学影像软件标配）
-        h_disp = QHBoxLayout()
+        # 反色属于窗位调节的一部分（同样每秒可能切换），留在「阅片」；
+        # 信息叠加与脱敏是低频显示选项，下沉到「视图」与「数据与隐私」。
+        self.chk_invert = QCheckBox("反色"); self.chk_invert.toggled.connect(self.update_display)
         self.chk_overlay = QCheckBox("信息叠加"); self.chk_overlay.setChecked(True)
         self.chk_overlay.toggled.connect(self._toggle_overlay)
-        self.chk_invert = QCheckBox("反色"); self.chk_invert.toggled.connect(self.update_display)
         self.chk_anon = QCheckBox("脱敏"); self.chk_anon.toggled.connect(self._toggle_anonymize)
-        h_disp.addWidget(self.chk_overlay); h_disp.addWidget(self.chk_invert); h_disp.addWidget(self.chk_anon)
-        dl.addLayout(h_disp)
-        # Cine 电影播放（往返连播，速度可调） + 双序列随访对比
+        dl.addWidget(self.chk_invert)
+        # Cine 电影播放（往返连播，速度可调）
         h_nav = QHBoxLayout()
         self.btn_cine = QPushButton("▶ 播放"); self.btn_cine.setProperty("class", "ActionBtn")
         self.btn_cine.clicked.connect(self.toggle_cine)
@@ -223,11 +227,16 @@ class UiBuilderMixin:
         # ——Cine 是单序列内的播放导航，对比/配准属于双序列随访——分行后语义也更清楚。
         h_nav.addWidget(self.btn_cine, 2); h_nav.addWidget(self.cb_cine_speed, 1)
         dl.addLayout(h_nav)
-        h_cmp = QHBoxLayout()
-        h_cmp.addWidget(self.btn_compare, 3); h_cmp.addWidget(self.chk_register, 1)
-        dl.addLayout(h_cmp)
         self.grp_display.setLayout(dl)
         t1_lay.addWidget(self.grp_display)
+
+        # 视图：布局与叠加，中频——设一次就不常动，故排在「阅片」之后
+        self.grp_view = QGroupBox("视图")
+        vl = QVBoxLayout(); vl.setContentsMargins(10, 15, 10, 10)
+        vl.addLayout(top_dl)                      # 布局下拉 + MPR 联动
+        vl.addWidget(self.chk_overlay)
+        self.grp_view.setLayout(vl)
+        t1_lay.addWidget(self.grp_view)
 
         # AI 状态分组（原 AI 按钮改为状态显示，因为已全自动）
         self.grp_ai = QGroupBox("自动化 AI 引擎")
@@ -268,44 +277,70 @@ class UiBuilderMixin:
         ai_lay.addWidget(self.lbl_disclaimer)
         # 模型说明卡：出处如何确证、实测到什么程度、有哪些已知局限。
         # 常驻可点，不随分割状态禁用——「这个模型可不可信」在跑之前就该能查。
+        # 样式上刻意弱于「导出 CSV / 三维重建」：那两个是日常操作，本按钮是查证入口，
+        # 使用频率低一个量级，做成同等份量的全宽按钮会与免责声明抢注意力。
         self.btn_model_card = QPushButton("模型说明卡：出处与适用边界")
-        self.btn_model_card.setProperty("class", "ActionBtn")
+        self.btn_model_card.setStyleSheet(
+            "text-align: left; padding: 2px 4px; border: none; color: #5C9FD6; font-size: 11px;")
+        self.btn_model_card.setCursor(Qt.PointingHandCursor)
         self.btn_model_card.clicked.connect(self.show_model_card)
         ai_lay.addWidget(self.btn_model_card)
-        self.grp_ai.setLayout(ai_lay)
-        t1_lay.addWidget(self.grp_ai)
 
-        # 测量与清理分组
-        self.grp_measure = QGroupBox("测量与清理")
-        ml = QVBoxLayout(); ml.setContentsMargins(10, 15, 10, 10)
-        # 光标 HUD：鼠标悬停时实时显示 (x,y,z) 坐标 / HU 值 / 所在器官
-        self.lbl_hud = QLabel("")
-        self.lbl_hud.setStyleSheet("color: #8B949E; font-family: monospace; font-size: 11px; min-height: 16px; max-height: 16px;")
-        self.lbl_hud.setAlignment(Qt.AlignCenter); ml.addWidget(self.lbl_hud)
-        self.lbl_hu_value = QLabel()
-        self.lbl_hu_value.setStyleSheet("color: #00ADB5; font-weight: bold; font-size: 13px; min-height: 18px; max-height: 18px;")
-        self.lbl_hu_value.setAlignment(Qt.AlignCenter); ml.addWidget(self.lbl_hu_value)
-        self.chk_global_scope = QCheckBox("新标注穿透所有切片"); ml.addWidget(self.chk_global_scope)
-        # 分割修正画笔半径（画笔/橡皮工具共用）
+        # 分割编辑参数归位到本组：画笔半径与画笔目标是**分割编辑**的参数，
+        # 旧版把它们放在「测量与清理」下，与要编辑的对象隔着两个分组。
         h_brush = QHBoxLayout()
         self.lbl_brush = QLabel("画笔半径:")
         self.spin_brush = QSpinBox(); self.spin_brush.setRange(1, 40); self.spin_brush.setValue(6)
         self.spin_brush.valueChanged.connect(self._set_brush_radius)
         h_brush.addWidget(self.lbl_brush); h_brush.addWidget(self.spin_brush)
-        ml.addLayout(h_brush)
-        # 画笔目标：补画写入哪个标签（手动标注 or 当前检出的某个器官，使修正计入该器官定量）
+        ai_lay.addLayout(h_brush)
         h_target = QHBoxLayout()
         self.lbl_paint_target = QLabel("画笔目标:")
         self.cb_paint_target = QComboBox()
         self.cb_paint_target.addItem("手动标注", MANUAL_TRACK_LABEL)
         h_target.addWidget(self.lbl_paint_target); h_target.addWidget(self.cb_paint_target)
-        ml.addLayout(h_target)
+        ai_lay.addLayout(h_target)
+        self.grp_ai.setLayout(ai_lay)
+        t1_lay.addWidget(self.grp_ai)
+
+        # 测量与清理分组
+        # 随访对比：独立成组。它是双序列工作流，与单序列阅片是两回事，
+        # 旧版混在「显示控制」里，和窗位滑条并排，语义上毫无关系。
+        self.grp_followup = QGroupBox("随访对比")
+        fl = QVBoxLayout(); fl.setContentsMargins(10, 15, 10, 10)
+        h_cmp = QHBoxLayout()
+        h_cmp.addWidget(self.btn_compare, 3); h_cmp.addWidget(self.chk_register, 1)
+        fl.addLayout(h_cmp)
+        self.grp_followup.setLayout(fl)
+        t1_lay.addWidget(self.grp_followup)
+
+        # 数据与隐私：低频但重要，单独一组比混在显示选项里更容易找到
+        self.grp_data = QGroupBox("数据与隐私")
+        gl = QVBoxLayout(); gl.setContentsMargins(10, 15, 10, 10)
+        gl.addWidget(self.chk_anon)
+        self.chk_global_scope = QCheckBox("新标注穿透所有切片")
+        gl.addWidget(self.chk_global_scope)
+        self.grp_data.setLayout(gl)
+        t1_lay.addWidget(self.grp_data)
+
+        # 光标读数：只读信息，像状态栏一样贴在底部，不占分组标题
+        self.lbl_hud = QLabel("")
+        self.lbl_hud.setStyleSheet("color: #8B949E; font-family: monospace; font-size: 11px; min-height: 16px; max-height: 16px;")
+        self.lbl_hud.setAlignment(Qt.AlignCenter); t1_lay.addWidget(self.lbl_hud)
+        self.lbl_hu_value = QLabel()
+        self.lbl_hu_value.setStyleSheet("color: #00ADB5; font-weight: bold; font-size: 13px; min-height: 18px; max-height: 18px;")
+        self.lbl_hu_value.setAlignment(Qt.AlignCenter); t1_lay.addWidget(self.lbl_hu_value)
+
+        t1_lay.addStretch()
+
+        # 破坏性操作沉到最底部，并用分隔线与常规控件隔开：这两个按钮一个作废
+        # ~100s 的推理结果、一个清空整个工作区，不该与日常控件混在一起随手点到。
+        sep = QFrame(); sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("color: #2A3142;"); t1_lay.addWidget(sep)
         self.btn_clear_anno = QPushButton("清空蒙版与标注"); self.btn_clear_anno.setProperty("class", "ActionBtn")
-        self.btn_clear_anno.clicked.connect(self.clear_mask_and_annotations); ml.addWidget(self.btn_clear_anno)
+        self.btn_clear_anno.clicked.connect(self.clear_mask_and_annotations); t1_lay.addWidget(self.btn_clear_anno)
         self.btn_reset = QPushButton("重置工作区"); self.btn_reset.setObjectName("DangerBtn")
-        self.btn_reset.clicked.connect(self.reset_all_states); ml.addWidget(self.btn_reset)
-        self.grp_measure.setLayout(ml)
-        t1_lay.addWidget(self.grp_measure)
+        self.btn_reset.clicked.connect(self.reset_all_states); t1_lay.addWidget(self.btn_reset)
         t1_lay.addStretch()
 
     def _build_recon_tab(self):
