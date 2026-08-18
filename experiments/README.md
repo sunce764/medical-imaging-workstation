@@ -84,6 +84,12 @@ open("s0029_msk.nii.gz","wb").write(RemoteZip(base+"/Masks.zip").read("Masks/s00
 
 ```bash
 python experiments/seg_validate.py s0029_img.nii.gz s0029_msk.nii.gz
+python experiments/seg_spacing.py                # spacing ablation (defaults to 2.0 2.5 3.0 mm)
+python experiments/seg_spacing.py 1.75 2.0 2.5 3.0   # the curve reported below
+python experiments/seg_spacing.py engine 3.0        # direct vs ai_engine (isolates the resampling step)
+python experiments/seg_spacing.py multi 3.0 20      # the same comparison across 20 cases, paired
+python experiments/seg_multi.py 20                  # Study II at scale: 21-organ Dice over 20 cases
+python experiments/seg_multi.py plot                # redraw from the committed CSVs
 ```
 
 ## Methods
@@ -105,8 +111,38 @@ The image is normalised to RAS and then converted to the GUI's (Z,H,W) axis orde
 | 10 | Left lung upper lobe | 0.99 | | 18 | Small intestine | 0.91 |
 | 11 | Left lung lower lobe | 0.99 | | 21 | Bladder | 0.87 |
 
+## Ablation: what the missing spacing resampling costs (`seg_spacing.py`)
+
+nnU-Net's inference contract starts by resampling the volume to the training spacing (1.5 mm isotropic). `ai_engine.py` does not — `grep resample|zoom|spacing` returns nothing and the ONNX graph has no `Resize` op. Every Dice figure above was measured at exactly 1.5 mm isotropic, so the pipeline has only ever been evaluated where the mismatch is zero.
+
+Same case, same inference code, ground truth never interpolated (the prediction is mapped back to the original grid by nearest neighbour, so any loss is attributable to the mismatch itself):
+
+| Spacing fed to the model | 1.5 mm (training) | 1.75 mm | 2.0 mm | 2.5 mm | 3.0 mm |
+|---|---|---|---|---|---|
+| Mean Dice, 21 organs | **0.9219** | 0.8998 | 0.8813 | 0.8288 | **0.7995** |
+| Loss vs baseline | — | 2.4% | 4.4% | 10.1% | **13.3%** |
+
+**Small structures fail first, and not monotonically** — gallbladder swings 0.82 → 0.45 → 0.10 → 0.55, left adrenal falls 0.92 → 0.58, while liver, kidneys and lung lobes stay above 0.85 throughout. A mean Dice that still reads 0.80 therefore hides individual organs that have effectively collapsed.
+
+### The fix, and what it buys (`seg_spacing.py engine`)
+
+`ai_engine` now performs the resampling. Feeding the identical mismatched volume through the two paths isolates exactly what that step contributes:
+
+| 3.0 mm input | mean Dice |
+|---|---|
+| Direct (pre-fix behaviour) | 0.7995 |
+| Through `ai_engine` (resamples to 1.5 mm first) | **0.8631** |
+
+**+0.0636 — 52% of the gap to baseline recovered.** It does not return all the way, and should not: 3.0 mm data has already lost the information, and upsampling cannot invent it back.
+
+On the bundled RIDER series (0.713 mm in-plane, 1.25 mm slices) the same step is a *down*sampling, 61.1 M voxels → 11.5 M, measured end to end at **100 s / 8.8 GB → 37 s / 3.0 GB**. Accuracy and cost move the same way here, so there is no trade-off to weigh.
+
+A side effect worth naming: once every volume is resampled to a fixed 1.5 mm, the voxel count depends only on the scanned field of view (≈19 M for a thorax–abdomen study) rather than on the acquisition protocol — inference time and peak memory stop varying between series.
+
+**Direction limit, stated rather than buried.** Only the *coarser* side is testable here. The bundled RIDER series is 0.713 mm in-plane — the *finer* side — and upsampling this case to that spacing multiplies the voxel count by 9.4 (≈360 M), needing >50 GB at inference; the machine has 32 GB. So this ablation establishes *that* the model degrades away from its training spacing and *how fast*, but it does **not** give a number for 0.71 mm.
+
 ## Segmentation study — one-sentence summary
-No guessing — **a single ground-truth-labelled public CT pins down the model's identity, its label mapping, and pipeline correctness all at once**: organs.onnx is TotalSegmentator `class_map_part_organs`, mean Dice ≈ 0.92.
+No guessing — **a single ground-truth-labelled public CT pins down the model's identity, its label mapping, and pipeline correctness all at once**: organs.onnx is TotalSegmentator `class_map_part_organs`, mean Dice ≈ 0.92 — **at the training spacing, which the ablation above shows is where it is measured most favourably**.
 
 ---
 
@@ -192,10 +228,11 @@ Judge by **|CTF − 1|**, not by "higher CTF is better": ramp overshoots at shar
 
 ## Limitations (stated, not buried)
 
+- **Everything here is noise-free — and that is exactly where hallucination is least likely.** `forward_fbp` runs `make_theta → compute_sinogram → compute_fbp` with no photon-noise model at all, while Study I's `recon_study.py` does have `add_poisson_noise`. Sparse views and low dose are two faces of the same clinical problem, and the main driver of hallucination in learned reconstruction is the low SNR of photon starvation. **The 1.7% false-structure rate is therefore a lower bound measured under the most favourable condition**, not a figure that transfers to low-dose acquisition. Note also that where this study says "dose" it means *view count only*; the mAs axis is untouched.
 - **ART/SIRT are not in the matrix.** They need an explicit system matrix, and `lstsq` cost caps the usable size at about 64² — not comparable with this study's 128². Putting them in the same table would manufacture a false equivalence.
 - **Phantoms, not anatomy.** The phantom family is richer than a single Shepp-Logan and the OOD sets probe shapes never trained on, but none of this is real CT. The transfer to clinical images is untested here.
 - **One network size, one loss.** 1.9 M parameters trained with plain MSE. Whether a different capacity or a perceptual/adversarial loss would move the hallucination rate is not measured.
 - **The 24.1% on gratings is a real weakness**, not a rounding artefact: at the sampling limit a post-processor cannot restore information the sparse projections never carried.
 
 ## Reconstruction-DL study — one-sentence summary
-A 1.9 M-parameter self-implemented post-processor cuts sparse-view RMSE by **3–6×** versus the best linear filter and lifts lesion-contrast retention from a dose-independent **0.87 ceiling to 0.96–1.00** — and, measured rather than assumed, it does so **without inventing structure** (false-structure rate 1.7% at the loosest threshold, 0% beyond) and **without depending on the training shapes** (out-of-distribution gain ratio 0.81), with its only real limit at the sampling frequency itself.
+A 1.9 M-parameter self-implemented post-processor cuts sparse-view RMSE by **3–6×** versus the best linear filter and lifts lesion-contrast retention from a view-count-independent **0.87 ceiling to 0.96–1.00** — and, measured rather than assumed, it does so **without inventing structure** (false-structure rate 1.7% at the loosest threshold, 0% beyond) and **without depending on the training shapes** (out-of-distribution gain ratio 0.81), with its only real limit at the sampling frequency itself — **all of it under noise-free projections, which is the condition least likely to induce hallucination.**

@@ -1,6 +1,6 @@
 # Changelog · Code-Review Notes
 
-This file collects one systematic round of defect investigation (2026-07) on the **Medical Imaging Workstation Pro + Reconstruction Lab**.
+This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
 ## Investigation method
 
@@ -11,7 +11,7 @@ Every issue followed the same disciplined loop, never guesswork:
 3. **Regression lock-in**: every issue is written into `tests/test_gui.py` to prevent regressions.
 4. **One issue per commit**: before committing, check that no PHI / large files slipped in (`肺癌/`, `*.dcm`, `organs.onnx.data` are all .gitignore'd).
 
-The regression suite grew from an initial ~10 checks to **64 checks (20 test functions)**; `python tests/test_gui.py` exit code 0 = all pass (later engineering work raised this to **102 checks**, see the section below).
+The regression suite grew from an initial ~10 checks to **64 checks (20 test functions)**; `python tests/test_gui.py` exit code 0 = all pass (later engineering work raised this to **102 checks**, and the 2026-08 round to **487**, see the sections below).
 
 ---
 
@@ -115,6 +115,38 @@ In addition:
 - Added `LICENSE` (all rights reserved, consistent with the software-copyright position) + bilingual EN/中文 navigation in the README; third-party component attributions verified one by one.
 
 Principle: **better to understate than to distort.** This project's strongest asset is "verifiable honesty", and any padding backfires on it.
+
+---
+
+## Correctness round (2026-08)
+
+A second round, run under the same loop: reproduce first, then fix, then lock in with a regression check. Grouped by how each defect was found, because that turned out to be the more useful classification.
+
+### Found by measuring, not by reading
+
+- **The inference engine skipped nnU-Net's spacing resampling.** `organs.onnx` is an nnU-Net v2 export whose inference contract begins by resampling to the training spacing (1.5 mm isotropic); the engine fed each series at its native spacing (`grep resample|zoom|spacing` returned nothing, and the ONNX graph has no `Resize` op). Every Dice figure the project had published was measured at exactly 1.5 mm — the one condition where the mismatch is zero — so accuracy elsewhere was *unmeasured*, not merely lower. Quantified first (mean Dice 0.9219 → 0.7995 at twice the training spacing, small organs collapsing first and non-monotonically), then implemented. Validated across **20 paired cases**: 0.684 → 0.840, improving in 20/20, Wilcoxon *p* = 1.9×10⁻⁶. Inference on the bundled series dropped from 100 s / 8.8 GB to 37 s / 3.0 GB. The step is not free: mask boundaries are decided on the 1.5 mm grid and become stair-stepped when mapped back to a finer original — this is stated in the UI, the model card and the manual.
+- **3-D tracking silently destroyed the AI segmentation.** `handle_3d_track_requested` assigned to `volume_mask` wholesale, so one tracking action erased all 24 organ labels — and `save_project` then persisted the result. Evidence was on disk, not in the code: the cached mask held 3,248,369 voxels of which 100% were the manual-tracking label, with no organ remaining. Tracking now writes only its own layer, and both it and "clear mask" push a whole-volume undo snapshot; clearing additionally requires confirmation that states what will be lost.
+- **`SliceThickness` was used where slice spacing was meant.** Detector collimation is not the reconstruction interval; under overlapping reconstruction the two differ by a factor of two, which would scale the z axis wrongly. The bundled series happens to have both equal to 1.25 mm, so this could never surface locally. Now derived from consecutive `ImagePositionPatient` values, falling back to `SpacingBetweenSlices` and only then to `SliceThickness` — and applied consistently to organ volumes, 3-D mesh geometry and MPR aspect ratio, which had all inherited the same mistake.
+
+### Found by writing assertions
+
+Three defects surfaced only because a test asked "what happens when this fails?" — none were visible by reading the code.
+
+- **The probe read-out kept a stale value.** The whole body of `measure_hu` sat inside `try/except: pass`, so an out-of-range coordinate left the label showing the *previous* reading, coordinates included. It looked exactly like a valid measurement. For a number read off for interpretation, a stale display is worse than a blank one; it now clears.
+- **The model card crashed on a damaged CSV.** Two layers: `csv.DictReader` yields `None` for a missing column and `float(None)` raises `TypeError`, not `ValueError`; and a file containing NUL bytes — the typical shape of a truncated write — makes the csv module raise its own `csv.Error`, which is not any builtin type. Either one propagated to the UI. The card's entire value rests on being trustworthy, so all eight read paths were hardened.
+- **Annotations with numeric ids could never render or be deleted.** The id travels through `setToolTip` (which accepts only `str`) and comes back through `annotation_deleted = Signal(str)`, but `_valid_anno` checked only for the key's presence. A numeric id passed validation, persisted to disk, then threw `TypeError` inside the render layer's exception guard — invisible, undeletable, and one console warning per refresh. Normalised at both entry points rather than patched at the render site.
+
+### Statistics and honesty
+
+- **A confidence-interval overlap test was replacing a paired one.** Teacher and student run on the same cases, so the comparison is paired; judging by whether two bootstrap CIs overlap is a classic false negative. Replaced with a paired bootstrap CI plus Wilcoxon signed-rank. A constructed scenario reproduces the failure: two overlapping CIs whose paired difference interval lies entirely below zero at *p* = 1.6×10⁻¹¹.
+- **The 21-organ Dice was still n = 1.** Now measured over 20 cases: patient-level mean **0.909, 95% CI [0.889, 0.927]**, the original single case at 0.922 sitting inside the interval on the optimistic side. Per-organ reliability spans 0.43 — liver 0.982 against prostate 0.554 — which the aggregate hides entirely. The right upper lung lobe at 0.773 is independently corroborated by a separate study measuring 0.727 on a different draw of cases.
+- **Single cases mislead in both directions.** Three instances now: lung lobes 0.956–0.991 → 0.887 over 57 cases (optimistic), the spacing fix +0.064 → +0.155 over 20 cases (pessimistic by 2.4×), the 21-organ figure 0.922 → 0.909 (mildly optimistic). The lesson recorded in the technical report is not that single cases flatter, but that the direction of the bias cannot be known in advance.
+- **Study III's noise-free condition was undeclared.** The learned-reconstruction study reports a 1.7% false-structure rate, measured on noise-free projections — the condition *least* likely to induce hallucination, since photon starvation is its main driver. The figure was correct for what was measured; what was missing was the boundary. Now stated in the README, the technical report and the experiment's own "Limitations" section, which had previously been titled "stated, not buried" while omitting exactly this.
+- **The 25-class palette contradicted the measured label map.** Fifteen of sixteen colour comments named the wrong organ, the lung lobes were coloured left-for-right, and seven classes had no colour at all — rendered as one shared grey despite right kidney 0.985 and left kidney 0.977 being among the best-segmented structures. All 24 classes now have distinguishable colours (minimum pairwise distance 12 → 43).
+
+### Testing
+
+The suite grew from 325 to **487 checks** (396 data-independent, run in CI). Coverage 79% → **89%**. The layers that had never been exercised moved most: `recon_lab` 44% → 89%, `annotation_lab` 74% → 84%, `interaction` 64% → 79%. Matrix reconstruction is tested through a substituted system matrix — building a real one costs O(n²) Radon transforms and the cached 32² matrix is 23 MB, which CI does not have — since numerical correctness is already covered at the pure-function layer.
 
 ---
 

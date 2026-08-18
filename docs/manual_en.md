@@ -4,6 +4,8 @@
 
 > This manual is written for software version V1.0. All screenshots are demonstrated using the **public dataset TotalSegmentator-CT-Lite (CC-BY-4.0)** — **not patient data, containing no personal health information (PHI)**; the patient-information panel is explicitly labelled as public data.
 
+> **Version correspondence.** The manual **PDF submitted for software-copyright registration is the V1.0 snapshot**; V1.0 is defined by that PDF, which this document does not retroactively amend. This Markdown source has continued to be maintained since V1.0 and now documents features that V1.0 did not yet contain (spacing resampling before inference, per-voxel confidence, the model card, the reconstruction lab's built-in phantom). The resulting differences reflect normal source evolution, not a correction to the registered version.
+
 ---
 
 ## 1. Software Overview
@@ -13,7 +15,7 @@
 **Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
 **Operating environment**: Windows / macOS / Linux desktop systems, Python 3.10; depends on PySide6, pydicom, NumPy, SciPy, scikit-image, ONNX Runtime.
 **Development language**: Python.
-**Software scale**: application code of about 4,100 lines, divided into 13 modules; accompanied by 325 automated regression checks.
+**Software scale**: application code of about 6,000 lines across 18 modules, accompanied by 487 automated regression checks (396 of which are data-independent and run in CI).
 **Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
 
 ---
@@ -134,6 +136,8 @@ Annotations support two ownership modes, **slice-specific** and **global (all-sl
 
 After DICOM data is loaded, the software automatically calls the segmentation model (`models/organs.onnx`, 25 thoracoabdominal organ classes including 5 lung lobes) in a background thread to perform whole-volume sliding-window inference; the "Automated AI engine" area on the right displays the inference progress in real time; inference does not block interface operations. When there is no model file or inference fails, it falls back to a purely mathematical connected-component lung-segmentation algorithm.
 
+> **Spacing resampling before inference.** The model (nnU-Net v2) requires the volume to be resampled to its training voxel spacing (1.5 mm isotropic) first; the software does this automatically and says so in the status line. Skipping it has a measured cost: at twice the training spacing, mean Dice falls from 0.922 to 0.799, with small organs failing first. The step is not free either — mask boundaries are quantised to the 1.5 mm grid and appear stair-stepped when mapped back to a finer original resolution: **structural accuracy up, pixel-level boundary precision down**. Resampling is skipped when the series is already near 1.5 mm, or when the scan range is so large that resampling would exceed the memory limit.
+
 ### 7.2 Result Overlay and Legend
 
 After inference completes, the segmentation result is overlaid on the image as a colour semi-transparent mask, **displayed on all three planes — axial, coronal and sagittal** (mask and image are taken as corresponding slices of the same 3-D array, so they align pixel for pixel); the legend on the right lists each detected organ and its colour, and **clicking a legend entry toggles that organ's visibility**.
@@ -152,6 +156,10 @@ The "Automated AI engine" area lists each detected organ's **volume (mL) and mea
 
 > Why not the mean alone: a mean says nothing about how dispersed the density is inside an organ, and that dispersion is what tells you whether the segmentation has absorbed neighbouring tissue — and is a precondition for any statistical comparison. The 5th/95th percentiles are more robust to single-voxel noise than the extremes.
 
+The panel also reports each organ's **confidence** (the model's softmax max-class probability) together with its **5th percentile**: the mean is pulled up by the large confident interior of an organ, whereas segmentation errors concentrate at boundaries, so the low percentile is the more revealing number; entries below 0.9 are flagged in orange. If an organ has been edited with the brush or 3D tracking, a **model-decided share** is shown as well — hand-edited voxels are excluded from the confidence statistics, because their stored value is the model's judgement about *the label that was there before the edit*, which says nothing about the current one. The manual tracking layer reports no confidence at all, since the model never judged it.
+
+The **"Model card: provenance & limits"** button sets out how the model's origin was established by measurement, how far it has been validated, and what its known limits are. Every number on the card is read live from the experiment outputs under `experiments/results/`, so re-running an experiment updates the card.
+
 ### 7.5 3D Surface Reconstruction
 
 Click **"3D Surface Preview"** and the software reconstructs a 3-D surface for **the organ currently selected as the brush target**, opening a dialog with a **drag-to-rotate** 3-D view together with **surface area, volume, sphericity and face count**. From there the mesh can be **exported as STL** (ASCII, millimetre units, ready for 3D printing or external software).
@@ -161,6 +169,8 @@ Click **"3D Surface Preview"** and the software reconstructs a 3-D surface for *
 The pipeline is **isosurface extraction (marching cubes) → Taubin smoothing → vertex-clustering decimation**, matching the surface-model workflow used by 3D Slicer. Rendering is implemented in pure numpy (orthographic projection + Lambert shading + painter's-algorithm depth sorting), with no dependency on OpenGL or VTK, so no GPU is required. The trade-off is no perspective and no shadows.
 
 > **How the rotation stays responsive**: a full-mesh frame takes ≈ 114 ms (measured, 360 px view, 4,615 faces) — driving the mouse with that is visibly choppy. The dialog therefore **drops quality while dragging and restores it on release**: during a drag it renders a further-decimated mesh (measured on a real organ: 6,798 → 1,984 faces, ≈ 48 ms/frame), and the instant the button is released it repaints one frame from the full mesh — so **what you see at rest is always full precision**. The coarse mesh affects the drag preview only; **shape features and STL export always use the full mesh** (the coarse mesh is 1.6% off in volume, which would corrupt quantification).
+
+> **How spacing resampling propagates into shape features (measured)**: inference now resamples the volume to the model's training spacing (1.5 mm), so mask boundaries are quantised to that grid. On an analytic sphere (R = 20 mm, native 0.713 mm grid, 10 smoothing iterations) this moves the surface-area error from +0.3% to **+1.9%**, the volume error from −0.3% to **−1.0%**, and sphericity from 0.995 to 0.974. Taubin smoothing absorbs most of the staircase so the magnitude stays small, but anyone using shape features for quantitative comparison should know the figure includes this term.
 
 > **Why smoothing matters**: marching cubes alone leaves a voxel staircase, which inflates surface area. Measured on an analytic sphere (R = 20, spacing 1 mm): without smoothing the surface area is **+9.3%** high and sphericity is 0.915; after 10 Taubin iterations these become **+1.2%** and 0.988, while **volume shifts by only +0.08%**. Taubin alternates a positive and a negative pass so the shrinkage cancels — plain Laplacian smoothing would steadily shrink the mesh and corrupt the volume measurement. Decimation (roughly halving the face count by default) halves render time at a volume error on the order of 0.1%.
 
@@ -199,7 +209,13 @@ Click the top tab to switch to **"Reconstruction lab."** This module takes the c
 
 *Figure 9-1  The reconstruction lab quad view: V1 the real slice, V2 the projection sinogram, V3 the unfiltered back-projection (blurry), V4 the filtered back-projection FBP (sharp); on the right are the projection / algorithm controls and performance monitoring.*
 
-### 9.1 Projection Generation (Radon Transform)
+### 9.1 Built-in Phantom (No Data Required)
+
+Clicking **"Load Shepp-Logan phantom"** makes the entire reconstruction lab usable with no DICOM loaded at all. The phantom is generated analytically from ten superposed ellipses (Toft's revised parameters, the same convention as Study I), so it can be produced at any resolution without interpolation blur.
+
+Its decisive advantage over a real slice is that **the ground truth is known**: the V3 error map then measures the distance between the reconstruction and the truth. For a real slice the "ground truth" is only the original image, which already carries noise and reconstruction artefacts of its own, so the error map measures the distance to *that* — not to the truth. Clicking again unloads the phantom and clears the sinogram and reconstructions derived from it, so a phantom sinogram is never left paired with a real-data reference image.
+
+### 9.1.1 Projection Generation (Radon Transform)
 
 In the "X-ray projection generation" area on the right, select the **angular range (60° / 120° / 180° / 360°)** and the **sampling density (standard 1× / high 2× / ultra 4×)**, then click **"Emit rays to generate sinogram"** to perform the Radon transform on the current slice and generate the projection sinogram, shown in V2.
 
@@ -222,7 +238,7 @@ In the "Direct matrix reconstruction & ART / SIRT" area, select the **image size
 
 Click **"DL Recon (CNN post-processing)"** to remove sparse-view FBP streak artefacts with a self-implemented residual U-Net. **V3 shows the network's input (ramp-FBP) and V4 its output**, so what the network actually changed can be compared directly.
 
-Method and quantitative results are in the [experiments guide](../experiments/README.md) and Study III of the [technical report](technical_report.md): on a random phantom family, RMSE is 3–6× lower than the best linear filter, lesion-contrast retention rises from a dose-independent 0.87 ceiling to 0.96–1.00, and the measured false-structure (hallucination) rate is 1.7% (0% beyond a 30% threshold).
+Method and quantitative results are in the [experiments guide](../experiments/README.md) and Study III of the [technical report](technical_report.md): on a random phantom family, RMSE is 3–6× lower than the best linear filter, lesion-contrast retention rises from a view-count-independent 0.87 ceiling to 0.96–1.00, and the measured false-structure (hallucination) rate is 1.7% (0% beyond a 30% threshold) — all under noise-free projections, i.e. the condition least likely to induce hallucination, so treat 1.7% as a lower bound.
 
 > **Three limitations are stated in the UI itself, not just in the docs:**
 > - **The model was trained at 20 views.** When the current view count differs, the V4 title is tagged "⚠ view mismatch" — results degrade at other view counts, and the software does not pretend otherwise.
