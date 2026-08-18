@@ -276,6 +276,58 @@ def _circle_mask(n: int) -> np.ndarray:
     return m
 
 
+# Shepp-Logan 头部模体的十椭圆参数——**Toft 修订版**（Toft 1996），而非 1974 原版。
+# 每行 (a, b, x0, y0, phi_deg, gray)：a/b 为半轴长，(x0,y0) 为中心，phi 为逆时针旋转角，
+# gray 为该椭圆叠加的衰减增量。坐标系为 [-1,1] 归一化，y 轴向上。
+#
+# 【为何取修订版】原版病灶与脑实质的对比度仅 0.01/0.02，肉眼近乎不可见——它是为
+# 检验低对比分辨力设计的，拿来做教学演示则什么都看不出来。修订版把这些灰度整体
+# 放大（脑实质 0.2、病灶 +0.1），是 skimage、MATLAB phantom() 等的默认。
+# 【更要紧的是口径统一】研究一（experiments/recon_study.py）全程用 skimage 的
+# shepp_logan_phantom，即此修订版；实验室与实验若各用一版，两边的 RMSE/对比度
+# 数字就不可比。已实测两者结构对齐（NCC 见 tests 的模体用例）。
+_SHEPP_LOGAN = (
+    (0.6900, 0.9200, 0.0, 0.0000, 0.0, 1.0),    # 颅骨外缘
+    (0.6624, 0.8740, 0.0, -0.0184, 0.0, -0.8),  # 脑实质（挖去颅骨内部，净值 0.2）
+    (0.1100, 0.3100, 0.22, 0.0, -18.0, -0.2),   # 右侧脑室（净值 0，与背景同）
+    (0.1600, 0.4100, -0.22, 0.0, 18.0, -0.2),   # 左侧脑室
+    (0.2100, 0.2500, 0.0, 0.35, 0.0, 0.1),      # 以下六个为不同大小的"病灶"，净值 0.3
+    (0.0460, 0.0460, 0.0, 0.10, 0.0, 0.1),
+    (0.0460, 0.0460, 0.0, -0.10, 0.0, 0.1),
+    (0.0460, 0.0230, -0.08, -0.605, 0.0, 0.1),
+    (0.0230, 0.0230, 0.0, -0.606, 0.0, 0.1),
+    (0.0230, 0.0460, 0.06, -0.605, 0.0, 0.1),
+)
+
+
+def shepp_logan(n: int = 256) -> np.ndarray:
+    """生成 n×n 的 Shepp-Logan 头部模体，归一化到 [0,1] 并施加圆形掩码。
+
+    自实现解析定义而非取自图像库：本模块服务的是教学用重建实验室，模体由十个
+    解析椭圆叠加而成这件事本身就是教学内容；解析生成还能任意分辨率无插值失真，
+    而位图模体缩放到 64² 做 DMR/ART 时会先糊掉一轮。
+
+    圆形掩码与 compute_sinogram（skimage radon 的 circle=True）口径一致：弦图只
+    编码内切圆内的信息，圆外重建恒为 0，不掩掉的话误差图会在四角显示虚假的大误差。
+
+    返回值域 [0,1]，与 generate_sinogram 对真实切片所做的归一化同口径，
+    因此模体与真实数据走的是同一条重建链路，无需任何分支。
+    """
+    if n < 2:
+        raise ValueError(f"模体尺寸至少 2，收到 {n}")
+    # 像素中心落在 [-1,1] 上：用 n 个等分区间的中点，避免 n 为偶数时错开半个像素
+    g = (np.arange(n, dtype=np.float32) + 0.5) * (2.0 / n) - 1.0
+    X, Y = np.meshgrid(g, -g)     # y 轴向上，与模体参数表的坐标约定一致
+    img = np.zeros((n, n), dtype=np.float32)
+    for a, b, x0, y0, phi, gray in _SHEPP_LOGAN:
+        t = np.deg2rad(phi)
+        xr = (X - x0) * np.cos(t) + (Y - y0) * np.sin(t)
+        yr = -(X - x0) * np.sin(t) + (Y - y0) * np.cos(t)
+        img[(xr / a) ** 2 + (yr / b) ** 2 <= 1.0] += gray
+    # 标准参数下值域为 [0,1]，clip 只为防浮点边界溢出
+    return (np.clip(img, 0.0, 1.0) * _circle_mask(n)).astype(np.float32)
+
+
 def prepare_small_image(img_norm: np.ndarray, n: int, angle_range: float,
                         n_proj: int | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """将归一化图像缩小为 n×n，施加圆形掩码后执行 Radon 变换。

@@ -41,7 +41,15 @@ class ReconLabMixin:
         # 切到 2x2，setSizes 在 setUpdatesEnabled(False) 下同步生效
         self._apply_grid_visibility(2)
         self._apply_grid_sizes(2)
-        self.set_view_title(1, "V1 [Ground Truth]" if self.is_english else "V1 [真实切片]")
+        # 标题必须看模体状态：空载时 update_display 会因 volume_hu 为 None 直接返回，
+        # 走不到 _render_recon_reference 那条修正路径，于是切 Tab 往返一次后 V1 就
+        # 挂着「真实切片」显示着模体（实测踩到）。
+        if self._phantom_img is not None:
+            self.set_view_title(1, "V1 [Phantom · known truth]" if self.is_english
+                                else "V1 [模体 · 真值已知]")
+            self.display_numpy_image(1, self._phantom_img)
+        else:
+            self.set_view_title(1, "V1 [Ground Truth]" if self.is_english else "V1 [真实切片]")
         self._set_recon_pending_titles()
         for v in self.views.values():
             v['cb_plane'].hide(); v['preset'].hide(); v['chk_anno'].hide(); v['lock'].hide()
@@ -75,6 +83,13 @@ class ReconLabMixin:
 
     def _render_recon_reference(self, z):
         """重建实验室分支：仅刷新 V1 的"真实切片"参考图，并重置 V2-V4 重建流水线状态。"""
+        # 模体在场时 V1 就该是模体：否则切一次层，V1 变成真实切片而弦图仍来自模体，
+        # 两者对不上却毫无提示。模体不随切片变化，也就不必重置重建流水线。
+        if self._phantom_img is not None:
+            self.display_numpy_image(1, self._phantom_img)
+            self.set_view_title(1, "V1 [Phantom · known truth]" if self.is_english
+                                else "V1 [模体 · 真值已知]")
+            return
         img_gt = self.volume_hu[z]
         ww, wl = self.slider_ww.value(), self.slider_wl.value()
         # 窗宽/窗位映射：将 HU 值线性映射到 [0, 255]
@@ -154,6 +169,61 @@ class ReconLabMixin:
     # =========================================================================
     # 投影生成 + 解析重建（BP / FBP / DFR）
     # =========================================================================
+    PHANTOM_N = 256   # 模体分辨率：解析生成故可任选，256 兼顾 Radon 速度与细节
+
+    def _recon_source_slice(self):
+        """返回重建链路的源图（float32，归一化 [0,1]）与来源标签。
+
+        内置模体优先于真实切片：重建实验室原先必须先导入 DICOM 才能用，空载启动时
+        整个实验室是死的。模体让它自成闭环——且模体是**已知真值**，误差图这一栏
+        才真正有意义（对真实切片，"真值"其实只是原图，本身也含噪声与重建痕迹）。
+
+        无源可用时返回 (None, None)，由各调用方自行 return。
+        """
+        if self._phantom_img is not None:
+            return self._phantom_img, ("Phantom" if self.is_english else "模体")
+        if not self.dicom_datasets or self.volume_hu is None:
+            return None, None
+        img = self.volume_hu[self.current_3d_pos[0]]
+        denom = img.max() - img.min()
+        norm = (img - img.min()) / (denom if denom > 0 else 1.0)
+        return norm.astype(np.float32), ("Origin" if self.is_english else "原图")
+
+    def toggle_phantom(self):
+        """载入/卸下内置 Shepp-Logan 模体。
+
+        卸下时把重建链路的中间状态一并清掉：弦图与上一次重建结果都是基于模体算的，
+        留着会让「模体的弦图」配上「真实数据的原图」，是最容易骗过自己的那类不一致。
+        """
+        on = self._phantom_img is None
+        self._phantom_img = recon_lib.shepp_logan(self.PHANTOM_N) if on else None
+        self.current_sinogram = None
+        self.current_theta = None
+        self._last_recon_img = None
+        # BP 缓存同样作废。它用 `is` 比对弦图对象，换源后本就不会命中，但另两处
+        # 重置点（退出重建模式、换切片）都清了它，这里不清就成了唯一的例外，
+        # 且白白占着一张 256² 中间结果。
+        self._cached_bp = None; self._cached_bp_sino = None
+        for vid in (2, 3, 4):
+            v = self.views[vid]['view']
+            v.image_item.setPixmap(QPixmap()); v.mask_item.setPixmap(QPixmap())
+        for b in (self.btn_bp, self.btn_fbp, self.btn_dfr, self.btn_dl):
+            b.setEnabled(False)
+        e = self.is_english
+        self.btn_phantom.setText(("Unload Phantom" if on else "Load Shepp-Logan Phantom") if e
+                                 else ("卸下模体" if on else "载入 Shepp-Logan 模体"))
+        if on:
+            self.display_numpy_image(1, self._phantom_img)
+            # 标题必须同步改掉：进入重建实验室时 V1 被标为「真实切片」，模体在场时
+            # 仍挂着那个标题等于界面在说谎（截图时发现——只读代码看不出来）
+            self.set_view_title(1, "V1 [Phantom · known truth]" if e else "V1 [模体 · 真值已知]")
+            self.lbl_time.setText("Phantom loaded (known ground truth)" if e
+                                  else "已载入模体（真值已知）")
+        else:
+            self.lbl_time.setText("")
+            self.set_view_title(1, "V1 [Ground Truth]" if e else "V1 [真实切片]")
+            self.update_display()
+
     def generate_sinogram(self):
         """对当前 Axial 切片执行 Radon 变换，生成弦图（Sinogram）。
 
@@ -176,22 +246,17 @@ class ReconLabMixin:
           - V3/V4 清空并提示需要重建
           - 启用 DFR/BP/FBP 三个重建按钮
         """
-        if not self.dicom_datasets or self.volume_hu is None:
-            return
-        ar = self._get_n_angles()
-        self.current_theta = recon_lib.make_theta(ar, ar * self._get_angle_oversample())
-
-        # 来源选择：有重建结果时对重建图做 Radon，用完清空（下次回到原图）
+        # 来源选择：有重建结果时对重建图做 Radon，用完清空（下次回到原图/模体）
         if self._last_recon_img is not None:
             img_src = self._last_recon_img
             src_label = "重建图" if not self.is_english else "Recon"
-            self._last_recon_img = None   # 消费后清空，下次按钮回到原图路径
+            self._last_recon_img = None   # 消费后清空，下次按钮回到源图路径
         else:
-            z = self.current_3d_pos[0]
-            img_gt = self.volume_hu[z]
-            denom = img_gt.max() - img_gt.min()
-            img_src = (img_gt - img_gt.min()) / (denom if denom > 0 else 1.0)
-            src_label = "原图" if not self.is_english else "Origin"
+            img_src, src_label = self._recon_source_slice()
+            if img_src is None:
+                return
+        ar = self._get_n_angles()
+        self.current_theta = recon_lib.make_theta(ar, ar * self._get_angle_oversample())
 
         start_t = time.perf_counter()
         self.current_sinogram = recon_lib.compute_sinogram(img_src, self.current_theta)
@@ -359,12 +424,9 @@ class ReconLabMixin:
 
         返回：(img_small, sinogram, theta, n)
         """
-        if not self.dicom_datasets or self.volume_hu is None:
+        img_norm, _ = self._recon_source_slice()
+        if img_norm is None:
             return None, None, None, None
-        z = self.current_3d_pos[0]
-        img_gt = self.volume_hu[z]
-        denom = img_gt.max() - img_gt.min()
-        img_norm = (img_gt - img_gt.min()) / (denom if denom > 0 else 1.0)
         n = int(self.cb_matrix_size.currentText().split('×')[0])
         ar = self._get_n_angles()
         img_small, sinogram, theta = recon_lib.prepare_small_image(img_norm, n, ar, ar * self._get_angle_oversample())
@@ -455,8 +517,7 @@ class ReconLabMixin:
         视图分配：V1=原图, V2=弦图, V3=误差图, V4=重建结果
         渲染：smooth=False 保留像素块（与 kron 上采样配合）
         """
-        if self.volume_hu is None:
-            return
+        # 不再检查 volume_hu：源图可以是内置模体，_prepare 内部统一判空
         img_small, sinogram, theta, n = self._prepare_small_image_and_sinogram()
         if img_small is None:
             return
@@ -509,8 +570,7 @@ class ReconLabMixin:
           - 支持中途取消（wasCanceled），取消后显示当前迭代的中间结果
           - 视图分配与 DMR 相同：V1=原图, V2=弦图, V3=误差, V4=重建
         """
-        if self.volume_hu is None:
-            return
+        # 不再检查 volume_hu：源图可以是内置模体，_prepare 内部统一判空
         img_small, sinogram, theta, n = self._prepare_small_image_and_sinogram()
         if img_small is None:
             return
