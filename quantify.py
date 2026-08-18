@@ -14,15 +14,20 @@ import scipy.ndimage as ndimage
 
 def compute_organ_stats(volume_hu: np.ndarray, volume_mask: np.ndarray,
                         spacing: tuple[float, float, float],
-                        organ_names: dict[int, tuple[str, str]]) -> list[dict]:
+                        organ_names: dict[int, tuple[str, str]],
+                        volume_conf: np.ndarray | None = None) -> list[dict]:
     """统计 volume_mask 中各标签的体积(mL)与 HU 一阶统计量，按体积降序返回。
 
     volume_hu:    3D HU 值体素数组，shape=(Z,H,W)
     volume_mask:  同形状的 uint8 标签图（0=背景，1-255=器官/手动层）
     spacing:      (行间距 ps0, 列间距 ps1, 层厚 st)，单位 mm
     organ_names:  {标签号: (中文名, 英文名)}；缺失标签回退为 "类{id}"/"cls{id}"
+    volume_conf:  可选，同形状 uint8 置信度（255=1.0），来自 softmax 最大类概率。
+                  给了才输出 mean_conf/p5_conf，没给则该键缺席——数学降级路径没有
+                  概率输出，此时宁可不报，也不填一个看起来像置信度的数。
     返回:         [{'id','name_zh','name_en','voxels','volume_ml',
                     'mean_hu','sd_hu','median_hu','p5_hu','p95_hu','min_hu','max_hu'}, ...]，
+                  给了 volume_conf 时另含 'mean_conf','p5_conf'（0-1）。
                   按 volume_ml 降序；无前景标签时返回 []。
 
     为何不止 mean：只报均值无法反映区域内的密度离散程度，而离散度正是判断分割是否
@@ -50,18 +55,35 @@ def compute_organ_stats(volume_hu: np.ndarray, volume_mask: np.ndarray,
     with np.errstate(invalid='ignore', divide='ignore'):
         means = np.atleast_1d(ndimage.mean(volume_hu, labels=lbl, index=present))
         sds = np.atleast_1d(ndimage.standard_deviation(volume_hu, labels=lbl, index=present))
-        mins = np.atleast_1d(ndimage.minimum(volume_hu, labels=lbl, index=present))
-        maxs = np.atleast_1d(ndimage.maximum(volume_hu, labels=lbl, index=present))
     rows = []
     for i, lid in enumerate(present):
         zh, en = organ_names.get(lid, (f"类{lid}", f"cls{lid}"))
-        # 百分位需按标签取值，ndimage 无对应聚合函数；仅对本标签体素取一次
-        vals = volume_hu[volume_mask == lid]
+        # 百分位需按标签取值，ndimage 无对应聚合函数；仅对本标签体素取一次。
+        # min/max 也从这份 vals 直接取：原先另调 ndimage.minimum/maximum，
+        # 每个都要再扫一遍完整体积（233×512² ≈ 6100 万体素），而所需数据此处已在手；
+        # 顺带消掉「统计量走 lbl、百分位走 volume_mask」的双索引口径。
+        sel = volume_mask == lid
+        vals = volume_hu[sel]
         p5, med, p95 = np.percentile(vals, (5, 50, 95))
-        rows.append({'id': lid, 'name_zh': zh, 'name_en': en, 'voxels': int(counts[lid]),
-                     'volume_ml': counts[lid] * vox_ml,
-                     'mean_hu': float(means[i]), 'sd_hu': float(sds[i]),
-                     'median_hu': float(med), 'p5_hu': float(p5), 'p95_hu': float(p95),
-                     'min_hu': float(mins[i]), 'max_hu': float(maxs[i])})
+        row = {'id': lid, 'name_zh': zh, 'name_en': en, 'voxels': int(counts[lid]),
+               'volume_ml': counts[lid] * vox_ml,
+               'mean_hu': float(means[i]), 'sd_hu': float(sds[i]),
+               'median_hu': float(med), 'p5_hu': float(p5), 'p95_hu': float(p95),
+               'min_hu': float(vals.min()), 'max_hu': float(vals.max())}
+        if volume_conf is not None and volume_conf.shape == volume_mask.shape:
+            # conf==0 是哨兵，表示该体素没有模型置信度（手动 3D 追踪写入的、或被画笔
+            # 改过的）。必须排除：它们的原值是模型对**改动前那个器官**的置信度，
+            # 拿来当这个标签的置信度纯属张冠李戴。若整个标签都无模型体素
+            # （手动追踪层就是这种），干脆不报——宁可没有，也不给一个假的。
+            cv = volume_conf[sel]
+            cv = cv[cv > 0].astype(np.float32) / 255.0
+            if cv.size:
+                # p5 一并给出：平均置信度会被大片确信的内部体素拉高，掩盖边界处的低置信，
+                # 而分割出错恰恰多发生在边界——低分位比均值更能暴露问题
+                row['mean_conf'] = float(cv.mean())
+                row['p5_conf'] = float(np.percentile(cv, 5))
+                # 模型判定过的体素占比：远小于 1 说明这个器官已被大量手工改动
+                row['conf_cover'] = float(cv.size / max(1, int(counts[lid])))
+        rows.append(row)
     rows.sort(key=lambda r: -r['volume_ml'])
     return rows
