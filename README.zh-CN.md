@@ -79,12 +79,12 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 9 个无 Qt 计算模块**。
-- 全套 **487 项检查**（需本地研究数据）；CI 跑其中 **396 项数据无关检查**，交互层测试不在 CI 内。
+- 全套 **508 项检查**（需本地研究数据）；CI 跑其中 **417 项数据无关检查**，交互层测试不在 CI 内。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
-python tests/test_gui.py                     # 完整回归：487 项；需本地 RIDER 数据
-SKIP_REAL_DATA=1 python tests/test_gui.py    # CI 使用的 396 项数据无关检查
+python tests/test_gui.py                     # 完整回归：508 项；需本地 RIDER 数据
+SKIP_REAL_DATA=1 python tests/test_gui.py    # CI 使用的 417 项数据无关检查
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```
@@ -92,7 +92,7 @@ coverage run tests/test_gui.py && coverage report
 <details>
 <summary><strong>覆盖率详情</strong></summary>
 
-离屏 Qt 覆盖率 **86%**（3266 条语句）。九个无 Qt 模块（`recon` 84%、`quantify` 100%、`segmentation` 86%、`mpr_geometry` 96%、`followup` 90%、`projection` 95%、`mesh3d` 96%、`registration` 98%、`model_card` 73%）均有独立单测；合成鼠标 press/move/release 序列会断言信号载荷（`graphics_view` 91%）。此前无人走过的几层提升明显：重建实验室 UI 调度 `recon_lab` 44% → **89%**，标注/分割编辑 `annotation_lab` 74% → **84%**，鼠标交互调度 `interaction.py` 64% → **79%**。写这些断言的过程挖出三个只读代码发现不了的缺陷：光标移出体积后探针仍显示上一次的读数、模型说明卡遇到截断的 CSV 会崩、数字 id 的标注永远渲染不出也删不掉。因此，CI 全绿只代表数据无关子集通过，不等于所有本地数据交互测试均已运行。
+离屏 Qt 覆盖率 **90%**（3277 条语句）。九个无 Qt 模块（`recon` 84%、`quantify` 100%、`segmentation` 86%、`mpr_geometry` 96%、`followup` 90%、`projection` 95%、`mesh3d` 96%、`registration` 98%、`model_card` 73%）均有独立单测；合成鼠标 press/move/release 序列会断言信号载荷（`graphics_view` 91%）。此前无人走过的几层提升明显：重建实验室 UI 调度 `recon_lab` 44% → **89%**，标注/分割编辑 `annotation_lab` 74% → **84%**，鼠标交互调度 `interaction.py` 64% → **98%**、随访对比 `compare_lab` 82% → **95%**。写这些断言的过程挖出三个只读代码发现不了的缺陷：光标移出体积后探针仍显示上一次的读数、模型说明卡遇到截断的 CSV 会崩、数字 id 的标注永远渲染不出也删不掉。因此，CI 全绿只代表数据无关子集通过，不等于所有本地数据交互测试均已运行。
 
 </details>
 

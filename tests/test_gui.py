@@ -1945,6 +1945,176 @@ def test_mask_cache_guard():
     check(not ok, "当前序列缺 UID → 拒绝")
 
 
+def test_mpr_linkage(app):
+    """MPR 联动的入口与十字线同步：开关默认平面、平面切换的越界防护、光标 HUD。
+
+    这几段是 interaction.py 里剩下的零覆盖区，而 MPR 联动正是四窗阅片的核心交互。
+    三个平面共用同一个 3D 光标，任一处坐标映射写错都会让十字线指向别的解剖位置——
+    这种错误在界面上看是「联动有点怪」，很难归因，故用断言把映射钉死。
+    """
+    print("[MPR 联动与十字线同步]")
+    from PySide6.QtCore import QPointF
+
+    from constants import SAGITTAL
+    vi = None
+    try:
+        vi = m.MedicalViewer(); app.processEvents()
+        if vi.ai_thread: vi.ai_thread.cancel()
+        Z, H, W = 10, 30, 40
+        vi.volume_hu = np.zeros((Z, H, W), np.float32)
+        vi.volume_hu[5, 10, 20] = 123.0
+        vi.dicom_datasets = [None] * Z
+        vi.slider_slice.setRange(0, Z - 1); vi.slider_slice.setValue(5)
+        vi.current_3d_pos = [5, 15, 20]
+
+        vi.btn_mpr.setChecked(True); vi.on_mpr_toggled(True); app.processEvents()
+        planes = [vi.views[v]['cb_plane'].currentIndex() for v in (1, 2, 3, 4)]
+        check(planes == [AXIAL, CORONAL, SAGITTAL, AXIAL],
+              f"开启联动时四视图落到默认平面 {planes}")
+
+        vi.on_mpr_toggled(False); app.processEvents()
+        check(True, "关闭联动时隐藏十字线，不崩")
+
+        # 下拉框清空重填会发出 index=-1，必须过滤掉而不是写进 plane
+        before = vi.views[1]['plane']
+        vi.change_view_plane(1, -1); app.processEvents()
+        check(vi.views[1]['plane'] == before, "plane_idx=-1（下拉重填）被过滤，不写坏视图状态")
+        vi.change_view_plane(1, CORONAL); app.processEvents()
+        check(vi.views[1]['plane'] == CORONAL, "正常切换平面生效")
+        vi.change_view_plane(1, AXIAL); app.processEvents()
+
+        # 十字线同步：三平面共用一个 3D 光标，映射必须与 mpr_geometry 一致
+        vi.btn_mpr.setChecked(True)
+        vi.views[1]['plane'] = AXIAL
+        vi.sync_crosshair(QPointF(20, 10), 1); app.processEvents()
+        check(vi.current_3d_pos[1] == 10 and vi.current_3d_pos[2] == 20,
+              f"Axial 上悬停 (20,10) → 光标 y=10 x=20（得 {vi.current_3d_pos}）")
+        vi.views[2]['plane'] = CORONAL
+        vi.sync_crosshair(QPointF(20, 3), 2); app.processEvents()
+        check(vi.current_3d_pos[0] == 3, f"Coronal 上悬停 → z 跟着走（得 {vi.current_3d_pos}）")
+        check(vi.slider_slice.value() == 3, "切片滑条同步到新 z，不与光标脱节")
+
+        # HUD 报出坐标、HU 与所在器官
+        vi.volume_mask = np.zeros((Z, H, W), np.uint8); vi.volume_mask[5, 10, 20] = 5
+        vi.views[1]['plane'] = AXIAL
+        vi.current_3d_pos = [5, 15, 20]
+        vi.sync_crosshair(QPointF(20, 10), 1); app.processEvents()
+        hud = vi.lbl_hud.text()
+        check('123' in hud, f"HUD 报出该体素 HU（得「{hud}」）")
+        check(('肝' in hud) or ('Liver' in hud) or ('5' in hud),
+              f"HUD 报出所在器官（得「{hud}」）")
+
+        # 联动关闭时只更新 HUD，不改光标
+        vi.btn_mpr.setChecked(False)
+        pos = list(vi.current_3d_pos)
+        vi.sync_crosshair(QPointF(1, 1), 1); app.processEvents()
+        check(list(vi.current_3d_pos) == pos, "联动关闭时悬停只刷 HUD，不移动 3D 光标")
+
+        # 重建/对比模式下不应响应
+        vi.recon_mode_active = True
+        vi.sync_crosshair(QPointF(5, 5), 1); app.processEvents()
+        check(list(vi.current_3d_pos) == pos, "重建实验室模式下十字线同步被守卫")
+        vi.recon_mode_active = False
+    finally:
+        if vi is not None:
+            if vi.ai_thread: vi.ai_thread.cancel()
+            vi.close()
+        app.processEvents()
+
+
+def test_compare_entry(app):
+    """对比模式的入口 toggle_compare：五条分支此前全部零覆盖。
+
+    现有 test_compare 走的是内部方法，绕过了这个入口，于是「没有主序列就点对比」
+    「选目录时按取消」「选到一个没有 DICOM 的目录」这三条防御路径从未被走过——
+    而它们恰恰是用户最容易碰到的。
+    """
+    print("[对比模式入口 toggle_compare]")
+    import shutil
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    saved_i, saved_w, saved_d = QMessageBox.information, QMessageBox.warning, QFileDialog.getExistingDirectory
+    box = {'info': 0, 'warn': 0}
+    QMessageBox.information = staticmethod(lambda *a, **k: box.__setitem__('info', box['info'] + 1))
+    QMessageBox.warning = staticmethod(lambda *a, **k: box.__setitem__('warn', box['warn'] + 1))
+    vi, tmp = None, tempfile.mkdtemp()
+    try:
+        vi = m.MedicalViewer(); app.processEvents()
+        if vi.ai_thread: vi.ai_thread.cancel()
+
+        # 1) 还没有主序列就点「加载对比序列」
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("无主序列时不该弹目录选择框")))
+        vi.toggle_compare(); app.processEvents()
+        check(box['info'] == 1 and not vi.compare_mode_active,
+              "无主序列时提示并返回，不弹目录框")
+
+        # 造一个主序列（合成 DICOM，走完整加载路径）
+        d_main = os.path.join(tmp, 'main'); os.makedirs(d_main)
+        uid_m = generate_uid()
+        for k in range(4):
+            _write_min_dcm(os.path.join(d_main, f'{k}.dcm'), (16, 16), uid_m, ipp_z=k * 2.0,
+                           inst=k + 1, pid='CMP_MAIN')
+        vi.load_data(d_main); app.processEvents()
+        check(vi.volume_hu is not None, f"主序列已加载 {vi.volume_hu.shape}")
+        if vi.ai_thread: vi.ai_thread.cancel()
+
+        # 2) 弹出目录框但用户按了取消
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: "")
+        vi.toggle_compare(); app.processEvents()
+        check(not vi.compare_mode_active and vi.compare_volume is None,
+              "用户取消目录选择 → 不进入对比模式，状态不变")
+
+        # 3) 选到一个没有 DICOM 的目录
+        d_empty = os.path.join(tmp, 'empty'); os.makedirs(d_empty)
+        with open(os.path.join(d_empty, 'readme.txt'), 'w') as fh:
+            fh.write('not dicom')
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: d_empty)
+        box['warn'] = 0
+        vi.toggle_compare(); app.processEvents()
+        check(box['warn'] == 1 and not vi.compare_mode_active,
+              "目录里没有可读 DICOM → 警告并返回")
+
+        # 4) 正常加载既往序列
+        d_prev = os.path.join(tmp, 'prev'); os.makedirs(d_prev)
+        uid_p = generate_uid()
+        for k in range(4):
+            _write_min_dcm(os.path.join(d_prev, f'{k}.dcm'), (16, 16), uid_p, ipp_z=k * 2.0,
+                           inst=k + 1, pid='CMP_PREV')
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: d_prev)
+        vi.toggle_compare(); app.processEvents()
+        check(vi.compare_mode_active and vi.compare_volume is not None,
+              f"进入对比模式，既往序列 {None if vi.compare_volume is None else vi.compare_volume.shape}")
+        check(vi.chk_register.isEnabled(), "对比模式下「配准」复选框启用")
+        check(len(vi.dicom_datasets) == 4 and vi.volume_hu.shape[0] == 4,
+              "读取既往序列没有污染主序列")
+
+        # 5) 再点一次 = 退出
+        QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("退出时不该再弹目录框")))
+        vi.toggle_compare(); app.processEvents()
+        check(not vi.compare_mode_active, "再次点击退出对比模式")
+        check(not vi.chk_register.isEnabled(), "退出后「配准」复选框随之禁用")
+
+        # 重建实验室下不应进入对比
+        vi.recon_mode_active = True
+        box['info'] = 0
+        vi.toggle_compare(); app.processEvents()
+        check(box['info'] == 1 and not vi.compare_mode_active,
+              "重建实验室模式下拒绝进入对比，并给出提示")
+        vi.recon_mode_active = False
+    finally:
+        QMessageBox.information, QMessageBox.warning = saved_i, saved_w
+        QFileDialog.getExistingDirectory = saved_d
+        shutil.rmtree(tmp, ignore_errors=True)
+        if vi is not None:
+            if vi.ai_thread: vi.ai_thread.cancel()
+            vi.close()
+        app.processEvents()
+
+
 def test_crop_and_legend(app):
     """截取工具、标注 CRUD、图例显隐、定量面板的置信度显示——annotation_lab 的零覆盖区。
 
@@ -2964,7 +3134,8 @@ def main_run():
                   test_hu_conversion, test_mask_cache_roundtrip, test_mouse_interaction,
                   test_mesh_view, test_ai_failure_visible, test_mask_nondestructive,
                   test_phantom_recon_flow, test_probe_hu, test_wheel_and_cine,
-                  test_matrix_recon_ui, test_crop_and_legend):
+                  test_matrix_recon_ui, test_crop_and_legend, test_compare_entry,
+                  test_mpr_linkage):
             t(app)
         test_spacing_resample()  # 假 session，不加载权重
         test_phantom()        # 纯解析生成，无需 app
@@ -3030,6 +3201,8 @@ def main_run():
         test_wheel_and_cine(app)
         test_matrix_recon_ui(app)
         test_crop_and_legend(app)
+        test_compare_entry(app)
+        test_mpr_linkage(app)
         test_spacing_resample()
         test_phantom()
         test_phantom_recon_flow(app)

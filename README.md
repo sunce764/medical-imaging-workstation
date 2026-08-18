@@ -79,12 +79,12 @@ The experiments call the shipped production pipeline rather than a separate reim
 ## Engineering and testing
 
 - The original God-object is decomposed into **5 UI mixins + 9 Qt-free compute modules**.
-- The full suite is **487 checks** (needs local research data); CI runs the **396 data-independent** ones, leaving interaction tests outside CI.
+- The full suite is **508 checks** (needs local research data); CI runs the **417 data-independent** ones, leaving interaction tests outside CI.
 - Reconstruction tests assert numerical correctness, not merely finite output; DICOM loading is defensive against malformed metadata.
 
 ```bash
-python tests/test_gui.py                     # full suite: 487 checks; requires local RIDER data
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 396 data-independent checks used by CI
+python tests/test_gui.py                     # full suite: 508 checks; requires local RIDER data
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 417 data-independent checks used by CI
 ruff check .                                 # lint
 coverage run tests/test_gui.py && coverage report
 ```
@@ -92,7 +92,7 @@ coverage run tests/test_gui.py && coverage report
 <details>
 <summary><strong>Coverage detail</strong></summary>
 
-Offscreen-Qt coverage is **86%** over 3266 statements. The nine Qt-free modules (`recon` 84%, `quantify` 100%, `segmentation` 86%, `mpr_geometry` 96%, `followup` 90%, `projection` 95%, `mesh3d` 96%, `registration` 98%, `model_card` 73%) are unit-tested independently. Synthesised mouse press/move/release sequences assert emitted signal payloads (`graphics_view` 91%). Pinning down the previously untested layers moved them substantially: reconstruction-lab UI scheduling `recon_lab` 44% → **89%**, annotation/segmentation editing `annotation_lab` 74% → **84%**, the mouse-interaction dispatcher `interaction.py` 64% → **79%**. Writing those assertions surfaced three real defects that reading the code had not: a probe read-out that kept showing the previous value when the cursor left the volume, a model card that crashed on a truncated CSV, and annotations with numeric ids that could never render or be deleted. A green CI run therefore confirms the data-independent subset, not every local-data interaction test.
+Offscreen-Qt coverage is **90%** over 3277 statements. The nine Qt-free modules (`recon` 84%, `quantify` 100%, `segmentation` 86%, `mpr_geometry` 96%, `followup` 90%, `projection` 95%, `mesh3d` 96%, `registration` 98%, `model_card` 73%) are unit-tested independently. Synthesised mouse press/move/release sequences assert emitted signal payloads (`graphics_view` 91%). Pinning down the previously untested layers moved them substantially: reconstruction-lab UI scheduling `recon_lab` 44% → **89%**, annotation/segmentation editing `annotation_lab` 74% → **84%**, the mouse-interaction dispatcher `interaction.py` 64% → **98%**, follow-up comparison `compare_lab` 82% → **95%**. Writing those assertions surfaced three real defects that reading the code had not: a probe read-out that kept showing the previous value when the cursor left the volume, a model card that crashed on a truncated CSV, and annotations with numeric ids that could never render or be deleted. A green CI run therefore confirms the data-independent subset, not every local-data interaction test.
 
 </details>
 
