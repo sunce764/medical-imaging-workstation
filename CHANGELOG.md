@@ -11,7 +11,7 @@ Every issue followed the same disciplined loop, never guesswork:
 3. **Regression lock-in**: every issue is written into `tests/test_gui.py` to prevent regressions.
 4. **One issue per commit**: before committing, check that no PHI / large files slipped in (`肺癌/`, `*.dcm`, `organs.onnx.data` are all .gitignore'd).
 
-The regression suite grew from an initial ~10 checks to **64 checks (20 test functions)**; `python tests/test_gui.py` exit code 0 = all pass (later engineering work raised this to **102 checks**, and the 2026-08 round to **508**, see the sections below).
+The regression suite grew from an initial ~10 checks to **64 checks (20 test functions)**; `python tests/test_gui.py` exit code 0 = all pass (later engineering work raised this to **102 checks**, and the 2026-08 round to **516**, see the sections below).
 
 ---
 
@@ -146,7 +146,7 @@ Three defects surfaced only because a test asked "what happens when this fails?"
 
 ### Testing
 
-The suite grew from 325 to **508 checks** (417 data-independent, run in CI). Coverage 79% → **89%**. The layers that had never been exercised moved most: `recon_lab` 44% → 89%, `annotation_lab` 74% → 84%, `interaction` 64% → 79%. Matrix reconstruction is tested through a substituted system matrix — building a real one costs O(n²) Radon transforms and the cached 32² matrix is 23 MB, which CI does not have — since numerical correctness is already covered at the pure-function layer.
+The suite grew from 325 to **516 checks** (424 data-independent, run in CI). Coverage 79% → **89%**. The layers that had never been exercised moved most: `recon_lab` 44% → 89%, `annotation_lab` 74% → 84%, `interaction` 64% → 79%. Matrix reconstruction is tested through a substituted system matrix — building a real one costs O(n²) Radon transforms and the cached 32² matrix is 23 MB, which CI does not have — since numerical correctness is already covered at the pure-function layer.
 
 ---
 

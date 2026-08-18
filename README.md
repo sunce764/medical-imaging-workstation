@@ -79,12 +79,12 @@ The experiments call the shipped production pipeline rather than a separate reim
 ## Engineering and testing
 
 - The original God-object is decomposed into **5 UI mixins + 9 Qt-free compute modules**.
-- The full suite is **508 checks** (needs local research data); CI runs the **417 data-independent** ones, leaving interaction tests outside CI.
+- The full suite is **516 checks** (needs local research data); CI runs the **424 data-independent** ones, leaving interaction tests outside CI.
 - Reconstruction tests assert numerical correctness, not merely finite output; DICOM loading is defensive against malformed metadata.
 
 ```bash
-python tests/test_gui.py                     # full suite: 508 checks; requires local RIDER data
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 417 data-independent checks used by CI
+python tests/test_gui.py                     # full suite: 516 checks; requires local RIDER data
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 424 data-independent checks used by CI
 ruff check .                                 # lint
 coverage run tests/test_gui.py && coverage report
 ```

@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QSizePolicy,
     QSlider,
     QSpinBox,
@@ -128,10 +129,34 @@ class UiBuilderMixin:
         self.tabs.currentChanged.connect(self.on_tab_changed)
         rl.addWidget(self.tabs)
 
+    def _scrollable(self, tab):
+        """给 Tab 套一层竖向滚动区，返回可继续 addWidget 的内层布局。
+
+        右侧面板宽度固定 320px，而内容高度随检出器官数变化：实测 18 个器官时临床
+        Tab 需要约 1540px，笔记本上可用高度只有 ~775px。Qt 在空间不足时不会溢出，
+        而是**压缩可伸缩控件**——实测把器官定量标签压到了 0px，状态栏写着「检出
+        18 个器官」，下面一条数据都看不见。这比截断更隐蔽：用户不会意识到有内容
+        存在。故改为滚动，压不下就滚，绝不静默吞掉内容。
+
+        水平滚动条一律关闭：面板宽度固定，出现横向滚动只说明某个控件超宽，那是
+        布局错误而不该靠滚动条掩盖。
+        """
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.NoFrame)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        inner = QWidget()
+        lay = QVBoxLayout(inner)
+        lay.setContentsMargins(0, 0, 0, 0)
+        area.setWidget(inner)
+        outer.addWidget(area, 1)
+        return lay, outer
+
     def _build_clinical_tab(self):
         """临床阅片 Tab：患者信息 / 显示控制（布局+MPR+三滑条+预设）/ AI 状态 / 测量与清理。"""
-        t1_lay = QVBoxLayout(self.tab_clinical)
-        t1_lay.setContentsMargins(0, 0, 0, 0)
+        t1_lay, t1_outer = self._scrollable(self.tab_clinical)
 
         # 患者信息分组
         self.grp_patient = QGroupBox("患者信息")
@@ -333,20 +358,20 @@ class UiBuilderMixin:
 
         t1_lay.addStretch()
 
-        # 破坏性操作沉到最底部，并用分隔线与常规控件隔开：这两个按钮一个作废
-        # ~100s 的推理结果、一个清空整个工作区，不该与日常控件混在一起随手点到。
+        # 破坏性操作固定在面板底部，**不进滚动区**：这两个按钮一个作废 ~100s 的推理
+        # 结果、一个清空整个工作区。位置固定才不会因为上方内容多少而漂移——需要它时
+        # 总在同一处，也不会在滚动中被误点。分隔线把它们与日常控件划开。
         sep = QFrame(); sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("color: #2A3142;"); t1_lay.addWidget(sep)
+        sep.setStyleSheet("color: #2A3142;"); t1_outer.addWidget(sep)
         self.btn_clear_anno = QPushButton("清空蒙版与标注"); self.btn_clear_anno.setProperty("class", "ActionBtn")
-        self.btn_clear_anno.clicked.connect(self.clear_mask_and_annotations); t1_lay.addWidget(self.btn_clear_anno)
+        self.btn_clear_anno.clicked.connect(self.clear_mask_and_annotations); t1_outer.addWidget(self.btn_clear_anno)
         self.btn_reset = QPushButton("重置工作区"); self.btn_reset.setObjectName("DangerBtn")
-        self.btn_reset.clicked.connect(self.reset_all_states); t1_lay.addWidget(self.btn_reset)
+        self.btn_reset.clicked.connect(self.reset_all_states); t1_outer.addWidget(self.btn_reset)
         t1_lay.addStretch()
 
     def _build_recon_tab(self):
         """重建实验室 Tab：投影生成 / BP-FBP-DFR / DMR-ART-SIRT / 性能监控。"""
-        t2_lay = QVBoxLayout(self.tab_recon)
-        t2_lay.setContentsMargins(0, 0, 0, 0)
+        t2_lay, _ = self._scrollable(self.tab_recon)
 
         # 投影生成分组：角度单选 + 生成按钮
         self.grp_proj = QGroupBox("X射线投影生成")

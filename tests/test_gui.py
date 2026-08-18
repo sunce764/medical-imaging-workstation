@@ -13,6 +13,7 @@
 # =============================================================================
 import os
 import sys
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -2022,6 +2023,71 @@ def test_mpr_linkage(app):
         app.processEvents()
 
 
+def test_panel_scroll(app):
+    """器官多时右侧面板必须能滚动，而不是把内容压没。
+
+    实测缺陷：18 个器官时临床 Tab 内容需约 1540px，笔记本上可用高度只有 ~775px。
+    Qt 在空间不足时不会溢出，而是**压缩可伸缩控件**——器官定量标签被压到 0px 高，
+    状态栏写着「检出 18 个器官」，下面一条数据都读不到。这比截断更隐蔽：用户
+    不会意识到还有内容存在。
+    """
+    print("[右侧面板滚动与底部固定]")
+    from PySide6.QtCore import Qt as _Qt
+    from PySide6.QtWidgets import QScrollArea
+    vi = None
+    try:
+        vi = m.MedicalViewer(); vi.setFixedHeight(900); vi.resize(1600, 900); vi.show()
+        app.processEvents()
+        if vi.ai_thread: vi.ai_thread.cancel()
+        Z, H, W = 30, 128, 128
+        vi.volume_hu = np.full((Z, H, W), 40.0, np.float32)
+        vi.dicom_datasets = [type('D', (), {'PatientID': 'X', 'SeriesInstanceUID': '1',
+                                            'StudyDate': '20240101', 'PixelSpacing': [1.5, 1.5],
+                                            'SliceThickness': 1.5})() for _ in range(Z)]
+        vi.slider_slice.setRange(0, Z - 1); vi.current_3d_pos = [15, 64, 64]
+        mk = np.zeros((Z, H, W), np.uint8)
+        for i, lab in enumerate([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20]):
+            r, c = divmod(i, 6)
+            mk[10:20, 10 + r * 30:28 + r * 30, 8 + c * 20:24 + c * 20] = lab
+        vi.volume_mask = mk
+        vi.volume_conf = np.full((Z, H, W), 240, np.uint8)
+        vi._update_organ_stats()
+        # QScrollArea 的 widgetResizable 要走完一个布局周期才把高度分配下去，
+        # 而 processEvents() 只处理已排队的事件、不推进时间。不等就会量到中间态
+        # （实测 28px），把「布局还没算完」误判成「内容被压缩」。
+        _t0 = time.time()
+        while time.time() - _t0 < 0.5:
+            app.processEvents(); time.sleep(0.01)
+
+        n = len(vi._organ_stats)
+        check(n >= 15, f"构造出 {n} 个器官的定量（模拟真实推理规模）")
+        need = vi.lbl_ai_stats.sizeHint().height()
+        got = vi.lbl_ai_stats.height()
+        check(got >= need * 0.95,
+              f"定量标签拿到足够高度：需 {need}px 实得 {got}px（压缩过就读不到数据）")
+
+        areas = vi.right_panel.findChildren(QScrollArea)
+        check(len(areas) >= 2, f"两个 Tab 都有滚动区（{len(areas)} 个）")
+        for a_ in areas:
+            check(a_.horizontalScrollBarPolicy() == _Qt.ScrollBarAlwaysOff,
+                  "  水平滚动条关闭——面板宽度固定，出现横向滚动只说明布局错了")
+
+        # 破坏性操作固定在底部：滚动时位置不变，且始终可见
+        y1 = vi.btn_reset.mapTo(vi.right_panel, vi.btn_reset.rect().bottomLeft()).y()
+        for a_ in areas:
+            a_.verticalScrollBar().setValue(a_.verticalScrollBar().maximum())
+        app.processEvents()
+        y2 = vi.btn_reset.mapTo(vi.right_panel, vi.btn_reset.rect().bottomLeft()).y()
+        check(y1 == y2, f"滚到底后「重置工作区」不移动（y={y1}→{y2}）")
+        check(0 < y2 <= vi.right_panel.height(),
+              f"始终在可视区内（底边 {y2} ≤ 面板 {vi.right_panel.height()}）")
+    finally:
+        if vi is not None:
+            if vi.ai_thread: vi.ai_thread.cancel()
+            vi.close()
+        app.processEvents()
+
+
 def test_compare_entry(app):
     """对比模式的入口 toggle_compare：五条分支此前全部零覆盖。
 
@@ -3134,7 +3200,7 @@ def main_run():
                   test_hu_conversion, test_mask_cache_roundtrip, test_mouse_interaction,
                   test_mesh_view, test_ai_failure_visible, test_mask_nondestructive,
                   test_phantom_recon_flow, test_probe_hu, test_wheel_and_cine,
-                  test_matrix_recon_ui, test_crop_and_legend, test_compare_entry,
+                  test_matrix_recon_ui, test_crop_and_legend, test_compare_entry, test_panel_scroll,
                   test_mpr_linkage):
             t(app)
         test_spacing_resample()  # 假 session，不加载权重
@@ -3202,6 +3268,7 @@ def main_run():
         test_matrix_recon_ui(app)
         test_crop_and_legend(app)
         test_compare_entry(app)
+        test_panel_scroll(app)
         test_mpr_linkage(app)
         test_spacing_resample()
         test_phantom()
