@@ -101,6 +101,7 @@ Offscreen-Qt coverage is **90%** over 3277 statements. The nine Qt-free modules 
 | Document | Language | Purpose |
 |---|---|---|
 | [Architecture](docs/ARCHITECTURE.md) | EN | Module map, God-object decomposition, segmentation-model provenance and AI-pipeline contract |
+| [The spacing contract](docs/spacing_contract.md) | 中文 | A worked example: finding that the product violated the model's inference contract, quantifying the cost, fixing it, and stating what remains unmeasured |
 | [User manual](docs/manual_en.md) · [中文](docs/manual_zh.md) · [PDF](docs/manual_zh.pdf) | EN · 中文 | Screenshot-led guide to every user-facing feature |
 | [Technical report](docs/technical_report.md) | EN | Methods, figures and results for Studies I–III |
 | [Preprint — Study I](docs/preprint_recon.md) | EN | Sparse-view / low-dose reconstruction in academic format |

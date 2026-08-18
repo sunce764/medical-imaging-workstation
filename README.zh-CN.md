@@ -101,6 +101,7 @@ coverage run tests/test_gui.py && coverage report
 | 文档 | 语言 | 用途 |
 |---|---|---|
 | [架构说明](docs/ARCHITECTURE.md) | 英文 | 模块图、God-object 分解、分割模型出处和 AI 管线契约 |
+| [一个未被满足的推理契约](docs/spacing_contract.md) | 中文 | 一次完整的工程判断：发现产品违背模型前提、量化代价、修复、多例验证、声明未测边界 |
 | [软件说明书](docs/manual_zh.md) · [English](docs/manual_en.md) · [PDF](docs/manual_zh.pdf) | 中文 · EN | 按界面截图讲解全部用户功能 |
 | [技术报告](docs/technical_report.md) | 英文 | 研究 I–III 的方法、图表与结果 |
 | [预印本稿 —— 研究 I](docs/preprint_recon.md) | 英文 | 学术格式的稀疏视角 / 低剂量重建研究 |

@@ -90,6 +90,7 @@ python experiments/seg_spacing.py engine 3.0        # direct vs ai_engine (isola
 python experiments/seg_spacing.py multi 3.0 20      # the same comparison across 20 cases, paired
 python experiments/seg_multi.py 20                  # Study II at scale: 21-organ Dice over 20 cases
 python experiments/seg_multi.py plot                # redraw from the committed CSVs
+python experiments/mesh_spacing_effect.py           # how resampling propagates into 3-D shape features
 ```
 
 ## Methods
