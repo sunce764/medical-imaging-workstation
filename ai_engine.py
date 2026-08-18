@@ -15,9 +15,43 @@ from collections.abc import Callable
 import numpy as np
 import shiboken6  # 随 PySide6 一同安装（PySide6_Essentials 硬依赖 shiboken6==6.11.0），非新增依赖
 from PySide6.QtCore import QObject, Signal
+from scipy import ndimage
 
 import segmentation
 from constants import MODEL_PATH
+
+# organs.onnx = TotalSegmentator v2（nnU-Net v2），训练 spacing 为 1.5mm 各向同性。
+# 推理前重采样到该值是 nnU-Net 的推理契约，不是可选优化：实测偏离一倍即掉 13% Dice
+# （experiments/seg_spacing.py）。
+TARGET_SPACING = 1.5
+# 重采样后的体素数上限，防止对**粗** spacing 放大时 OOM（已知 61M 体素约对应 8.8GB 峰值，
+# 取 70M 留余量）。实际很少触发：重采样到固定 1.5mm 之后，体素数只由扫描 FOV 决定
+# ——胸腹 CT 约 400mm³ 恒定落在 19M 上下，与原始 spacing 无关。这正是重采样的一个额外
+# 好处：推理的内存与耗时不再随扫描协议波动，变成可预期的常量。能超限的是全身长范围扫描。
+_MAX_RESAMPLED_VOXELS = 70_000_000
+
+
+def _fit_shape(arr: np.ndarray, shape: tuple) -> np.ndarray:
+    """把 zoom 结果对齐到目标 shape：多出来的裁掉，少的用边缘值补。
+
+    zoom 的输出尺寸由 round(n*factor) 决定，与来回两次缩放的目标可能差 1 个体素。
+    差一格若不处理，回调里的 `final_mask.shape != volume_hu.shape` 判定会直接丢弃
+    整次推理结果——一百秒白跑，且界面只是安静地什么都不显示。
+    """
+    if arr.shape == tuple(shape):
+        return arr
+    out = np.zeros(shape, dtype=arr.dtype)
+    sl = tuple(slice(0, min(a, b)) for a, b in zip(arr.shape, shape, strict=True))
+    out[sl] = arr[sl]
+    # 尾部若有缺口，用最后一个有效切片沿各轴补齐，避免边界出现整层空洞
+    for ax, (a, b) in enumerate(zip(arr.shape, shape, strict=True)):
+        if a < b:
+            idx = [slice(None)] * len(shape)
+            src = list(idx); src[ax] = slice(a - 1, a)
+            for k in range(a, b):
+                dst = list(idx); dst[ax] = slice(k, k + 1)
+                out[tuple(dst)] = out[tuple(src)]
+    return out
 
 
 class _AISignals(QObject):
@@ -59,7 +93,8 @@ class AutoAIEngineThread:
                  callback: Callable[[np.ndarray, float], None],
                  model_path: str = MODEL_PATH,
                  progress_callback: Callable[[int, int], None] | None = None,
-                 failed_callback: Callable[[str], None] | None = None) -> None:
+                 failed_callback: Callable[[str], None] | None = None,
+                 spacing: tuple[float, float, float] | None = None) -> None:
         # volume_hu: 完整的 3D HU 值体素数组，shape=(Z, H, W)，float32
         # callback: 推理完成后调用，签名为 callback(label_map, elapsed_ms)
         #           label_map 为 uint8 多类标签图（0=背景，1-24=器官类别）
@@ -73,6 +108,16 @@ class AutoAIEngineThread:
         self.progress_callback = progress_callback
         self.failed_callback = failed_callback
         self._thread = None
+        # 体素物理间距 (z, y, x)，单位 mm，轴序与 volume_hu 一致。None 表示未知，
+        # 此时不做 spacing 重采样——插值必须基于真实物理尺寸，猜一个只会更糟。
+        self.spacing = tuple(float(s) for s in spacing) if spacing is not None else None
+        # 实际发生过重采样时记为 (原 shape, 送入模型的 shape)，供 UI 如实告知用户
+        self.resampled_from = None
+        # 逐体素置信度（softmax 最大类概率，量化为 uint8 的 0-255 对应 0-1）。
+        # 走实例属性而非扩展 finished 信号：不改动已有的信号契约与回调签名。
+        # Qt 队列连接的投递自带内存屏障，emit 前的写入对主线程槽函数可见。
+        # 数学降级路径没有概率输出，此时保持 None——宁可不显示，也不编一个数字。
+        self.confidence = None
         # 信号对象在此（主线程）创建，其槽即在主线程执行；子线程 emit 自动排队投递。
         # 【刻意不设 parent，勿"优化"】实测（PySide6 6.11.0，15×15 对照）：不设 parent 时
         # 宿主 widget 销毁后信号源仍存活（isValid=True），emit 正常，0/15 异常；一旦设
@@ -138,6 +183,35 @@ class AutoAIEngineThread:
             print(f"AI 分割彻底失败（含兜底路径）: {type(e).__name__}: {e}")
             self._emit_safe(self._signals.failed, f"{type(e).__name__}: {e}")
 
+    def _plan_resample(self):
+        """决定是否重采样到训练 spacing，返回 (zoom 因子, 重采样后 shape) 或 None。
+
+        organs.onnx 是 nnU-Net v2，其推理契约的第一步就是把体积重采样到训练 spacing
+        （1.5mm 各向同性）。本引擎长期跳过这一步，代价已实测（experiments/seg_spacing.py）：
+        spacing 变为 2 倍时平均 Dice 从 0.922 掉到 0.799，且小器官先垮、并非单调。
+
+        三种情况不做重采样，各有实测理由：
+          1. **不知道 spacing**（调用方没传，或 DICOM 缺 tag）——插值必须基于真实物理
+             尺寸，猜一个只会更糟；
+          2. **已经足够接近 1.5mm**（各轴偏差 < 5%）——重采样本身带插值损失，
+             为了消除 5% 的失配去引入一次插值不划算；
+          3. **重采样后体素数超过 _MAX_RESAMPLED_VOXELS**——对**粗** spacing（如层厚
+             5mm 的临床序列）重采样是**放大**，z 方向可涨 3 倍以上，会直接 OOM。
+             此时宁可维持失配也不能把应用跑崩，并在返回值里让调用方知道跳过了。
+        """
+        sp = self.spacing
+        if sp is None or len(sp) != 3 or not all(np.isfinite(s) and s > 0 for s in sp):
+            return None
+        f = tuple(float(s) / TARGET_SPACING for s in sp)
+        if all(abs(x - 1.0) < 0.05 for x in f):
+            return None
+        shape = tuple(max(1, int(round(n * x))) for n, x in zip(self.volume_hu.shape, f, strict=True))
+        if int(np.prod(shape)) > _MAX_RESAMPLED_VOXELS:
+            print(f"AI: spacing {sp} 重采样后达 {np.prod(shape)/1e6:.0f}M 体素，超出内存上限，"
+                  f"跳过重采样（准确度将受 spacing 失配影响）")
+            return None
+        return f, shape
+
     def _run_body(self) -> None:
         """推理主体，运行在后台线程，严禁在此处操作任何 Qt 对象（非线程安全）。"""
         start_t = time.perf_counter()
@@ -149,11 +223,28 @@ class AutoAIEngineThread:
         norm_vol = norm_vol.astype(np.float32)
 
         final_mask = None
+        orig_shape = norm_vol.shape
+        plan = self._plan_resample()
+        if plan is not None:
+            f, _ = plan
+            # order=1：图像用线性插值。归一化后的体积是连续量，最近邻会产生阶梯伪影。
+            norm_vol = ndimage.zoom(norm_vol, f, order=1, prefilter=False).astype(np.float32)
+            self.resampled_from = (orig_shape, norm_vol.shape)
 
         # === 路径1：真实 ONNX 多器官分割推理 ===
         if HAS_ONNX and os.path.exists(self.model_path):
             try:
                 final_mask = self._run_onnx_multiorgan(norm_vol)
+                if final_mask is not None and plan is not None:
+                    # 标签与置信度都必须回到原网格，否则与 volume_hu 对不上。
+                    # order=0 最近邻：标签是离散的，插值会造出不存在的类别；
+                    # 置信度同样走最近邻，保证与它所描述的那个标签严格同源。
+                    back = [o / s for o, s in zip(orig_shape, final_mask.shape, strict=True)]
+                    final_mask = ndimage.zoom(final_mask, back, order=0, prefilter=False)
+                    final_mask = _fit_shape(final_mask, orig_shape)
+                    if self.confidence is not None:
+                        cf = ndimage.zoom(self.confidence, back, order=0, prefilter=False)
+                        self.confidence = _fit_shape(cf, orig_shape)
             except RuntimeError as e:
                 # Qt 生命周期竞态，不是模型问题：进度 emit 在 QApplication 拆卸后会抛
                 # RuntimeError('Signal source has been deleted')。实测 onnxruntime 1.23.2 的
@@ -200,6 +291,9 @@ class AutoAIEngineThread:
 
         ph, pw = (-H) % 32, (-W) % 32  # xy 方向对齐到 32 的倍数所需的填充
         seg = np.zeros((Z, H, W), dtype=np.uint8)
+        # 置信度量化到 uint8：float32 存整卷要 244MB，uint8 只要 61MB，
+        # 而「模型有多确信」的显示精度远用不到 float32
+        conf = np.zeros((Z, H, W), dtype=np.uint8)
         DZ = 32
         for z0 in range(0, Z, DZ):
             if self._cancelled:
@@ -212,8 +306,21 @@ class AutoAIEngineThread:
             out = session.run(None, {input_name: blk[np.newaxis, np.newaxis].astype(np.float32)})[0][0]
             lab = out.argmax(0).astype(np.uint8)  # (D',H',W')
             seg[z0:z1] = lab[:z1 - z0, :H, :W]     # 裁掉 pad 部分写回原尺寸
-            del out, lab
+            # 逐体素置信度 = softmax 最大类概率。减去 max 再 exp 是数值稳定写法，
+            # 且减完之后最大项恒为 exp(0)=1，故 max-prob 直接等于 1/Σexp(x-max)。
+            # 两步都对 out 原地做，不额外分配 (25,D,H,W)（单块 839MB，推理峰值已 8.8GB）。
+            # 实测代价：整卷约 +3s（基线 ~100s）。曾以为 top1-top2 的 np.partition 更省，
+            # 实测反而慢 5.5 倍——它沿 axis=0 跨步重排，内存访问模式远差于顺序的 in-place exp。
+            out -= out.max(0, keepdims=True)
+            np.exp(out, out=out)
+            cf = 1.0 / out.sum(0)                  # (D',H',W') ∈ (0,1]
+            # 量化时下限钳到 1：0 被留作「此体素无模型置信度」的哨兵（手动追踪、
+            # 画笔编辑过的体素）。25 类 softmax 的最大类概率下限是 1/25=0.04，
+            # 量化后为 10，模型本身永远产不出 0，故这个哨兵不会与真实值混淆。
+            conf[z0:z1] = np.clip(cf[:z1 - z0, :H, :W] * 255.0, 1, 255).astype(np.uint8)
+            del out, lab, cf
             if self.progress_callback is not None:
                 # 经信号跨线程投递到主线程更新进度显示（子线程禁止直接操作 Qt）
                 self._emit_safe(self._signals.progress, z1, Z)
+        self.confidence = conf   # 仅 ONNX 路径产出；兜底路径不设，保持 None
         return seg

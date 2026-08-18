@@ -26,7 +26,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBo
 # 子模块导入
 import mpr_geometry
 import projection
-from ai_engine import AutoAIEngineThread
+from ai_engine import TARGET_SPACING, AutoAIEngineThread
 from annotation_lab import AnnotationMixin
 from compare_lab import CompareMixin
 from constants import (
@@ -81,6 +81,8 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # --- 3D 体数据 ---
         self.volume_hu = None             # 完整 HU 值体素数组 shape=(Z, H, W)，float32
         self.volume_mask = None           # AI 多器官标签图，shape=(Z,H,W) uint8：0=背景,1-24=器官,255=手动追踪
+        self._ai_resampled = None         # 本次推理是否做过 spacing 重采样 (原shape, 送入shape)
+        self.volume_conf = None           # 逐体素置信度 uint8（255=1.0）；仅 ONNX 路径产出，数学降级时为 None
         self.organ_names = self._load_organ_labels()  # {类别号: (中文名, 英文名)}，用于图例
         self._organ_stats = []            # 最近一次器官定量结果，供面板显示与 CSV 导出
         self._hidden_organs = set()       # 被用户在图例中点隐的器官类别，渲染时跳过
@@ -109,6 +111,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.current_sinogram = None      # 当前切片的弦图（Radon 变换结果），shape=(detectors, angles)
         self.current_theta = None         # 弦图对应的角度数组，单位为度
         self._last_recon_img = None       # 最近一次矩阵重建结果（n×n，未放大），作为下次生成弦图的输入源
+        self._phantom_img = None          # 内置 Shepp-Logan 模体；非 None 时重建链路以它为源，无需导入任何数据
 
         # --- AI 引擎状态 ---
         self.ai_thread = None             # AutoAIEngineThread 实例
@@ -212,7 +215,10 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             (self.lbl_disclaimer,
              "⚠ AI results & organ labels are auto-inferred — for reference only, not for diagnosis.",
              "⚠ AI 结果与器官标签为自动推断，仅供参考，非诊断依据。"),
-            (self.btn_clear_anno, "Clear Mask", "清空蒙版与标注"),
+            (self.btn_model_card, "Model Card: Provenance & Limits", "模型说明卡：出处与适用边界"),
+            (self.btn_phantom, "Load Shepp-Logan Phantom", "载入 Shepp-Logan 模体"),
+            # 英文原作 "Clear Mask" 漏了标注这一半，与中文不对等；此按钮两者都清，补齐
+            (self.btn_clear_anno, "Clear Mask & Annotations", "清空蒙版与标注"),
             (self.btn_reset, "Reset Workspace", "重置工作区"),
             (self.lbl_ww_hint, "Right-drag on image to adjust WW/WL", "在图像上右键拖拽可快速调节窗宽/窗位"),
             (self.chk_overlay, "Overlay", "信息叠加"),
@@ -222,6 +228,9 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             (self.chk_global_scope, "New anno → all slices", "新标注穿透所有切片"),
         ):
             w.setText(en if e else cn)
+        # 模体按钮文案随载入状态切换，上表登记的是"未载入"态，已载入时改写为卸下
+        if getattr(self, '_phantom_img', None) is not None:
+            self.btn_phantom.setText("Unload Phantom" if e else "卸下模体")
 
         # 分组框标题表：(分组框, 英文, 中文) —— setTitle 类
         for g, en, cn in (
@@ -454,6 +463,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.global_annotations = {'all': []}
         if self.volume_mask is not None:
             self.volume_mask = np.zeros(self.volume_hu.shape, dtype=np.uint8)
+            self.volume_conf = None       # 置信度属于上一次推理，不可跨重置沿用
         self._hidden_organs.clear()
         self._mask_undo = []         # 重置清撤销栈，避免撤销回被清掉的编辑
         self.lbl_hud.setText("")     # 清除光标 HUD 残留文本
@@ -649,6 +659,9 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self._refresh_patient_info()   # 按脱敏状态填患者面板
         self.volume_hu = np.array([f for f, _ in pairs])
         self.volume_mask = np.zeros_like(self.volume_hu, dtype=np.uint8)
+        # 换序列必须一并作废置信度：两个序列 shape 常常相同（都是 512²），
+        # quantify 的 shape 校验挡不住，旧序列的置信度会被安到新序列头上
+        self.volume_conf = None
         self.global_annotations = {'all': []}
         self._hidden_organs.clear()   # 换病例时清除上一例的图例隐藏状态
         self._mask_undo = []          # 换病例清撤销栈，防止旧切片号越界访问新蒙版
@@ -673,13 +686,46 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.lbl_ai_status.setStyleSheet("color: #F1C40F; font-weight: bold;")
         self.lbl_ai_status.setText("Processing AI Pipeline..." if self.is_english else "状态: AI 引擎自动运算中...")
         # lambda 中用 g=gen 捕获当前 generation 值（闭包变量，防止后续自增影响比对）
+        # 体素物理间距 (z, y, x)：引擎据此重采样到模型的训练 spacing（nnU-Net 推理契约）。
+        # 必经 _dcm_float——畸形 DICOM 的 None/非有限值会让 float() 直接崩，且此处一旦
+        # 拿到坏值，重采样会按错误的物理尺寸缩放，比不重采样更糟。
+        ds0 = self.dicom_datasets[0] if self.dicom_datasets else None
+        spacing = None if ds0 is None else (
+            self._slice_spacing(),
+            self._dcm_float(ds0, 'PixelSpacing', 0.0, idx=0),
+            self._dcm_float(ds0, 'PixelSpacing', 0.0, idx=1))
+        if spacing is not None and not all(s > 0 for s in spacing):
+            spacing = None      # 缺 tag 或值非法 → 视作未知，引擎自会跳过重采样
         self.ai_thread = AutoAIEngineThread(
             self.volume_hu,
+            spacing=spacing,
             callback=lambda mask, t, g=gen: self.on_auto_ai_finished(mask, t, g),
             progress_callback=lambda d, t, g=gen: self._on_ai_progress(d, t, g),
             failed_callback=lambda why, g=gen: self._on_ai_failed(why, g)
         )
         self.ai_thread.start()
+
+    def _slice_spacing(self):
+        """层间距(mm)：优先由相邻层的解剖 z 坐标实测，其次 SpacingBetweenSlices，最后 SliceThickness。
+
+        **不能直接用 SliceThickness**：它是探测器准直厚度，而重采样需要的是层与层的
+        实际间隔。二者在重叠重建下可以相差一倍（如层厚 1.25mm、重建间隔 0.625mm），
+        照 SliceThickness 缩放会把 z 轴的物理尺度算错一倍。RIDER 这一例恰好两者相等
+        （实测均为 1.25mm），正因如此这个错误不会在本地数据上暴露出来。
+
+        取中位数而非均值：序列中偶有缺层或错位时，中位数不受个别异常间隔影响。
+        """
+        z = self._zpos_array(self.dicom_datasets)
+        if z is not None and len(z) >= 2:
+            gaps = np.abs(np.diff(np.sort(z)))
+            gaps = gaps[np.isfinite(gaps) & (gaps > 0)]
+            if gaps.size:
+                return float(np.median(gaps))
+        ds0 = self.dicom_datasets[0] if self.dicom_datasets else None
+        if ds0 is None:
+            return 0.0
+        sbs = self._dcm_float(ds0, 'SpacingBetweenSlices', 0.0)
+        return sbs if sbs > 0 else self._dcm_float(ds0, 'SliceThickness', 0.0)
 
     def _on_ai_progress(self, done, total, generation):
         """AI 滑窗推理进度回调（经 Qt 信号 QueuedConnection 投递到主线程）。仅更新当前代的进度显示。"""
@@ -690,13 +736,25 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             f"AI Segmenting... {pct}%" if self.is_english else f"状态: AI 分割中... {pct}%")
 
     def _ai_done_text(self):
-        """AI 完成后的状态文案：显示检出的器官类别数（不含背景与手动追踪）。"""
+        """AI 完成后的状态文案：检出的器官类别数，以及是否发生过 spacing 重采样。
+
+        重采样这件事必须让用户看见：它提高了结构级准确度（模型回到训练工况），
+        但蒙版的边界是在 1.5mm 网格上决定的，映射回原分辨率后呈阶梯状——
+        实测 0.713mm 数据上边界平台约 2 像素。用户在原图上看到锯齿边缘时，
+        应当知道原因，而不是以为分割质量出了问题。
+        """
         n = 0
         if self.volume_mask is not None:
             ids = np.unique(self.volume_mask)
             n = int(((ids != 0) & (ids != MANUAL_TRACK_LABEL)).sum())
-        return (f"Ready: {n} organs ({self._ai_time_ms:.0f}ms)" if self.is_english
-                else f"状态: 检出 {n} 个器官 ({self._ai_time_ms:.0f}ms)")
+        txt = (f"Ready: {n} organs ({self._ai_time_ms:.0f}ms)" if self.is_english
+               else f"状态: 检出 {n} 个器官 ({self._ai_time_ms:.0f}ms)")
+        rs = getattr(self, '_ai_resampled', None)
+        if rs:
+            txt += (f" · resampled to {TARGET_SPACING}mm for inference; mask edges are "
+                    f"quantised to that grid" if self.is_english
+                    else f" · 推理前已重采样至 {TARGET_SPACING}mm，蒙版边界按该网格量化")
+        return txt
 
     def _ai_failed_text(self):
         """AI 失败文案。措辞刻意区别于「检出 0 个器官」——后者意味着跑成功了但没找到，
@@ -733,6 +791,11 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self._ai_state = 'done'
         self._ai_time_ms = time_ms
         self.volume_mask = final_mask
+        # 逐体素置信度由引擎作为实例属性带出（见 ai_engine.confidence 的说明）。
+        # 形状不符或走了数学降级路径时置 None——定量表据此决定是否显示置信度列。
+        self._ai_resampled = getattr(self.ai_thread, 'resampled_from', None)
+        cf = getattr(self.ai_thread, 'confidence', None)
+        self.volume_conf = cf if (cf is not None and cf.shape == final_mask.shape) else None
         self.lbl_ai_status.setStyleSheet("color: #00FF00; font-weight: bold;")
         self.lbl_ai_status.setText(self._ai_done_text())
         self._update_organ_stats()
@@ -779,8 +842,9 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.lbl_ww.setText(f"WW: {ww_m}"); self.lbl_wl.setText(f"WL: {wl_m}")
         ds = self.dicom_datasets[z]
         px_sp = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
-        # SliceThickness 用于冠/矢状面像素宽高比计算；若缺失/为空则估算为 px_sp×3（典型螺旋 CT 值）
-        slice_thick = self._dcm_float(ds, 'SliceThickness', px_sp * 3)
+        # 冠/矢状面的垂直方向是 z，其物理尺度是**层间距**而非层厚——重叠重建下二者
+        # 可差一倍，用错会让 MPR 的解剖比例失真。缺失时估算为 px_sp×3（典型螺旋 CT 值）。
+        slice_thick = self._slice_spacing() or (px_sp * 3)
 
         for vdata in self.views.values():
             if vdata['container'].isHidden():
