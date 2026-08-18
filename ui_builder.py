@@ -266,6 +266,12 @@ class UiBuilderMixin:
         self.lbl_disclaimer.setWordWrap(True)
         self.lbl_disclaimer.setStyleSheet("color: #C0392B; font-size: 10px;")
         ai_lay.addWidget(self.lbl_disclaimer)
+        # 模型说明卡：出处如何确证、实测到什么程度、有哪些已知局限。
+        # 常驻可点，不随分割状态禁用——「这个模型可不可信」在跑之前就该能查。
+        self.btn_model_card = QPushButton("模型说明卡：出处与适用边界")
+        self.btn_model_card.setProperty("class", "ActionBtn")
+        self.btn_model_card.clicked.connect(self.show_model_card)
+        ai_lay.addWidget(self.btn_model_card)
         self.grp_ai.setLayout(ai_lay)
         t1_lay.addWidget(self.grp_ai)
 
@@ -295,7 +301,7 @@ class UiBuilderMixin:
         h_target.addWidget(self.lbl_paint_target); h_target.addWidget(self.cb_paint_target)
         ml.addLayout(h_target)
         self.btn_clear_anno = QPushButton("清空蒙版与标注"); self.btn_clear_anno.setProperty("class", "ActionBtn")
-        self.btn_clear_anno.clicked.connect(self.clear_current_slice_annotations); ml.addWidget(self.btn_clear_anno)
+        self.btn_clear_anno.clicked.connect(self.clear_mask_and_annotations); ml.addWidget(self.btn_clear_anno)
         self.btn_reset = QPushButton("重置工作区"); self.btn_reset.setObjectName("DangerBtn")
         self.btn_reset.clicked.connect(self.reset_all_states); ml.addWidget(self.btn_reset)
         self.grp_measure.setLayout(ml)
@@ -326,6 +332,11 @@ class UiBuilderMixin:
         self.combo_oversample.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         h_dens.addWidget(self.lbl_oversample); h_dens.addWidget(self.combo_oversample)
         play.addLayout(h_dens)
+        # 内置模体：让重建实验室不依赖任何导入数据即可完整演示，且真值已知，误差图才有意义
+        self.btn_phantom = QPushButton("载入 Shepp-Logan 模体")
+        self.btn_phantom.setProperty("class", "ActionBtn")
+        self.btn_phantom.clicked.connect(self.toggle_phantom)
+        play.addWidget(self.btn_phantom)
         self.btn_gen_sino = QPushButton("发射射线生成弦图"); self.btn_gen_sino.setProperty("class", "ActionBtn")
         self.btn_gen_sino.setStyleSheet("background-color: #D35400; color: white;")
         self.btn_gen_sino.clicked.connect(self.generate_sinogram)

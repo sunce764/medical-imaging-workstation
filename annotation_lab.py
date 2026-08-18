@@ -34,10 +34,12 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
 )
 
 import mesh3d
+import model_card
 import quantify
 from constants import AXIAL, LABEL_LUT, MANUAL_TRACK_LABEL
 from graphics_view import ROIGraphicsItem
@@ -145,11 +147,26 @@ class AnnotationMixin:
             if len(rl) > 0:
                 # bincount 统计 ROI 区域内各标签出现次数，取最多的那个为目标
                 # 赋专属标签值 MANUAL_TRACK_LABEL(255)，与 AI 器官类别(1-24)区分显示
-                self.volume_mask = (lab == np.bincount(rl.flatten()).argmax()).astype(np.uint8) * MANUAL_TRACK_LABEL
+                tracked = (lab == np.bincount(rl.flatten()).argmax())
+                if self.volume_mask is None:
+                    self.volume_mask = np.zeros(self.volume_hu.shape, dtype=np.uint8)
+                self._push_volume_undo()
+                # 【只动追踪层，不碰 AI 器官】旧实现在此处整卷赋值，一次追踪就把
+                # ~100s 推理出的 24 类器官全部抹掉，且经 save_project 落盘后再也
+                # 恢复不回来（实测：缓存 mask 里 100% 体素为 255，器官一个不剩）。
+                # 现改为：先清掉上一次的追踪结果避免多次追踪累积，再写入本次；
+                # 1-24 号器官标签原样保留。
+                self.volume_mask[self.volume_mask == MANUAL_TRACK_LABEL] = 0
+                self.volume_mask[tracked] = MANUAL_TRACK_LABEL
+                # 追踪是用户画的，模型对它没有判断：把这些体素的置信度清成哨兵 0，
+                # 否则定量表会拿「模型对该处原本器官的置信度」冒充追踪结果的置信度
+                if getattr(self, 'volume_conf', None) is not None \
+                        and self.volume_conf.shape == self.volume_mask.shape:
+                    self.volume_conf[tracked] = 0
         except Exception:
             pass
         p.close()
-        self._update_organ_stats()  # 追踪已替换蒙版，定量面板同步刷新，避免残留旧 AI 数据
+        self._update_organ_stats()  # 追踪已改写蒙版，定量面板同步刷新
         self.update_display()
 
     def handle_seg_paint(self, vid, points, is_erase):
@@ -184,8 +201,14 @@ class AnnotationMixin:
         # 补画写入所选目标器官标签（修正计入该器官定量）；橡皮清零
         label = 0 if is_erase else int(self.cb_paint_target.currentData() or MANUAL_TRACK_LABEL)
         self.volume_mask[z][brush] = label
+        # 手工改过的体素同样清成哨兵 0：其原值是模型对改动前那个标签的置信度
+        if getattr(self, 'volume_conf', None) is not None \
+                and self.volume_conf.shape == self.volume_mask.shape:
+            self.volume_conf[z][brush] = 0
         self._update_organ_stats()
         self.update_display()
+
+    _VOL_UNDO = 'VOL'   # 整卷快照在撤销栈中的槽位标记（区别于逐切片的整数切片号）
 
     def _push_mask_undo(self, z):
         """把当前切片蒙版压入撤销栈（上限 20 步，含切片号以便精确回退）。"""
@@ -193,17 +216,36 @@ class AnnotationMixin:
         if len(self._mask_undo) > 20:
             self._mask_undo.pop(0)
 
+    def _push_volume_undo(self):
+        """整卷级操作（3D 追踪 / 清空蒙版）前存一份整卷快照。
+        与逐切片快照走同一个栈，但只保留最近一份：一份 (Z,H,W) uint8 在 233×512²
+        下约 61MB，若像切片那样堆 20 份会吃掉 1.2GB。故压栈前先剔除旧的整卷条目。
+        """
+        if self.volume_mask is None:
+            return
+        self._mask_undo = [e for e in self._mask_undo if e[0] != self._VOL_UNDO]
+        self._mask_undo.append((self._VOL_UNDO, self.volume_mask.copy()))
+        if len(self._mask_undo) > 20:
+            self._mask_undo.pop(0)
+
     def _undo_mask_edit(self):
-        """撤销最近一次分割编辑，恢复对应切片的蒙版。"""
+        """撤销最近一次分割编辑：整卷快照整卷还原，切片快照只还原该切片。"""
         if not self._mask_undo or self.volume_mask is None:
             return
         z, snap = self._mask_undo.pop()
+        if z == self._VOL_UNDO:
+            # 换病例后旧快照的形状可能与当前体积不符，形状不合则丢弃不还原
+            if snap.shape != self.volume_mask.shape:
+                return
+            self.volume_mask = snap
         # z 越界保护：换病例后旧切片号可能超出新蒙版层数
-        if z < self.volume_mask.shape[0] and snap.shape == self.volume_mask[z].shape:
+        elif z < self.volume_mask.shape[0] and snap.shape == self.volume_mask[z].shape:
             self.volume_mask[z] = snap
-            self._update_organ_stats()
-            if not self.recon_mode_active:
-                self.update_display()
+        else:
+            return
+        self._update_organ_stats()
+        if not self.recon_mode_active:
+            self.update_display()
 
     # =========================================================================
     # 截取工具（多边形 ROI 统计 + 可选导出）
@@ -273,6 +315,12 @@ class AnnotationMixin:
         tk = 'all' if self.chk_global_scope.isChecked() else self.current_3d_pos[0]
         if tk not in self.global_annotations:
             self.global_annotations[tk] = []
+        # id 在整条链路上都被当作字符串：渲染时进 setToolTip（只收 str），删除时又从
+        # toolTip 取回来比对（annotation_deleted 是 Signal(str)）。一个数字 id 会让
+        # setToolTip 抛 TypeError 被渲染层的 except 吞掉——标注既画不出来也删不掉。
+        # 故在入口一律规范成 str，而不是在渲染处打补丁。
+        if isinstance(data, dict) and 'id' in data:
+            data['id'] = str(data['id'])
         self.global_annotations[tk].append(data)
         self.update_display()
 
@@ -286,15 +334,43 @@ class AnnotationMixin:
             self.global_annotations[k] = [a for a in self.global_annotations[k] if a['id'] != aid]
         self.update_display()
 
-    def clear_current_slice_annotations(self):
-        """清空当前切片的标注，并将整个 3D 蒙版重置为全零。
-        注意：蒙版是 3D 的，清空操作影响全部切片（AI 分割结果一并清除）。
+    def clear_mask_and_annotations(self):
+        """清空【当前切片】的标注，并把【整卷】分割蒙版重置为全零。
+
+        两者粒度本就不同（标注按切片、蒙版整卷），旧实现对此不置一词，用户无从
+        得知一次点击会波及全部切片；蒙版中若含 AI 器官，清掉意味着 ~100s 的推理
+        作废且不可逆。故此处：先算清代价并要求确认，再压入整卷快照（Ctrl+Z 可还原）。
+        无可清时直接返回，不弹框骚扰、也不改动任何状态。
         """
         idx = self.current_3d_pos[0]
+        n_anno = len(self.global_annotations.get(idx, []))
+        has_mask = self.volume_mask is not None and bool(self.volume_mask.any())
+        if not n_anno and not has_mask:
+            return
+        if has_mask:
+            organ = (self.volume_mask > 0) & (self.volume_mask != MANUAL_TRACK_LABEL)
+            n_organ = int(np.unique(self.volume_mask[organ]).size)
+            zs = int(self.volume_mask.shape[0])
+            if self.is_english:
+                msg = (f"This clears {n_anno} annotation(s) on the current slice AND the "
+                       f"segmentation mask on ALL {zs} slices.")
+                if n_organ:
+                    msg += (f"\n\n{n_organ} AI-segmented organ(s) will be lost; "
+                            f"re-running inference takes about 100 s on CPU.")
+                msg += "\n\nCtrl+Z restores the mask."
+            else:
+                msg = f"将清除当前切片的 {n_anno} 条标注，以及【全部 {zs} 层】的分割蒙版。"
+                if n_organ:
+                    msg += f"\n\n其中含 AI 分割的 {n_organ} 个器官，清除后需重新推理（CPU 约 100 秒）。"
+                msg += "\n\n可用 Ctrl+Z 还原蒙版。"
+            if QMessageBox.question(self, "Confirm" if self.is_english else "确认清空", msg,
+                                    QMessageBox.Yes | QMessageBox.No,
+                                    QMessageBox.No) != QMessageBox.Yes:
+                return
+            self._push_volume_undo()
+            self.volume_mask = np.zeros(self.volume_hu.shape, dtype=np.uint8)
         if idx in self.global_annotations:
             self.global_annotations[idx] = []
-        if self.volume_mask is not None:
-            self.volume_mask = np.zeros(self.volume_hu.shape, dtype=np.uint8)
         self._update_organ_stats()  # 蒙版已清，定量面板同步清空
         if not self.recon_mode_active:
             self.update_display()
@@ -341,6 +417,8 @@ class AnnotationMixin:
                 key = int(k) if isinstance(k, str) and k.isdigit() else k
                 annos = v if isinstance(v, list) else []
                 valid = [a for a in annos if self._valid_anno(a)]
+                for a in valid:
+                    a['id'] = str(a['id'])   # 同上：外部编辑过的 JSON 常见数字 id
                 if len(valid) != len(annos):
                     print(f"标注键 {k!r}: 跳过 {len(annos) - len(valid)} 条畸形/旧版本条目")
                 self.global_annotations[key] = valid
@@ -415,8 +493,12 @@ class AnnotationMixin:
         ds = self.dicom_datasets[0]
         spacing = (self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0),
                    self._dcm_float(ds, 'PixelSpacing', 1.0, idx=1),
-                   self._dcm_float(ds, 'SliceThickness', 1.0))
-        return quantify.compute_organ_stats(self.volume_hu, self.volume_mask, spacing, self.organ_names)
+                   self._slice_spacing() or 1.0)   # 层间距而非层厚：见 main._slice_spacing
+        # volume_conf 只在 ONNX 路径产出；手工编辑过蒙版后形状仍一致，故置信度沿用
+        # 原推理结果——注意画笔改过的体素其置信度并非模型对新标签的置信度，
+        # 这一点在定量面板的提示文案里已写明。
+        return quantify.compute_organ_stats(self.volume_hu, self.volume_mask, spacing,
+                                            self.organ_names, getattr(self, 'volume_conf', None))
 
     def _update_organ_stats(self):
         """刷新器官定量面板；无分割结果时清空并禁用导出按钮。"""
@@ -433,11 +515,51 @@ class AnnotationMixin:
             r_, g_, b_ = (int(LABEL_LUT[r['id']][0]), int(LABEL_LUT[r['id']][1]), int(LABEL_LUT[r['id']][2]))
             nm = r['name_en'] if e else r['name_zh']
             # 与椭圆 ROI 同口径给出 mean±SD：只报均值无法反映区域内密度离散程度
-            lines.append(f'<span style="color:#{r_:02X}{g_:02X}{b_:02X};">■</span> '
-                         f"{nm}: {r['volume_ml']:.1f} mL / {r['mean_hu']:.0f}±{r['sd_hu']:.0f} HU")
+            txt = (f'<span style="color:#{r_:02X}{g_:02X}{b_:02X};">■</span> '
+                   f"{nm}: {r['volume_ml']:.1f} mL / {r['mean_hu']:.0f}±{r['sd_hu']:.0f} HU")
+            if 'mean_conf' in r:
+                # 低置信标红：模型自己都不确信的器官，读数不该和高置信的一样呈现。
+                # 阈值 0.9 取自 softmax 最大类概率的经验分界，仅作视觉提示，非诊断阈值。
+                c = r['mean_conf']
+                col = '#E67E22' if c < 0.9 else '#7F8C8D'
+                extra = ''
+                # 覆盖率明显不足 1 时必须标出：该器官已被大量手工改动，
+                # 此时的 conf 只代表剩下那部分模型体素，不是整个器官的置信度
+                if r.get('conf_cover', 1.0) < 0.98:
+                    extra = (f" · {'model' if e else '模型判定'} {100*r['conf_cover']:.0f}%")
+                txt += (f' <span style="color:{col};font-size:10px;">'
+                        f"conf {c:.2f}/p5 {r['p5_conf']:.2f}{extra}</span>")
+            lines.append(txt)
+        if self._organ_stats and 'mean_conf' in self._organ_stats[0]:
+            lines.append('<span style="color:#7F8C8D;font-size:10px;">'
+                         + ("conf = softmax max-prob; p5 = 5th pct (boundary voxels). "
+                            "Hand-edited voxels keep the model's original confidence."
+                            if e else
+                            "conf = softmax 最大类概率，p5 = 5% 分位（多为边界体素）。"
+                            "手工修改过的体素仍沿用模型原始置信度。") + "</span>")
         self.lbl_ai_stats.setText("<br>".join(lines))
         self.btn_export_stats.setEnabled(True)
         self.btn_mesh3d.setEnabled(True)
+
+    def show_model_card(self):
+        """弹出模型说明卡：出处如何确证、实测到什么程度、有哪些已知局限。
+
+        内容全部由 model_card 从已跑出的实验产物现读现算，不在 UI 层硬编码任何数字——
+        实验重跑后卡片自动跟着变，避免界面上的指标与 results/ 里的产物各说各话。
+        """
+        dlg = QDialog(self)
+        dlg.setWindowTitle(model_card.card_title(self.is_english))
+        dlg.resize(560, 520)
+        lay = QVBoxLayout(dlg)
+        body = QLabel(model_card.build_model_card(self.is_english))
+        body.setWordWrap(True); body.setTextFormat(Qt.RichText)
+        body.setAlignment(Qt.AlignTop)
+        body.setStyleSheet("font-size: 12px; line-height: 150%;")
+        sc = QScrollArea(); sc.setWidgetResizable(True); sc.setWidget(body)
+        lay.addWidget(sc)
+        btn = QPushButton("Close" if self.is_english else "关闭")
+        btn.clicked.connect(dlg.accept); lay.addWidget(btn)
+        dlg.exec()
 
     def show_mesh3d(self):
         """对当前画笔目标所指器官做三维表面重建，弹窗展示四视角预览 + 形状特征 + STL 导出。
@@ -455,7 +577,8 @@ class AnnotationMixin:
             return
         ds = self.dicom_datasets[0] if self.dicom_datasets else None
         ps = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0) if ds is not None else 1.0
-        st = self._dcm_float(ds, 'SliceThickness', ps * 3) if ds is not None else 1.0
+        # z 尺度取层间距而非层厚（重叠重建下二者可差一倍，网格会被拉伸/压扁）
+        st = (self._slice_spacing() or (ps * 3)) if ds is not None else 1.0
         # marching cubes 在 512² 体积上 step=1 约 1.4s、step=2 约 0.11s（实测），
         # 故取 2：这是交互预览，不是几何精算；耗时与精度的取舍在 mesh3d 模块注释里说明。
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -595,13 +718,23 @@ class AnnotationMixin:
                 w = csv.writer(f)
                 w.writerow(['# AI-derived, for reference only, NOT for diagnosis; organ labels are auto-inferred /'
                             ' AI 自动推断，仅供参考，非诊断依据'])
-                w.writerow(['class_id', 'organ_zh', 'organ_en', 'voxels', 'volume_mL',
-                            'mean_HU', 'SD_HU', 'median_HU', 'p5_HU', 'p95_HU', 'min_HU', 'max_HU'])
+                # 置信度列只在模型真的产出概率时才写；数学降级路径没有概率，
+                # 那时整列缺席，而不是填 0 或 1 让下游误以为有这个量
+                has_conf = bool(rows) and 'mean_conf' in rows[0]
+                hdr = ['class_id', 'organ_zh', 'organ_en', 'voxels', 'volume_mL',
+                       'mean_HU', 'SD_HU', 'median_HU', 'p5_HU', 'p95_HU', 'min_HU', 'max_HU']
+                w.writerow(hdr + (['mean_conf', 'p5_conf', 'conf_cover'] if has_conf else []))
                 for r in rows:
-                    w.writerow([r['id'], r['name_zh'], r['name_en'], r['voxels'],
-                                f"{r['volume_ml']:.2f}", f"{r['mean_hu']:.1f}", f"{r['sd_hu']:.1f}",
-                                f"{r['median_hu']:.1f}", f"{r['p5_hu']:.1f}", f"{r['p95_hu']:.1f}",
-                                f"{r['min_hu']:.1f}", f"{r['max_hu']:.1f}"])
+                    row = [r['id'], r['name_zh'], r['name_en'], r['voxels'],
+                           f"{r['volume_ml']:.2f}", f"{r['mean_hu']:.1f}", f"{r['sd_hu']:.1f}",
+                           f"{r['median_hu']:.1f}", f"{r['p5_hu']:.1f}", f"{r['p95_hu']:.1f}",
+                           f"{r['min_hu']:.1f}", f"{r['max_hu']:.1f}"]
+                    if has_conf:
+                        # conf_cover<1 表示该器官被手工改过，读数只覆盖剩余的模型体素
+                        row += [f"{r.get('mean_conf', float('nan')):.4f}",
+                                f"{r.get('p5_conf', float('nan')):.4f}",
+                                f"{r.get('conf_cover', float('nan')):.4f}"]
+                    w.writerow(row)
             QMessageBox.information(self, "Success" if self.is_english else "成功",
                                     (f"Saved: {os.path.basename(fp)}" if self.is_english
                                      else f"已保存：{os.path.basename(fp)}"))

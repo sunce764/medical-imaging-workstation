@@ -134,15 +134,31 @@ class InteractionMixin:
         elif plane == SAGITTAL: self.current_3d_pos[2] = max(0, min(x + increment, X_MAX - 1)); self.update_display()
 
     def measure_hu(self, p, vid):
-        if self.active_tool == TOOL_POINTER and self.volume_hu is not None and not self.recon_mode_active and not self.compare_mode_active:
-            vd = self.views.get(vid); c = vd['view'].get_real_coordinates(p); plane = vd['plane']
-            if c:
-                try:
-                    if plane == AXIAL: val = self.volume_hu[self.current_3d_pos[0], c[1], c[0]]
-                    elif plane == CORONAL: val = self.volume_hu[c[1], self.current_3d_pos[1], c[0]]
-                    elif plane == SAGITTAL: val = self.volume_hu[c[1], c[0], self.current_3d_pos[2]]
-                    plane_str = {"Axial": "Axial", "Coronal": "Coronal", "Sagittal": "Sagittal"} if self.is_english else {"Axial": "横断面", "Coronal": "冠状面", "Sagittal": "矢状面"}
-                    p_name = plane_str.get({AXIAL: "Axial", CORONAL: "Coronal", SAGITTAL: "Sagittal"}[plane])
-                    self.lbl_hu_value.setText(f"V{vid} [{p_name}] ({c[0]}, {c[1]}) : {val:.1f} HU")
-                except Exception: pass
+        """探针工具：读取鼠标处体素的 HU 值并显示。
+
+        【读不出来时必须清空，不能留着上一次的值】旧实现把整段包在 try/except: pass 里，
+        坐标越界或 plane 取到三者之外时静默失败，标签于是**继续显示上一次的读数**——
+        连坐标都是旧的。实测：鼠标移到体积外后，标签仍写着 "(10, 10) : 4426.0 HU"，
+        看上去完全像一次有效读数，用户无从分辨它其实对应别的位置。对 HU 这种会被
+        直接用于判读的数值，陈旧显示比空白危险得多。
+        """
+        if not (self.active_tool == TOOL_POINTER and self.volume_hu is not None
+                and not self.recon_mode_active and not self.compare_mode_active):
+            return
+        vd = self.views.get(vid)
+        if vd is None: return
+        c = vd['view'].get_real_coordinates(p); plane = vd['plane']
+        # 三平面各自的 (z,y,x) 索引；plane 不在三者之内时得 None，与越界同样处理
+        idx = None if not c else {
+            AXIAL: (self.current_3d_pos[0], c[1], c[0]),
+            CORONAL: (c[1], self.current_3d_pos[1], c[0]),
+            SAGITTAL: (c[1], c[0], self.current_3d_pos[2]),
+        }.get(plane)
+        if idx is None or not all(0 <= i < n for i, n in zip(idx, self.volume_hu.shape, strict=True)):
+            self.lbl_hu_value.setText("")   # 读不出就清空，绝不留旧值冒充当前读数
+            return
+        names = ({AXIAL: "Axial", CORONAL: "Coronal", SAGITTAL: "Sagittal"} if self.is_english
+                 else {AXIAL: "横断面", CORONAL: "冠状面", SAGITTAL: "矢状面"})
+        self.lbl_hu_value.setText(
+            f"V{vid} [{names[plane]}] ({c[0]}, {c[1]}) : {float(self.volume_hu[idx]):.1f} HU")
 
