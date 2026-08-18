@@ -68,3 +68,8 @@ experiments/results/seg3d_w*.pt
 # 从固定 commit 重新抓取，清单里的 SHA256 可验证拿到的是否逐字节相同。
 experiments/.seg3d_cache/
 experiments/.seg3d_prep/
+
+.agents/
+.codex/
+AGENTS.md
+experiments/results/seg3d_student_ch8.*
