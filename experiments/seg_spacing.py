@@ -170,8 +170,7 @@ def multi_case(spacing, n_cases, seed=0):
     单例结论（s0029 上找回 52%）说明不了普适性——本项目已经在「单例 Dice 偏乐观」
     上栽过一次（肺叶 0.98 → 57 例 0.887）。此处按患者配对：每例的两个数只差
     「有没有做 spacing 重采样」这一件事，故差值的分布直接就是这一步的效果分布。
-    检验用差值的 bootstrap CI + Wilcoxon signed-rank——配对设计下这两者才对得上，
-    独立两样本的 CI 是否重叠回答不了「同一例上改善了没有」。
+    检验用差值的 bootstrap CI + Wilcoxon signed-rank，与 seg3d_report 同一套口径。
     """
     import ai_engine
     imgs = sorted(glob.glob(os.path.join(CACHE, "*_img.nii.gz")))
