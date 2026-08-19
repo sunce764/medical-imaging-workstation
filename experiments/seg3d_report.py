@@ -130,14 +130,14 @@ def main():
                  dice=round(teacher['overall_mean'], 4),
                  ci_lo=round(teacher['overall_ci'][0], 4), ci_hi=round(teacher['overall_ci'][1], 4),
                  sec_per_case=round(teacher['infer_sec_mean'], 1),
-                 peak_gb=round(teacher['peak_gb_mean'], 2), n_cases=teacher['n_cases'])]
+                 peak_gb=round(teacher.get('peak_gb_max', teacher['peak_gb_mean']), 2), n_cases=teacher['n_cases'])]
     for s in students:
         rows.append(dict(model=f"UNet3D ch={s['ch']} (student)", classes=6,
                          params_m=round(s['params'] / 1e6, 4),
                          dice=round(s['overall_mean'], 4),
                          ci_lo=round(s['overall_ci'][0], 4), ci_hi=round(s['overall_ci'][1], 4),
                          sec_per_case=round(s['infer_sec_mean'], 1),
-                         peak_gb=round(s['peak_gb_mean'], 2), n_cases=s['n_cases']))
+                         peak_gb=round(s.get('peak_gb_max', s['peak_gb_mean']), 2), n_cases=s['n_cases']))
 
     print(f"  {'模型':<26}{'类数':>5}{'参数M':>10}{'Dice':>9}{'95%CI':>18}"
           f"{'秒/例':>8}{'峰值GB':>9}")

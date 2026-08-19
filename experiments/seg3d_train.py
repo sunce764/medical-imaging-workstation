@@ -37,6 +37,10 @@ LOBES = [10, 11, 12, 13, 14]
 N_CLASS = len(LOBES) + 1
 HU_CLIP = (-1000.0, 400.0)          # 与 ai_engine 的预处理一致
 PATCH = (32, 128, 128)              # (z, y, x)。z 取 32 与教师的滑窗块高一致
+# 每 epoch 的验证采样批数。原为 12（=24 个 patch）估 5 类 Dice，噪声与信号同量级——
+# 实测 10 个 epoch 的验证序列在 0.04–0.13 间无规律抖动，据此选 best 选到的是运气。
+# 验证不反传，成本约为训练 step 的三分之一，提到 48 每 epoch 只多约 20 秒。
+VAL_BATCHES = 48
 
 
 def load_zhw(path):
@@ -143,7 +147,16 @@ class PatchSampler:
         return np.stack(xs)[:, None], np.stack(ys)
 
 
-def build_net(ch):
+def build_net(ch, depth=2):
+    """精简 3D U-Net。ch 调容量，depth 调下采样次数。
+
+    【为什么 depth 必须可调】感受野由 depth 和 kernel 决定，**与 ch 无关**——扫通道数
+    时整条曲线的感受野是同一个值。实测 depth=2 的有效感受野（90% 梯度质量）在 xy 只有
+    约 39mm，而 patch 是 192mm；区分五个肺叶靠的是解剖位置这类全局信息。故在扫容量之
+    前，必须先确认 depth=2 不是天花板，否则测到的只是同一个瓶颈下的几个点。
+    depth=2 与改写前的固定三层结构逐参数等价（ch=8 → 85,382），保证可比。
+    """
+    import torch
     import torch.nn as nn
 
     def blk(ci, co):
@@ -153,26 +166,29 @@ def build_net(ch):
             nn.Conv3d(co, co, 3, padding=1), nn.InstanceNorm3d(co, affine=True),
             nn.LeakyReLU(0.01, True))
 
-    import torch
-
     class UNet3D(nn.Module):
-        """两次下采样的精简 3D U-Net。层数固定，只调通道数 ch 来做容量权衡。"""
-
-        def __init__(self, c):
+        def __init__(self, c, d):
             super().__init__()
-            self.e1, self.e2, self.e3 = blk(1, c), blk(c, c * 2), blk(c * 2, c * 4)
-            self.u2 = nn.ConvTranspose3d(c * 4, c * 2, 2, 2); self.d2 = blk(c * 4, c * 2)
-            self.u1 = nn.ConvTranspose3d(c * 2, c, 2, 2);     self.d1 = blk(c * 2, c)
+            chs = [c * (2 ** i) for i in range(d + 1)]
+            self.enc = nn.ModuleList(
+                [blk(1 if i == 0 else chs[i - 1], chs[i]) for i in range(d + 1)])
+            self.up = nn.ModuleList(
+                [nn.ConvTranspose3d(chs[i + 1], chs[i], 2, 2) for i in reversed(range(d))])
+            self.dec = nn.ModuleList([blk(chs[i] * 2, chs[i]) for i in reversed(range(d))])
             self.out = nn.Conv3d(c, N_CLASS, 1)
             self.pool = nn.MaxPool3d(2)
 
         def forward(self, x):
-            e1 = self.e1(x); e2 = self.e2(self.pool(e1)); e3 = self.e3(self.pool(e2))
-            d2 = self.d2(torch.cat([self.u2(e3), e2], 1))
-            d1 = self.d1(torch.cat([self.u1(d2), e1], 1))
-            return self.out(d1)
+            feats = []
+            for i, e in enumerate(self.enc):
+                x = e(x if i == 0 else self.pool(x))
+                feats.append(x)
+            x = feats[-1]
+            for j, (u, dk) in enumerate(zip(self.up, self.dec, strict=True)):
+                x = dk(torch.cat([u(x), feats[-2 - j]], 1))
+            return self.out(x)
 
-    return UNet3D(ch)
+    return UNet3D(ch, depth)
 
 
 def dice_loss(logits, target, eps=1.0):
@@ -197,6 +213,9 @@ def main():
     ap.add_argument('--bs', type=int, default=2)
     ap.add_argument('--lr', type=float, default=3e-3)
     ap.add_argument('--seed', type=int, default=0)
+    ap.add_argument('--depth', type=int, default=2, help='下采样次数，决定感受野')
+    ap.add_argument('--save-every', type=int, default=20, help='每多少 epoch 存一次断点')
+    ap.add_argument('--resume', default='', help='从断点续训（传 _ckpt.pt 路径）')
     a = ap.parse_args()
 
     import torch
@@ -211,16 +230,40 @@ def main():
     tr = PatchSampler(sp['train'], seed=a.seed)
     va = PatchSampler(sp['val'], seed=a.seed + 1, fg_ratio=0.5)
 
-    net = build_net(a.ch).to(dev)
+    net = build_net(a.ch, a.depth).to(dev)
     npar = sum(p.numel() for p in net.parameters())
     opt = torch.optim.Adam(net.parameters(), a.lr)
     sch = torch.optim.lr_scheduler.CosineAnnealingLR(opt, a.epochs)
-    print(f"  设备={dev}  容量 ch={a.ch}  参数 {npar/1e6:.3f}M  "
+    print(f"  设备={dev}  容量 ch={a.ch} depth={a.depth}  参数 {npar/1e6:.3f}M  "
           f"patch={PATCH}  {a.epochs}ep × {a.steps}step × bs{a.bs}")
     print(f"  训练 {len(sp['train'])} 例 / 验证 {len(sp['val'])} 例（患者级划分）\n")
 
+    os.makedirs(RESULTS, exist_ok=True)
+    tag = f"{a.ch}" if a.depth == 2 else f"{a.ch}d{a.depth}"   # depth=2 保持原文件名
+    ckpt_path = os.path.join(RESULTS, f"seg3d_w{tag}_ckpt.pt")
+
+    # 【为什么必须有断点】长跑（280 epoch ≈ 8 小时，2083 epoch ≈ 59 小时）期间任何中断
+    # ——断电、系统更新、误关终端、热保护——都会让整轮归零，连一个可用权重都不剩。
+    # 断点存完整状态（模型/优化器/调度器/best），--resume 可原地续训。
+    # 注意：PatchSampler 的随机状态不入断点，故续训后的采样序列与不中断的一次不同，
+    # 严格的逐步复现只在「一次跑完」时成立。
     best, t0 = {'dice': -1.0}, time.perf_counter()
-    for ep in range(1, a.epochs + 1):
+    start_ep = 1
+    if a.resume:
+        rk = torch.load(a.resume, map_location=dev, weights_only=False)
+        net.load_state_dict(rk['model']); opt.load_state_dict(rk['opt'])
+        sch.load_state_dict(rk['sch']); best = rk['best']; start_ep = rk['ep'] + 1
+        print(f"  从 {os.path.basename(a.resume)} 续训：ep{rk['ep']} 起，"
+              f"已有 best={best['dice']:.4f}@ep{best['ep']}")
+        # CosineAnnealingLR 的 T_max 随 state_dict 一起恢复，命令行改 --epochs 不会改到它。
+        # 不一致时 lr 会按旧周期走完再回升，与不中断的一次跑出的曲线不同。
+        tmax = sch.state_dict().get('T_max')
+        if tmax is not None and tmax != a.epochs:
+            print(f"  ⚠ 断点的调度周期 T_max={tmax} ≠ 本次 --epochs={a.epochs}："
+                  f"学习率仍按 {tmax} 退火。续训请沿用首次的 --epochs。")
+        print()
+
+    for ep in range(start_ep, a.epochs + 1):
         net.train(); tot = 0.0
         te = time.perf_counter()
         for _ in range(a.steps):
@@ -230,12 +273,12 @@ def main():
             lo = net(xt)
             loss = dice_loss(lo, yt) + F.cross_entropy(lo, yt)
             loss.backward(); opt.step()
-            tot += float(loss)
+            tot += float(loss.detach())
         sch.step()
         # 验证：patch 级 Dice（整卷 Dice 在 seg3d_eval.py 里做，那才是可与教师比的口径）
         net.eval(); ds = []
         with torch.no_grad():
-            for _ in range(12):
+            for _ in range(VAL_BATCHES):
                 x, y = va.sample(a.bs)
                 pr = net(torch.from_numpy(x).to(dev)).argmax(1).cpu().numpy()
                 for k in range(1, N_CLASS):
@@ -250,14 +293,19 @@ def main():
         print(f"  ep{ep:>3}/{a.epochs}  loss={tot/a.steps:.4f}  val patch-Dice={vd:.4f}"
               f"  {time.perf_counter()-te:.0f}s")
         sys.stdout.flush()
+        if ep % a.save_every == 0 or ep == a.epochs:
+            torch.save({'ep': ep, 'model': net.state_dict(), 'opt': opt.state_dict(),
+                        'sch': sch.state_dict(), 'best': best,
+                        'ch': a.ch, 'depth': a.depth, 'seed': a.seed}, ckpt_path)
+            print(f"       ↳ 断点 ep{ep} → results/seg3d_w{tag}_ckpt.pt"); sys.stdout.flush()
 
-    os.makedirs(RESULTS, exist_ok=True)
-    out = os.path.join(RESULTS, f"seg3d_w{a.ch}.pt")
-    torch.save({'state': best['state'], 'ch': a.ch, 'n_class': N_CLASS, 'lobes': LOBES,
+    out = os.path.join(RESULTS, f"seg3d_w{tag}.pt")
+    torch.save({'state': best['state'], 'ch': a.ch, 'depth': a.depth,
+                'n_class': N_CLASS, 'lobes': LOBES,
                 'patch': PATCH, 'best_ep': best['ep'], 'val_patch_dice': best['dice'],
                 'params': npar, 'seed': a.seed}, out)
     print(f"\n  最佳 ep{best['ep']}  val patch-Dice={best['dice']:.4f}")
-    print(f"  权重 → results/seg3d_w{a.ch}.pt   总耗时 {(time.perf_counter()-t0)/60:.1f} 分钟")
+    print(f"  权重 → results/seg3d_w{tag}.pt   总耗时 {(time.perf_counter()-t0)/60:.1f} 分钟")
     return 0
 
 

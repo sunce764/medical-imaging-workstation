@@ -13,7 +13,9 @@
 #   · 同样只统计真值中在场的肺叶
 #
 # 用法：python experiments/seg3d_eval.py --ckpt results/seg3d_w8.pt
-# 产出：results/seg3d_student_{ch}.csv + 汇总 JSON
+# 产出：results/seg3d_student_ch{ch}[d{depth}].csv + 汇总 JSON
+#       （depth≠2 时文件名带 d{depth}，与 seg3d_train 的权重命名一一对应；
+#        否则不同深度的评估结果会写到同一个文件互相覆盖）
 # =============================================================================
 
 import argparse
@@ -116,7 +118,8 @@ def main():
     # 学生模型在 CPU 上评时间：与教师（onnxruntime CPU）同平台才可比。
     # 用 MPS 测出来的秒数与教师的 CPU 秒数放同一张表，是在比硬件不是比模型。
     dev = torch.device('cpu')
-    net = build_net(ck['ch']).to(dev)
+    depth = ck.get('depth', 2)                       # 旧 ckpt 无 depth 键，默认 2
+    net = build_net(ck['ch'], depth).to(dev)
     net.load_state_dict(ck['state']); net.eval()
     npar = sum(p.numel() for p in net.parameters())
     print(f"  学生模型 ch={ck['ch']}  参数 {npar/1e6:.4f}M  patch={tuple(ck['patch'])}")
@@ -125,6 +128,10 @@ def main():
     cases = make_split()[a.split]
     if a.limit:
         cases = cases[:a.limit]
+    # 【ru_maxrss 的语义陷阱】它是**进程生命周期内**的峰值，单调不减：逐例 append
+    # 得到的是非递减序列，对它取 mean 既不是「每例峰值」也不是「全程峰值」，
+    # 只是一条爬升曲线的平均高度，没有可解释的含义。真正有意义的是最大值＝全程峰值。
+    # mean 仍保留，仅为兼容此前已产出的 JSON（那些数字就是这么来的，不重跑、不改写）。
     rows, times, peaks, vox_counts = [], [], [], []
     for i, cid in enumerate(cases, 1):
         img, lab = prep_case(cid)          # 与训练同一套预处理与标签重映射
@@ -149,7 +156,9 @@ def main():
               f"在场 {len(present)}/5  平均 Dice={np.nanmean(ds):.3f}")
         sys.stdout.flush()
 
-    tag = f"ch{ck['ch']}"
+    # 必须带 depth：同一 ch 的不同深度是不同模型，共用文件名会互相覆盖，
+    # 且 seg3d_report 的 glob 无从分辨。与 seg3d_train 的权重命名规则保持一致。
+    tag = f"ch{ck['ch']}" if depth == 2 else f"ch{ck['ch']}d{depth}"
     os.makedirs(RESULTS, exist_ok=True)
     with open(os.path.join(RESULTS, f"seg3d_student_{tag}.csv"), 'w', newline='',
               encoding='utf-8-sig') as f:
@@ -175,13 +184,13 @@ def main():
     print(f"\n  五叶总体 Dice = {np.nanmean(allv):.4f}，95% CI [{lo:.4f}, {hi:.4f}]"
           f"（n={len(allv)} 叶次）")
     print(f"  推理 {np.mean(times):.1f} ± {np.std(times):.1f} s/例   "
-          f"{us_per_vox:.3f} μs/体素   峰值 {np.mean(peaks):.2f} GB")
+          f"{us_per_vox:.3f} μs/体素   全程峰值 {max(peaks):.2f} GB")
 
-    out = dict(ch=ck['ch'], params=npar, n_cases=len(set(r['case'] for r in rows)),
+    out = dict(ch=ck['ch'], depth=depth, params=npar, n_cases=len(set(r['case'] for r in rows)),
                overall_mean=float(np.nanmean(allv)), overall_ci=[lo, hi],
                n_lobe_instances=len(allv), per_organ=per,
                infer_sec_mean=float(np.mean(times)), us_per_voxel=us_per_vox,
-               peak_gb_mean=float(np.mean(peaks)),
+               peak_gb_max=float(max(peaks)), peak_gb_mean=float(np.mean(peaks)),
                val_patch_dice=ck.get('val_patch_dice'), best_ep=ck.get('best_ep'))
     with open(os.path.join(RESULTS, f"seg3d_student_{tag}.json"), 'w') as f:
         json.dump(out, f, indent=1)
@@ -194,9 +203,9 @@ def main():
         print("\n  ===== 对标 organs.onnx =====")
         print(f"  {'':<10}{'参数':>10}{'Dice':>9}{'μs/体素':>11}{'峰值GB':>9}")
         print(f"  {'教师':<10}{31.2:>9.1f}M{t['overall_mean']:>9.4f}"
-              f"{'—':>11}{t['peak_gb_mean']:>9.2f}")
+              f"{'—':>11}{t.get('peak_gb_max', t['peak_gb_mean']):>9.2f}")
         print(f"  {'学生':<10}{npar/1e6:>9.4f}M{out['overall_mean']:>9.4f}"
-              f"{us_per_vox:>11.3f}{out['peak_gb_mean']:>9.2f}")
+              f"{us_per_vox:>11.3f}{out['peak_gb_max']:>9.2f}")
         print(f"  参数比 1:{31.2e6/npar:.0f}   Dice 差 {t['overall_mean']-out['overall_mean']:+.4f}")
     return 0
 

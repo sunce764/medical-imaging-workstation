@@ -237,3 +237,94 @@ Judge by **|CTF − 1|**, not by "higher CTF is better": ramp overshoots at shar
 
 ## Reconstruction-DL study — one-sentence summary
 A 1.9 M-parameter self-implemented post-processor cuts sparse-view RMSE by **3–6×** versus the best linear filter and lifts lesion-contrast retention from a view-count-independent **0.87 ceiling to 0.96–1.00** — and, measured rather than assumed, it does so **without inventing structure** (false-structure rate 1.7% at the loosest threshold, 0% beyond) and **without depending on the training shapes** (out-of-distribution gain ratio 0.81), with its only real limit at the sampling frequency itself — **all of it under noise-free projections, which is the condition least likely to induce hallucination.**
+
+---
+
+# Study IV: How small can this model get? — three lines, two of them negative (`seg3d_*.py`)
+
+## Motivation
+
+The App ships `organs.onnx` (31.2 M parameters). Whole-volume inference once pushed peak memory to 8.8 GB and the GUI had to slab along z and disable the CPU arena to survive — that is *working around* the cost, not removing it. This study asks whether the cost can be removed at the root: **train a small model, measure what the compression buys and what it breaks.**
+
+Two of the three lines below end in a negative result. They are reported at the same length as the positive one, because a compression route that looks obvious and does not work is worth exactly as much to a reader as one that does.
+
+## Data and split
+
+TotalSegmentator-CT-Lite (CC BY-4.0), fetched from a **pinned commit** with per-file SHA256 in `seg3d_manifest.json` — `seg_validate.py` used `/resolve/main`, a mutable branch ref, and could silently stop reproducing. 297 cases, all verified from the NIfTI headers to carry a **single spacing (1.5, 1.5, 1.5) mm** — read, not assumed. In-plane size varies widely (median 253 voxels, range 47–499), which matters for line C. **Patient-level** split with `SPLIT_SEED=0`: **207 train / 29 val / 61 test**. The split asserts its own disjointness and coverage at every call. Teacher and student are evaluated by the *same* code path (`seg3d_eval.py` imports `dice` and `bootstrap_ci` from `seg3d_teacher.py`), so no metric is implemented twice.
+
+## Running
+
+```bash
+python experiments/seg3d_data.py fetch      # pinned-commit download + SHA256 verify
+python experiments/seg3d_survey.py          # which organs are actually present, and how often
+python experiments/seg3d_teacher.py         # teacher baseline on the test split
+python experiments/seg3d_bench.py           # inference cost + provider comparison
+python experiments/seg3d_train.py --ch 8 --depth 3 --epochs 10 --steps 120
+python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt   # failure-mode localisation
+```
+
+## Findings
+
+### A — Teacher baseline: what `organs.onnx` actually achieves on lung lobes (57 cases)
+
+Mean five-lobe Dice **0.8867**, 95% CI **[0.8587, 0.9139]** over 234 lobe instances in 57 cases.
+
+**Two caveats on the cost figures in `seg3d_teacher_summary.json`, found in a later audit.** The 36.3 s/case was measured with the ONNX `InferenceSession` rebuilt *inside* the per-case loop, so it includes 57 graph builds that the student side (model built once, outside the loop) does not pay — the comparison was biased toward the student. And 4.89 GB is the mean of `ru_maxrss`, which is a process-lifetime high-water mark and therefore non-decreasing; the mean of a non-decreasing sequence is neither a per-case peak nor a whole-run peak. **Both are fixed in the code** (session hoisted out of the loop; `peak_gb_max` recorded alongside), **but the committed artefacts were not re-run** — re-running would overwrite evidence already cited elsewhere. Treat the two cost numbers as indicative only; the Dice figures are unaffected.
+
+| lobe | n | Dice | 95% CI |
+|---|---|---|---|
+| lung_lower_lobe_right | 50 | 0.9565 | [0.929, 0.978] |
+| lung_lower_lobe_left | 53 | 0.9401 | [0.912, 0.964] |
+| lung_middle_lobe_right | 48 | 0.8734 | [0.802, 0.935] |
+| lung_upper_lobe_left | 52 | 0.8724 | [0.810, 0.925] |
+| **lung_upper_lobe_right** | **31** | **0.7273** | **[0.590, 0.845]** |
+
+The right upper lobe is both the weakest **and** the rarest (present in 31 of 57 cases against 50–53 for the others). A likely explanation, **not yet established**: measuring the z-extent of each lobe gives a median of **12 slices (18 mm)** for the right upper lobe against 43–72 slices (64–108 mm) for the others — most scans containing it contain only its edge. **That measurement covers 9 cases (the right upper lobe present in only 6), so it cannot carry a 57-case conclusion**, and it sits awkwardly beside `seg3d_survey.csv`, which over all 297 cases records a *larger* median volume for this lobe (93,077 voxels) than for the left upper lobe (45,182). Widening the extent measurement is open work. What is solid is the coverage figure: the lobe is present in 31 of 57 test cases against 50–53 for the others.
+
+### B — Inference cost, and one shortcut that does not work
+
+Cost is set by model FLOPs times input voxels, and is independent of how much data the model was trained on: **1.6192 µs/voxel**, fitted across four input sizes (1.363 s at 32×160², 7.638 s at 32×384² per block) with 77 ONNX nodes.
+
+**CoreML is not free acceleration on this Mac.** Switching `onnxruntime` from `CPUExecutionProvider` to `CoreMLExecutionProvider` measures **5.682 s/block against 5.237 s/block — 8.5 % slower**, not faster. The negative result is kept in the artefacts deliberately: "try CoreML on Apple silicon" is the obvious first idea, and the obvious first idea costs an afternoon to re-discover.
+
+### C — The student learns "lung", and never learns "which lobe"
+
+A compact 3D U-Net trained from scratch on the 207-case training split (labels are ground truth, **not** teacher predictions — distilling from the teacher would measure imitation, not accuracy) reaches a five-lobe Dice of **0.062** [0.044, 0.079] on 24 validation cases. Three controls locate why.
+
+**Capacity is not the limit.** `ch=8, depth=2` (85,382 params) reaches val patch-Dice 0.1254; `ch=8, depth=3` (351,206 params — **4.1× the parameters**) reaches **0.0980**, slightly *lower*. Per-epoch the two curves overlap inside their own noise.
+
+**Receptive field is not the limit either.** The effective receptive field — the diameter containing 90 % of the input-gradient mass at a centre output voxel, averaged over 8 random initialisations — is **42 mm** at `depth=2` and **78 mm** at `depth=3`. Nearly doubling it changed nothing.
+
+**The failure is between classes, not in segmentation.** Scoring the same predictions under two groupings separates the two abilities:
+
+| grouping | Dice | 95% CI |
+|---|---|---|
+| lung vs background (five lobes merged) | **0.6145** | [0.5072, 0.7133] |
+| between the five lobes | **0.0620** | [0.0443, 0.0794] |
+
+A **9.9× gap**. The model has learned what lung tissue looks like and labels essentially all of it as one class. Counting cases where a lobe is present in the ground truth but receives **zero** predicted voxels:
+
+| lobe | zero-prediction cases |
+|---|---|
+| upper_L | **21 / 21** |
+| upper_R | **16 / 16** |
+| middle_R | **18 / 18** |
+| lower_L | 1 / 22 |
+| lower_R | 0 / 22 |
+
+Three lobes are never predicted **in any case in which they appear**. The model outputs only the two largest lobes — the loss-minimising response to "I cannot tell these apart".
+
+This is consistent with what the task requires. The five lobes are nearly identical in local texture; telling them apart is a question of *where in the chest this tissue sits*.
+
+The decisive scale is not the patch but the **effective receptive field**: **42 mm** at `depth=2`, **78 mm** at `depth=3`, against a largest-lobe z-extent of **108 mm**. The model is asked a global question through a window smaller than the structure it must name. The teacher processes the full in-plane extent at every step — measured across all 297 cases, a median of **380 mm** (range 120–748 mm), against the student's 192 mm patch. (An earlier draft of this section put the teacher's field at 768 mm by assuming 512² inputs; this dataset's in-plane median is 253 voxels, so that figure was wrong by a factor of two. The numbers in the figure are now read from `seg3d_geom.json` rather than written into the plotting code.)
+
+## Limitations (stated, not buried)
+
+- **The training budget is 1/200 of the standard, and this is the weak leg of line C.** Both controls ran 10 epochs × 120 steps = **1,200 optimiser steps**; nnU-Net's default is 1000 × 250 = **250,000**. "Widening does not help" and "deepening does not help" were therefore both measured *before either model had properly started training*, and **the possibility that a 200× longer run would learn the lobes is not excluded**. At the measured 0.85 s/step on this MPS backend, matching that budget takes **~59 hours**, which this machine cannot supply. What line C establishes is the *failure mode* — lung yes, lobes no, three lobes never emitted — not a proof that the architecture can never learn it.
+- **The teacher very likely trained on these test cases.** `organs.onnx` was trained on the full TotalSegmentator dataset, of which this Lite subset is a part. The teacher is scored on data it has probably seen; the student on a genuine hold-out. Any teacher-student gap is inflated by this and cannot be attributed to capacity.
+- **Teacher and student do not solve the same task.** 25 classes versus 5, and full TotalSegmentator versus 207 cases. Three factors — capacity, task breadth, training-set size — move together, so no single number here isolates "the cost of compression".
+- **The student has never been evaluated on the test split.** All student numbers are validation-set; the test split is held for a final evaluation that has not been run. They are not comparable to the teacher's 57-case test figures and are not presented as such.
+- **One dataset, one spacing.** Everything is 1.5 mm isotropic from a single public source. Nothing here speaks to other scanners or protocols.
+
+## Study IV — one-sentence summary
+The shipped 31.2 M-parameter teacher segments five lung lobes at Dice **0.8867** [0.859, 0.914] for 1.62 µs/voxel — a cost that **CoreML makes 8.5 % worse rather than better** — while a from-scratch compact student learns lung-versus-background at Dice **0.61** but between-lobe at only **0.062**, emitting **zero voxels for three of the five lobes in every case they appear in**, and neither 4.1× more parameters nor a 1.9× larger receptive field moves it: the lobe task asks a global anatomical question that a 192 mm patch seen through a 42–78 mm receptive field cannot answer — **though at 1/200 of the standard training budget, "it simply has not trained long enough" remains unexcluded.**

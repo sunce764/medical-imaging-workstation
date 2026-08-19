@@ -51,16 +51,30 @@ def load_zhw(path):
     return np.transpose(np.asanyarray(v.dataobj), (2, 1, 0))
 
 
-def run_onnx(volume_hu, quiet=False):
-    """复刻 ai_engine._run_onnx_multiorgan 的预处理与滑窗，返回 (标签图, 峰值内存GB)。"""
-    import resource
+def make_session():
+    """建一次 InferenceSession，供逐例推理复用。
 
+    【为什么必须建在循环外】原实现把建图放在 run_onnx 内部，57 例就建 57 次图，
+    建图开销全部计进「教师推理秒数」；而学生侧（seg3d_eval）的模型只在循环外建
+    一次。两个数并排放进权衡表，比的是「教师含建图 vs 学生不含」，系统性地偏向
+    学生。seg3d_bench 早就用预热排除了这项开销，此处补齐同一口径。
+    """
     import onnxruntime as ort
+    so = ort.SessionOptions(); so.enable_cpu_mem_arena = False
+    return ort.InferenceSession(MODEL_PATH, sess_options=so, providers=["CPUExecutionProvider"])
+
+
+def run_onnx(volume_hu, sess=None, quiet=False):
+    """复刻 ai_engine._run_onnx_multiorgan 的预处理与滑窗，返回 (标签图, 峰值内存GB)。
+
+    sess 为 None 时自建（保持单次调用可用），批量评估务必从外部传入复用的 session。
+    """
+    import resource
     norm = np.clip(volume_hu, -1000, 400).astype(np.float32)
     norm = (norm + 1000.0) / 1400.0
     Z, H, W = norm.shape
-    so = ort.SessionOptions(); so.enable_cpu_mem_arena = False
-    sess = ort.InferenceSession(MODEL_PATH, sess_options=so, providers=["CPUExecutionProvider"])
+    if sess is None:
+        sess = make_session()
     iname = sess.get_inputs()[0].name
     ph, pw = (-H) % 32, (-W) % 32
     seg = np.zeros((Z, H, W), dtype=np.uint8)
@@ -115,6 +129,11 @@ def main():
     print(f"\n  教师基线：organs.onnx 在 {a.split} 集 {len(cases)} 例上的逐例 Dice")
     print(f"  目标：5 个肺叶（真值标签 {sorted(LUNG_LOBES)}）\n")
 
+    # 【ru_maxrss 的语义陷阱】它是**进程生命周期内**的峰值，单调不减：逐例 append
+    # 得到的是非递减序列，对它取 mean 既不是「每例峰值」也不是「全程峰值」，
+    # 只是一条爬升曲线的平均高度，没有可解释的含义。真正有意义的是最大值＝全程峰值。
+    # mean 仍保留，仅为兼容此前已产出的 JSON（那些数字就是这么来的，不重跑、不改写）。
+    sess = make_session()          # 建一次复用：把建图开销排除在逐例计时之外
     rows, times, peaks = [], [], []
     for i, cid in enumerate(cases, 1):
         img = load_zhw(os.path.join(CACHE, f"{cid}_img.nii.gz"))
@@ -124,7 +143,7 @@ def main():
             print(f"  [{i}/{len(cases)}] {cid}: 真值无肺叶，跳过")
             continue
         t0 = time.perf_counter()
-        seg, peak = run_onnx(img, quiet=True)
+        seg, peak = run_onnx(img, sess=sess, quiet=True)
         dt = time.perf_counter() - t0
         times.append(dt); peaks.append(peak)
         ds = {}
@@ -160,12 +179,14 @@ def main():
     lo, hi = bootstrap_ci(allv)
     print(f"\n  五叶总体：平均 Dice = {np.mean(allv):.4f}，95% CI [{lo:.4f}, {hi:.4f}]（n={len(allv)} 叶次）")
     print(f"  推理耗时：{np.mean(times):.0f} ± {np.std(times):.0f} s/例（CPU）")
-    print(f"  峰值内存：{np.mean(peaks):.1f} GB")
+    print(f"  峰值内存：全程 {max(peaks):.1f} GB"
+          f"（逐例 ru_maxrss 均值 {np.mean(peaks):.1f} GB，仅兼容旧产物，勿作每例峰值解读）")
     with open(os.path.join(RESULTS, "seg3d_teacher_summary.json"), 'w') as f:
         json.dump({'per_organ': summary, 'overall_mean': float(np.mean(allv)),
                    'overall_ci': [lo, hi], 'n_lobe_instances': len(allv),
                    'n_cases': len(set(r['case'] for r in rows)),
                    'infer_sec_mean': float(np.mean(times)),
+                   'peak_gb_max': float(max(peaks)),
                    'peak_gb_mean': float(np.mean(peaks))}, f, indent=1)
     print("    → results/seg3d_teacher_dice.csv + seg3d_teacher_summary.json")
     return 0

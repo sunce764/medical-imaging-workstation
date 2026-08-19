@@ -1,0 +1,29 @@
+{
+ "erf_mm": {
+  "2": [
+   36.0,
+   42.0,
+   42.0
+  ],
+  "3": [
+   39.0,
+   78.0,
+   78.0
+  ]
+ },
+ "ch": 8,
+ "n_init": 8,
+ "frac": 0.9,
+ "n_cases": 297,
+ "spacings": [
+  [
+   1.5,
+   1.5,
+   1.5
+  ]
+ ],
+ "teacher_fov_mm_median": 379.5,
+ "teacher_fov_mm_min": 120.0,
+ "teacher_fov_mm_max": 748.5,
+ "patch_mm": 192.0
+}

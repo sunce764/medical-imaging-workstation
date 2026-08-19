@@ -7,7 +7,8 @@
 #
 # 【为什么要把一个否定结果写进产物】
 #   `onnxruntime` 在 macOS 上确实提供 CoreMLExecutionProvider，而项目各处写死了
-#   CPUExecutionProvider——看上去像是一处遗漏的优化。实测下来 CoreML 反而慢约 6%：
+#   CPUExecutionProvider——看上去像是一处遗漏的优化。实测下来 CoreML 反而更慢
+#   （本机 5.682 vs 5.237 s/块，慢 8.5%，见 results/seg3d_bench.csv）：
 #   3D 卷积在 Apple Neural Engine 上支持有限，大部分算子回退 CPU，反而多出调度与
 #   数据传输开销。把它记下来，后来的人（包括我自己）不必再试一遍。
 #
@@ -111,15 +112,19 @@ def bench_sizes(model, sizes=((32, 160, 160), (32, 224, 224), (32, 320, 320), (3
         rows.append(dict(shape="x".join(map(str, shp)), voxels=vox,
                          sec_mean=round(s, 3), us_per_voxel=round(s / vox * 1e6, 4)))
         print(f"  {str(shp):<20}{vox:>12,}{s:>9.2f}{s/vox*1e6:>11.4f}")
+    # 过原点拟合的优度用「相对残差」评估，不用 np.corrcoef——后者度量的是含截距的
+    # 线性相关，对过原点模型并不对应：一条明显不过原点的直线也能给出 r≈1。
     v = np.array([r['voxels'] for r in rows], float)
     t = np.array([r['sec_mean'] for r in rows], float)
     # 过原点的线性拟合与相关系数：接近 1 说明「时间 ∝ 体素数」成立
     k = float((v * t).sum() / (v * v).sum())
-    r = float(np.corrcoef(v, t)[0, 1])
-    print(f"\n  线性拟合 t ≈ {k*1e6:.4f} μs × 体素数    相关系数 r = {r:.4f}")
-    print(f"  → 推理时间与输入体素数{'近似线性' if r > 0.98 else '偏离线性'}；"
+    resid = float(np.max(np.abs(t - k * v) / t))      # 过原点模型的最大相对残差
+    r = float(np.corrcoef(v, t)[0, 1])                # 保留供参考，判据不用它
+    print(f"\n  线性拟合 t ≈ {k*1e6:.4f} μs × 体素数   最大相对残差 {resid*100:.1f}%"
+          f"（参考 r={r:.4f}）")
+    print(f"  → 推理时间与输入体素数{'近似线性' if resid < 0.10 else '偏离线性'}；"
           f"与训练集大小无关")
-    return rows, k
+    return rows, k, resid
 
 
 def main():
@@ -137,7 +142,7 @@ def main():
     print("  === Provider 对比（单块 32×320×320）===")
     prov_rows = bench_providers(a.model)
     print("\n  === 推理时间 vs 输入体素数 ===")
-    size_rows, k = bench_sizes(a.model)
+    size_rows, k, resid = bench_sizes(a.model)
 
     os.makedirs(RESULTS, exist_ok=True)
     with open(os.path.join(RESULTS, "seg3d_bench.csv"), 'w', newline='',
@@ -146,11 +151,16 @@ def main():
         w.writerow(["section", "key", "value", "unit"])
         w.writerow(["model", "params_million", round(npar / 1e6, 2), "M"])
         w.writerow(["model", "onnx_nodes", len(m.graph.node), "count"])
+        # std 必须落盘：n_rep 只有 3 次，没有离散度就无法判断 provider 间的差异
+        # 是否超出测量噪声——「慢 8.5%」若落在 ±5% 的抖动里，那个结论就不成立。
         for r in prov_rows:
             w.writerow(["provider", r['provider'], r['sec_mean'], "s/block"])
+            w.writerow(["provider", r['provider'] + "_std", r['sec_std'], "s/block"])
+            w.writerow(["provider", r['provider'] + "_n_rep", 3, "count"])
         for r in size_rows:
             w.writerow(["size", r['shape'], r['sec_mean'], "s/block"])
         w.writerow(["fit", "us_per_voxel", round(k * 1e6, 4), "us"])
+        w.writerow(["fit", "max_rel_residual", round(resid, 4), "ratio"])
     print("    → results/seg3d_bench.csv")
     return 0
 
