@@ -187,6 +187,7 @@ def main():
           f"{us_per_vox:.3f} μs/体素   全程峰值 {max(peaks):.2f} GB")
 
     out = dict(ch=ck['ch'], depth=depth, params=npar, n_cases=len(set(r['case'] for r in rows)),
+               cases=sorted(set(r['case'] for r in rows)),      # 供 report 校验是否同一批
                overall_mean=float(np.nanmean(allv)), overall_ci=[lo, hi],
                n_lobe_instances=len(allv), per_organ=per,
                infer_sec_mean=float(np.mean(times)), us_per_voxel=us_per_vox,

@@ -36,7 +36,7 @@ def collect():
     if not os.path.exists(tp):
         print("  缺教师基线，请先跑 seg3d_teacher.py"); return None, []
     teacher = json.load(open(tp))
-    students, skipped = [], []
+    students, skipped, unverified = [], [], []
     n_ref = teacher.get('n_cases', 0)
     for p in sorted(glob.glob(os.path.join(RESULTS, "seg3d_student_ch*.json"))):
         d = json.load(open(p))
@@ -46,11 +46,22 @@ def collect():
         # 不可比，逐例配对检验更要求同一批病例。跳过的必须打印出来，
         # 静默丢弃只是换一种不诚实。
         if d.get('n_cases', 0) < n_ref:
-            skipped.append((os.path.basename(p), d.get('n_cases', 0)))
+            skipped.append((os.path.basename(p), f"{d.get('n_cases', 0)} 例 < 教师 {n_ref}"))
             continue
+        # 规模相同仍可能是**不同的病例**——配对比较要求同一批。两边都落了清单才验得了；
+        # 旧产物没有 cases 键，此时只能退回按规模把关，并明示这一点，不假装验过。
+        tc, sc = teacher.get('cases'), d.get('cases')
+        if tc and sc:
+            if set(tc) != set(sc):
+                only_s, only_t = set(sc) - set(tc), set(tc) - set(sc)
+                skipped.append((os.path.basename(p),
+                                f"病例集合不同（学生独有 {len(only_s)}，教师独有 {len(only_t)}）"))
+                continue
+        else:
+            unverified.append(os.path.basename(p))
         students.append(d)
     students.sort(key=lambda d: d['params'])
-    return teacher, students, skipped
+    return teacher, students, skipped, unverified
 
 
 def _read_dice_csv(path):
@@ -117,12 +128,15 @@ def paired_test(tag, n_boot=5000, seed=0):
 
 
 def main():
-    teacher, students, skipped = collect()
+    teacher, students, skipped, unverified = collect()
     if teacher is None:
         return 1
-    for name, nc in skipped:
-        print(f"  ⊘ 已排除 {name}：仅 {nc} 例测试集，教师为 {teacher['n_cases']} 例，"
-              f"测试集不同则无从比较（多半是冒烟/中断产物）")
+    for name, why in skipped:
+        print(f"  ⊘ 已排除 {name}：{why} —— 测试集不同则无从比较")
+    # 未能核验「同一批病例」的，必须说出来：把关退化成只比规模时，读者有权知道
+    for name in unverified:
+        print(f"  ⚠ {name}：产物未记录病例清单，仅按测试集规模把关，"
+              f"未能核验是否与教师同一批（重跑 seg3d_teacher/seg3d_eval 即可补上）")
     if not students:
         print("  尚无学生模型结果，请先跑 seg3d_train.py + seg3d_eval.py"); return 1
 

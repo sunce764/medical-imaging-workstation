@@ -131,7 +131,10 @@ def verify(deep=True):
     一个 0 字节的残骸也有 SHA256，照样写进清单、照样"一致"。实测正是如此：
     校验报告"完好 100"，而 s0013_msk 是空文件（清单里也老老实实记着 0 字节），
     直到 nibabel 读取时才炸。
-    故 deep=True 时额外验证：文件非空 + 能被 nibabel 解析 + 影像与标注形状一致。
+    故 deep=True 时额外验证：文件非空 + 能被 nibabel 解析 + 影像与标注形状一致
+    + **affine 一致**。形状相同但 affine 不同意味着两者不在同一物理空间，逐体素比较
+    仍会照常算出一个 Dice——一个毫无意义却看不出异常的数字。实测本地 297 例的
+    img/msk affine 逐元素完全相同（最大差 0.0），故容差取 1e-3 不会误报。
     """
     if not os.path.exists(MANIFEST):
         print("  无清单，请先 fetch"); return False
@@ -149,9 +152,13 @@ def verify(deep=True):
                 if os.path.getsize(pi) == 0 or os.path.getsize(pm) == 0:
                     raise ValueError("空文件")
                 import nibabel as nib
-                si, sm = nib.load(pi).shape, nib.load(pm).shape
+                import numpy as np
+                ni, nm = nib.load(pi), nib.load(pm)
+                si, sm = ni.shape, nm.shape
                 if si != sm:
                     raise ValueError(f"影像 {si} 与标注 {sm} 形状不一致")
+                if not np.allclose(ni.affine, nm.affine, atol=1e-3):
+                    raise ValueError("影像与标注 affine 不一致（不在同一物理空间）")
             except Exception as ex:
                 corrupt.append((r['case'], str(ex)[:40]))
     n_ok = man['n'] - len(missing) - len(mismatch) - len(corrupt)

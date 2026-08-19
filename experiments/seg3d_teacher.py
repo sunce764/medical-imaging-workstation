@@ -185,6 +185,9 @@ def main():
         json.dump({'per_organ': summary, 'overall_mean': float(np.mean(allv)),
                    'overall_ci': [lo, hi], 'n_lobe_instances': len(allv),
                    'n_cases': len(set(r['case'] for r in rows)),
+                   # 落盘病例清单：下游做教师-学生对比时，「同规模」不等于「同一批」，
+                   # 而逐例配对比较要求后者。只有把清单写出来，把关才验得了。
+                   'cases': sorted(set(r['case'] for r in rows)),
                    'infer_sec_mean': float(np.mean(times)),
                    'peak_gb_max': float(max(peaks)),
                    'peak_gb_mean': float(np.mean(peaks))}, f, indent=1)
