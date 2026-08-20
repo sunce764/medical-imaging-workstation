@@ -67,7 +67,8 @@ def plot(tag):
     cp = os.path.join(RESULTS, f"seg3d_diag_{tag}.csv")
     jp = os.path.join(RESULTS, f"seg3d_diag_{tag}.json")
     if not (os.path.exists(cp) and os.path.exists(jp)):
-        print(f"  缺产物，先跑 seg3d_diag.py --ckpt results/seg3d_w{tag[2:]}.pt"); return 1
+        print(f"  缺产物 seg3d_diag_{tag}.csv/.json，先跑 seg3d_diag.py --ckpt <权重>")
+        return 1
     meta = json.load(open(jp))
     with open(cp, encoding='utf-8-sig') as f:
         rows = list(csv.DictReader(f))
@@ -232,7 +233,13 @@ def extent(n=12):
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == 'plot':
-        return plot(sys.argv[2] if len(sys.argv) > 2 else 'ch8d3')
+        if len(sys.argv) > 2:
+            return plot(sys.argv[2])
+        import glob
+        avail = sorted(os.path.basename(x)[11:-4]
+                       for x in glob.glob(os.path.join(RESULTS, 'seg3d_diag_*.csv')))
+        print("  用法：seg3d_diag.py plot <tag>\n  现有 tag：" + ", ".join(avail))
+        return 1
     if len(sys.argv) > 1 and sys.argv[1] == 'rf':
         rf(); return 0
     if len(sys.argv) > 1 and sys.argv[1] == 'extent':
@@ -241,12 +248,16 @@ def main():
     ap.add_argument('--ckpt', required=True)
     ap.add_argument('--split', default='val', help='诊断默认走 val，勿用 test')
     ap.add_argument('--limit', type=int, default=0)
+    ap.add_argument('--tag', default='', help='产物名后缀；缺省由 ckpt 的结构+训练量推出')
+    ap.add_argument('--infer', default='sliding', choices=['sliding', 'zslab'],
+                    help='sliding=按训练同尺寸 patch 滑窗（测精度用，默认）；'
+                         'zslab=整幅 z 分块（与教师同分块，测成本用）')
     a = ap.parse_args()
 
     import torch
     torch.set_num_threads(1)
     from seg3d_data import split as make_split
-    from seg3d_eval import zslab_infer
+    from seg3d_eval import sliding_infer, zslab_infer
     from seg3d_teacher import bootstrap_ci
     from seg3d_train import PATCH, build_net, prep_case
 
@@ -255,7 +266,17 @@ def main():
     net = build_net(ck['ch'], depth)
     net.load_state_dict(ck['state']); net.eval()
     dev = torch.device('cpu')          # 与教师同平台，时间才可比
-    tag = f"ch{ck['ch']}d{depth}"
+    # 产物名必须同时含结构与训练量：曾经只按 ch/depth 命名，导致同一结构的短训与
+    # 长训两次实验写到同一组文件，后跑的把先跑的覆盖掉（靠 git 才找回）。
+    tot = ck.get('total_steps')
+    if a.tag:
+        tag = a.tag
+    elif tot:
+        tag = f"ch{ck['ch']}d{depth}_{tot}s_{a.infer}"
+    else:
+        tag = f"ch{ck['ch']}d{depth}_{a.infer}"
+        print(f"  ⚠ 该 ckpt 未记训练量（早于此字段），产物名回退为 {tag}，"
+              f"可能覆盖同结构的旧结果；需要区分请显式传 --tag")
     print(f"\n  模型 ch={ck['ch']} depth={depth} 参数={ck['params']:,} "
           f"best_ep={ck['best_ep']} val_patch_dice={ck['val_patch_dice']:.4f}")
 
@@ -272,7 +293,8 @@ def main():
         if not (gt > 0).any():
             print(f"  [{i}/{len(cases)}] {cid}: 真值无肺叶，跳过"); continue
         t0 = time.perf_counter()
-        pred = zslab_infer(net, img, PATCH[0], dev)
+        pred = (sliding_infer(net, img, PATCH, dev, overlap=0.25)
+                if a.infer == 'sliding' else zslab_infer(net, img, PATCH[0], dev))
         dt = time.perf_counter() - t0
 
         # ① 肺 vs 背景：把五叶合并成一个前景类

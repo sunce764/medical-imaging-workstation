@@ -300,10 +300,14 @@ def main():
             print(f"       ↳ 断点 ep{ep} → results/seg3d_w{tag}_ckpt.pt"); sys.stdout.flush()
 
     out = os.path.join(RESULTS, f"seg3d_w{tag}.pt")
+    # 训练量必须随权重一起存：同一 (ch, depth) 可以训练量不同，下游若只按结构命名
+    # 产物，两次实验必然撞名互相覆盖（已经发生过一次，见 seg3d_diag.py 的 tag）。
     torch.save({'state': best['state'], 'ch': a.ch, 'depth': a.depth,
                 'n_class': N_CLASS, 'lobes': LOBES,
                 'patch': PATCH, 'best_ep': best['ep'], 'val_patch_dice': best['dice'],
-                'params': npar, 'seed': a.seed}, out)
+                'params': npar, 'seed': a.seed,
+                'epochs': a.epochs, 'steps': a.steps,
+                'total_steps': a.epochs * a.steps}, out)
     print(f"\n  最佳 ep{best['ep']}  val patch-Dice={best['dice']:.4f}")
     print(f"  权重 → results/seg3d_w{tag}.pt   总耗时 {(time.perf_counter()-t0)/60:.1f} 分钟")
     return 0

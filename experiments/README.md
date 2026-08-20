@@ -259,9 +259,28 @@ python experiments/seg3d_data.py fetch      # pinned-commit download + SHA256 ve
 python experiments/seg3d_survey.py          # which organs are actually present, and how often
 python experiments/seg3d_teacher.py         # teacher baseline on the test split
 python experiments/seg3d_bench.py           # inference cost + provider comparison
-python experiments/seg3d_train.py --ch 8 --depth 3 --epochs 10 --steps 120
-python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt   # failure-mode localisation
+python experiments/seg3d_train.py --ch 8 --depth 3 --epochs 10 --steps 120    # line C, ~20 min
+python experiments/seg3d_train.py --ch 8 --depth 3 --epochs 280 --steps 120  # line D, ~8.4 h
+python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt              # line C, failure mode
+python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt --infer zslab  # the defective path
+
+python experiments/seg3d_infer_bias.py all                     # line E, five controls, ~25 min
+python experiments/seg3d_infer_bias.py bench --config A --yes  # line F, shipped path, ~35 min
+python experiments/seg3d_infer_bias.py bench --config B --yes  # line F, +z overlap,  ~40 min
 ```
+
+`seg3d_diag.py --infer` selects the inference path: `sliding` (training patch size — use this for
+accuracy) or `zslab` (full plane, teacher-comparable — use this for cost). They are not
+interchangeable; line E measures a 0.25 Dice gap between them. `bench` writes one row per case and
+resumes from its own CSV, so a multi-hour run survives interruption; each configuration must run in
+its **own process**, because `ru_maxrss` is a process-lifetime high-water mark and cannot separate
+two configurations inside one process.
+
+Diagnosis artefacts are named `seg3d_diag_ch{ch}d{depth}_{steps}s_{infer}.*`. Both the step count
+and the inference path are in the name on purpose: the same architecture at two budgets is two
+experiments (an earlier scheme carrying only `ch`/`depth` let line D silently overwrite line C's
+results), and the same weights under the two paths differ by 0.25 Dice. Checkpoints written before
+this fix carry no step count, so the script warns and falls back — pass `--tag` for those.
 
 ## Findings
 
@@ -288,6 +307,8 @@ Cost is set by model FLOPs times input voxels, and is independent of how much da
 **CoreML is not free acceleration on this Mac.** Switching `onnxruntime` from `CPUExecutionProvider` to `CoreMLExecutionProvider` measures **5.682 s/block against 5.237 s/block — 8.5 % slower**, not faster. The negative result is kept in the artefacts deliberately: "try CoreML on Apple silicon" is the obvious first idea, and the obvious first idea costs an afternoon to re-discover.
 
 ### C — The student learns "lung", and never learns "which lobe"
+
+> **Superseded by lines D and E — read those before trusting anything here.** Everything below was measured at **1,200 optimiser steps** *and* through an inference path that was later found to be defective. Line D shows 28× the budget takes the same architecture from 0.062 to 0.490; line E shows the evaluation itself was suppressing the foreground, and fixing it takes the *same weights* to 0.746. The causal explanation offered at the end of this section — a receptive-field ceiling — **is wrong**. So is the headline observation that three lobes are never predicted: line E's padding experiment wipes out 99.3 % of predicted foreground without changing a single input voxel, which is the same phenomenon. The section is kept verbatim because the reasoning that produced the wrong conclusion is part of the result.
 
 A compact 3D U-Net trained from scratch on the 207-case training split (labels are ground truth, **not** teacher predictions — distilling from the teacher would measure imitation, not accuracy) reaches a five-lobe Dice of **0.062** [0.044, 0.079] on 24 validation cases. Three controls locate why.
 
@@ -318,13 +339,96 @@ This is consistent with what the task requires. The five lobes are nearly identi
 
 The decisive scale is not the patch but the **effective receptive field**: **42 mm** at `depth=2`, **78 mm** at `depth=3`, against a largest-lobe z-extent of **108 mm**. The model is asked a global question through a window smaller than the structure it must name. The teacher processes the full in-plane extent at every step — measured across all 297 cases, a median of **380 mm** (range 120–748 mm), against the student's 192 mm patch. (An earlier draft of this section put the teacher's field at 768 mm by assuming 512² inputs; this dataset's in-plane median is 253 voxels, so that figure was wrong by a factor of two. The numbers in the figure are now read from `seg3d_geom.json` rather than written into the plotting code.)
 
+*(The paragraph above is the wrong explanation, kept as written. Two independent things falsify it: the same 78 mm receptive field reaches 0.490 once trained longer (line D), and 0.746 once the evaluation is fixed (line E). Neither required touching the architecture.)*
+
+### D — The budget was the cause
+
+Line C left one leg untested and said so: both controls ran 1,200 steps against nnU-Net's 250,000, so "it has not trained long enough" was never excluded. It is now tested.
+
+The **identical** architecture (`ch=8, depth=3`, 351,206 parameters), the identical patient-level split, the identical whole-volume `zslab_infer` scoring on the same 24 validation cases — one variable changed, the step count:
+
+| | 1,200 steps | 33,600 steps | |
+|---|---|---|---|
+| between the five lobes | **0.0620** [0.0443, 0.0794] | **0.4903** [0.3626, 0.6106] | **7.9×** |
+| lung vs background | 0.6145 [0.5072, 0.7133] | 0.7412 [0.6076, 0.8639] | 1.2× |
+| lung/lobe ratio | 9.9× | 1.5× | |
+| lobes never predicted | **3 of 5** (21/21, 16/16, 18/18) | **0 of 5** (worst: 2/18) | |
+
+Three lobes that had received zero voxels in **every** case they appeared in are now predicted in nearly every case. The two abilities that line C found separated by a factor of 9.9 are now separated by 1.5.
+
+**What this retracts.** "Capacity is not the limit" and "receptive field is not the limit" were both measured on models that had not started to learn the task; neither conclusion survives. The `depth=2` arm has **not** been rerun at the longer budget, so the capacity comparison is currently *unmeasured*, not *resolved*.
+
+**What it does not establish.** 33,600 steps is still only **13.4 %** of nnU-Net's default. 0.490 is well below the teacher's 0.887, and the remaining gap cannot yet be assigned to architecture, budget, training-set size, or task breadth. The curve had not flattened when the run ended (best epoch 216 of 280).
+
+Cost, for anyone reproducing: 280 epochs × 120 steps took **8.4 hours** on this Mac's MPS backend. Matching nnU-Net's 250,000 steps extrapolates to roughly **63 hours**.
+
+*(Every number in this section is measured through `zslab_infer`, the same defective path line E dissects. They remain internally comparable — both budgets used it — but both are depressed. The 1,200-step weights were lost before the defect was found, so the two budgets cannot be re-compared under the corrected path. How much of the 0.062→0.490 gain is training and how much is unrelated to it is therefore settled; how much of the *remaining* gap to 0.746 belongs to each is not.)*
+
+### E — The evaluation was suppressing the foreground
+
+`val patch-Dice` at the best epoch was **0.8186**, while whole-volume scoring gave **0.4903**. A gap of 0.33 between the training metric and the evaluation metric is itself a signal; it was not chased at the time.
+
+Switching inference from `zslab_infer` (full in-plane extent, z-blocked — chosen so the student's *cost* is comparable to the teacher's) to a sliding window at the **training patch size** takes the same weights from **0.4903** to **0.7457** [0.6515, 0.8312]. On the 19 cases whose lobes occupy a normal volume, from 0.6023 to **0.8373**; lung-versus-background from 0.8573 to **0.9677**.
+
+Five independent controls, each removing a different competing explanation:
+
+| control | what it rules out | result |
+|---|---|---|
+| A/B with negative controls | "overlap-blending does the work" | cases with W ≤ 128 move by +0.006 / −0.039; W = 265 moves by **+0.727** |
+| dose–response on window size | "sliding inflates Dice", "z-overlap does the work" | monotone decline as block xy grows, z held fixed |
+| **zero-padding, content held identical** | every content-based explanation | see below |
+| forward hooks on the norm layers | leaves the finding at correlation | first layer's std ratio **0.59×**, mean −1.03 → −0.35 |
+| training-set control | "the model just does not generalise" | seen cases move +0.35 / +0.35 / +0.57; small seen cases do not move |
+
+The padding control is the decisive one. Take `s0084`, whose in-plane extent **is** 128 — enlarging the tensor introduces no new content at all, only zeros in the corner:
+
+| tensor xy | zero-padding | predicted foreground | agreement with original |
+|---|---|---|---|
+| 128 | 0 % | 225,374 | 100 % |
+| 160 | 36 % | 216,557 | 90.9 % |
+| 192 | 56 % | 170,649 | 80.7 % |
+| 224 | 67 % | 84,453 | 70.1 % |
+| 256 | 75 % | **1,529** | 57.3 % |
+
+**99.3 % of the foreground disappears without one input voxel changing.**
+
+The mechanism is `InstanceNorm3d`, which normalises per sample over the spatial dims. After clipping to [−1000, 400] and rescaling, air is exactly 0 — and so is padding. The larger the tensor, the larger the near-zero fraction, the further the statistics drift, and the more the foreground is flattened into background. Training saw 32×128×128 of real voxels every step; inference was handed the full plane plus padding. The student has **no data augmentation of any kind**, so nothing ever taught it scale invariance.
+
+This also explains line C's headline: lobes were not "never learned", they were normalised away.
+
+Cost of the fix: sliding inference measures **2.54×** the wall-clock of `zslab_infer` (same 24 cases, same machine; the absolute seconds are machine-bound and not quoted) — so accuracy and cost figures in this study come from *different* inference paths and must not be paired into a single operating point.
+
+### F — Does the same defect reach the shipped product? (61 test cases, 24 organs)
+
+The teacher is also nnU-Net v2 with InstanceNorm, and `ai_engine._run_onnx_multiorgan` feeds it the full plane in z-blocks of 32 with no overlap and a per-block `argmax` — the same shape of decision. Two configurations over the whole test split, every organ present, paired:
+
+- **A** = shipped behaviour. Reproduces the published teacher baseline exactly: **0.8867** [0.8587, 0.9139] over 234 lobe instances, −0.0000 against line A. The re-implementation is unbiased.
+- **B** = one change only: 25 % z-overlap with logit accumulation instead of per-block `argmax`.
+
+| paired over 59 cases | A | B | B − A |
+|---|---|---|---|
+| all organs, per-case mean | 0.8973 | 0.9105 | **+0.0133** [+0.0072, +0.0194] |
+| five lung lobes, per-case mean | 0.8714 | 0.8805 | +0.0091 **[−0.0162, +0.0306]** |
+
+**54 of 59 cases improve.** Largest gains `lung_upper_lobe_left` +0.048, `gallbladder` +0.024, `liver` +0.023; the only loss is `lung_upper_lobe_right` −0.028. On lung lobes alone the interval **crosses zero** — not significant.
+
+Cost: **1.18×** wall-clock, peak memory **8.44 → 9.09 GB** (+0.65 GB). For context, raising the block height to `DZ=64` was rejected earlier at 14.3 GB.
+
+A 2×2 grid separating the two factors (in-plane size × z-blocking) on three cases had suggested z-overlap was worth up to **+0.205**. Over 61 cases it is worth **+0.013**. That three-case figure was an outlier, and stating it here is the point: the honest version of this line is "a cheap marginal improvement", not "a defect costing 20 % accuracy". The full-split measurement exists to stop the outlier from becoming the headline.
+
+The student and the teacher fail differently, and the difference is instructive: the student, trained without augmentation on fixed 128² patches, collapses when the tensor grows. The teacher, trained with nnU-Net's scaling augmentation, barely notices — its residual loss comes from the *z* seams, not from in-plane size.
+
 ## Limitations (stated, not buried)
 
-- **The training budget is 1/200 of the standard, and this is the weak leg of line C.** Both controls ran 10 epochs × 120 steps = **1,200 optimiser steps**; nnU-Net's default is 1000 × 250 = **250,000**. "Widening does not help" and "deepening does not help" were therefore both measured *before either model had properly started training*, and **the possibility that a 200× longer run would learn the lobes is not excluded**. At the measured 0.85 s/step on this MPS backend, matching that budget takes **~59 hours**, which this machine cannot supply. What line C establishes is the *failure mode* — lung yes, lobes no, three lobes never emitted — not a proof that the architecture can never learn it.
+- **Two of line C's three controls are retracted, and one of them is now unmeasurable.** Both ran at 1,200 steps *and* through the defective path, so neither "widening does not help" nor "deepening does not help" measured what it was designed to. The `depth=2` arm has not been rerun, so "does capacity matter" has **no valid measurement** rather than a negative one. Worse, the 1,200-step weights were deleted before line E was found, so that budget can never be re-scored under the corrected path — the training-versus-evaluation split of the original 0.062 is permanently unrecoverable.
+- **The student's own numbers are still 13.4 % of the standard budget and not converged.** 33,600 steps against nnU-Net's 250,000; best epoch 216 of 280, with the curve still rising.
+- **The student has no data augmentation at all.** No scaling, no rotation, no intensity jitter. Line E shows what that costs: total defencelessness against an input-size shift. Any comparison against nnU-Net-trained weights is partly a comparison of augmentation pipelines, not of architectures.
+- **Accuracy and cost come from different inference paths.** Student accuracy is now sliding-window; student cost (1.62 µs/voxel, line B) is `zslab`. Sliding costs 2.54× more. The two must not be read as one operating point.
+- **Line F changes one factor, not the strategy space.** B was chosen because it is the minimal change to the shipped path. A configuration that also blocks the plane (256² with overlap) scored higher on 3 cases but was not run over the full split — its 5–6 h cost was not judged worth a likely sub-0.03 gain, and that judgement is an assumption, not a measurement.
 - **The teacher very likely trained on these test cases.** `organs.onnx` was trained on the full TotalSegmentator dataset, of which this Lite subset is a part. The teacher is scored on data it has probably seen; the student on a genuine hold-out. Any teacher-student gap is inflated by this and cannot be attributed to capacity.
 - **Teacher and student do not solve the same task.** 25 classes versus 5, and full TotalSegmentator versus 207 cases. Three factors — capacity, task breadth, training-set size — move together, so no single number here isolates "the cost of compression".
 - **The student has never been evaluated on the test split.** All student numbers are validation-set; the test split is held for a final evaluation that has not been run. They are not comparable to the teacher's 57-case test figures and are not presented as such.
 - **One dataset, one spacing.** Everything is 1.5 mm isotropic from a single public source. Nothing here speaks to other scanners or protocols.
 
 ## Study IV — one-sentence summary
-The shipped 31.2 M-parameter teacher segments five lung lobes at Dice **0.8867** [0.859, 0.914] for 1.62 µs/voxel — a cost that **CoreML makes 8.5 % worse rather than better** — while a from-scratch compact student learns lung-versus-background at Dice **0.61** but between-lobe at only **0.062**, emitting **zero voxels for three of the five lobes in every case they appear in**, and neither 4.1× more parameters nor a 1.9× larger receptive field moves it: the lobe task asks a global anatomical question that a 192 mm patch seen through a 42–78 mm receptive field cannot answer — **though at 1/200 of the standard training budget, "it simply has not trained long enough" remains unexcluded.**
+The shipped 31.2 M-parameter teacher segments five lung lobes at Dice **0.8867** [0.859, 0.914] for 1.62 µs/voxel — a cost **CoreML makes 8.5 % worse rather than better** — while a 0.35 M student first scored **0.062**, emitting nothing at all for three of the five lobes; that failure looked like a receptive-field ceiling and was neither, because 28× the training steps took it to 0.490 and then a defect in the *evaluation* accounted for most of the rest: enlarging the input tensor with **pure zero padding, not one voxel of new content, destroys 99.3 % of predicted foreground**, since `InstanceNorm3d` reads padding and air as the same value — fixing that alone takes the same weights to **0.746**. The same class of defect reaches the shipped product, and the honest measurement of it is the deflating one: **+0.013 all-organ Dice over 61 test cases** for 1.18× time and +0.65 GB, not the +0.205 that three cases had advertised.
