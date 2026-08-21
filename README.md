@@ -121,4 +121,11 @@ Offscreen-Qt coverage is **89%** over 3300 statements. The nine Qt-free modules 
 
 © 2026 **Sheng Chao (盛超)** and **Lai Shengsheng (赖胜圣)**. All rights reserved.
 
-The software is jointly owned by the two copyright holders above. A software-copyright registration application naming both holders has been submitted to the Copyright Protection Centre of China. This repository is provided for teaching, research and portfolio review only; **no license is granted for copying, modification or redistribution**. Contact the copyright holders for permission. Integrated third-party components retain their own licenses; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+The software is jointly owned by the two copyright holders above. A software-copyright registration application naming both holders has been submitted to the Copyright Protection Centre of China and is awaiting acceptance.
+
+**What that filing covers, precisely.** The submitted materials are a snapshot dated **2026-07-08**, comprising the thirteen product modules listed in [`docs/build_source_pdf.py`](docs/build_source_pdf.py) — `main.py`, `ui_builder.py`, `interaction.py`, `recon_lab.py`, `compare_lab.py`, `annotation_lab.py`, `ai_engine.py`, `graphics_view.py`, `recon.py`, `quantify.py`, `segmentation.py`, `mpr_geometry.py`, `constants.py`. Two consequences worth stating rather than leaving to assumption:
+
+- **The working tree has moved ahead of that snapshot**, and deliberately so — a filing is examined on the materials submitted, so those are frozen while the product keeps developing. Nothing here claims the current code *is* the registered version.
+- **`experiments/` is not part of the registration.** The studies are research code that measures the product; they were never in scope, and none of their findings are covered by the filing.
+
+This repository is provided for teaching, research and portfolio review only; **no license is granted for copying, modification or redistribution**. Contact the copyright holders for permission. Integrated third-party components retain their own licenses; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
