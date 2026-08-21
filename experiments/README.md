@@ -450,6 +450,37 @@ A 2×2 grid separating the two factors (in-plane size × z-blocking) on three ca
 
 The student and the teacher fail differently, and the difference is instructive: the student, trained without augmentation on fixed 128² patches, collapses when the tensor grows. The teacher, trained with nnU-Net's scaling augmentation, barely notices — its residual loss comes from the *z* seams, not from in-plane size.
 
+### G — The student on the held-out test split
+
+Every student figure up to this point is validation-set. The test split had been kept untouched
+so that the diagnostic work in lines C–E could not contaminate it. Scored now, once, on all 57
+test cases carrying lung lobes (234 lobe instances):
+
+| | inference path | five-lobe Dice | 95% CI | µs/voxel | peak |
+|---|---|---|---|---|---|
+| **Teacher** `organs.onnx`, 31.2 M | `zslab` | **0.8867** | [0.8587, 0.9139] | — | — |
+| **Student** 0.35 M | `zslab` | **0.4367** | [0.3972, 0.4756] | 1.089 | 8.75 GB |
+| **Student** 0.35 M | `sliding` | **0.7667** | [0.7255, 0.8072] | 2.733 | 7.01 GB |
+
+**Compared like for like, the gap is large and unambiguous.** Teacher and student on the same
+inference path, paired over all 234 instances: **−0.4500** [−0.4877, −0.4118], Wilcoxon
+*p* = 3.7×10⁻³⁹. A 0.35 M student does not approach a 31.2 M teacher on this task, and the
+89:1 parameter ratio buys a 2.20× speed-up while costing 1.79× peak memory.
+
+**The 0.7667 is the student's own ceiling, not a comparison.** It is what the architecture reaches
+once the evaluation defect of line E is removed — but the teacher was never re-scored under a
+matched sliding window, so *no* row here licenses "the student approaches the teacher". Quoting
+0.7667 against 0.8867 would be exactly the mistake line E exists to prevent: comparing across two
+inference paths that differ by 0.33 Dice on identical weights.
+
+Per lobe, both models fail on the same structure. The right upper lobe is the student's worst
+(0.5459 sliding, 0.4696 `zslab`) and is also the teacher's worst (0.727, line A) — measured
+independently, on different code paths. The right *lower* lobe is the student's best at 0.8961.
+
+*(The validation figure quoted in line E, 0.7457, is a per-case mean over 24 cases; the 0.7667 here
+is per-instance over 234 lobes on a different split. They are not the same quantity and should not
+be read as an improvement.)*
+
 ## Limitations (stated, not buried)
 
 - **Two of line C's three controls are retracted, and one of them is now unmeasurable.** Both ran at 1,200 steps *and* through the defective path, so neither "widening does not help" nor "deepening does not help" measured what it was designed to. The `depth=2` arm has not been rerun, so "does capacity matter" has **no valid measurement** rather than a negative one. Worse, the 1,200-step weights were deleted before line E was found, so that budget can never be re-scored under the corrected path — the training-versus-evaluation split of the original 0.062 is permanently unrecoverable.
@@ -459,8 +490,8 @@ The student and the teacher fail differently, and the difference is instructive:
 - **Line F changes one factor, not the strategy space.** B was chosen because it is the minimal change to the shipped path. A configuration that also blocks the plane (256² with overlap) scored higher on 3 cases but was not run over the full split — its 5–6 h cost was not judged worth a likely sub-0.03 gain, and that judgement is an assumption, not a measurement.
 - **The teacher very likely trained on these test cases.** `organs.onnx` was trained on the full TotalSegmentator dataset, of which this Lite subset is a part. The teacher is scored on data it has probably seen; the student on a genuine hold-out. Any teacher-student gap is inflated by this and cannot be attributed to capacity.
 - **Teacher and student do not solve the same task.** 25 classes versus 5, and full TotalSegmentator versus 207 cases. Three factors — capacity, task breadth, training-set size — move together, so no single number here isolates "the cost of compression".
-- **The student has never been evaluated on the test split.** All student numbers are validation-set; the test split is held for a final evaluation that has not been run. They are not comparable to the teacher's 57-case test figures and are not presented as such.
+- **The test split has now been scored once, and only once (line G).** It was deliberately untouched while lines C–E did their diagnostic work, so it is a genuine hold-out. It has not been used to select anything — no architecture, no budget, no inference path — and should not be re-scored casually, since each look costs some of that independence.
 - **Scanner diversity exists in the source but is unmeasurable here.** The images are clinical-routine CT from University Hospital Basel, and the upstream dataset documents its collection as spanning many scanners, sequences and institutions (Zenodo record 10047292, TotalSegmentator v2.0.1, CC-BY-4.0). But the Lite derivative ships no per-case acquisition metadata, and the NIfTI headers carry none either — `descrip` and `aux_file` are empty, the DICOM vendor tags having been dropped at conversion. So **nothing here is stratified by device**. On top of that, all 297 volumes are resampled to exactly (1.5, 1.5, 1.5) mm — read from the headers, not assumed — which erases acquisition geometry. Cross-scanner and cross-protocol behaviour is therefore **unmeasured, not excluded**; claiming either direction would be unsupported.
 
 ## Study IV — one-sentence summary
-The shipped 31.2 M-parameter teacher segments five lung lobes at Dice **0.8867** [0.859, 0.914] for 1.62 µs/voxel — a cost **CoreML makes 8.5 % worse rather than better** — while a 0.35 M student first scored **0.062**, emitting nothing at all for three of the five lobes; that failure looked like a receptive-field ceiling and was neither, because 28× the training steps took it to 0.490 and then a defect in the *evaluation* accounted for most of the rest: enlarging the input tensor with **pure zero padding, not one voxel of new content, destroys 99.3 % of predicted foreground**, since `InstanceNorm3d` reads padding and air as the same value — fixing that alone takes the same weights to **0.746**. The same class of defect reaches the shipped product, and the honest measurement of it is the deflating one: **+0.013 all-organ Dice over the 59 evaluable test cases** for 1.18× time and +0.65 GB, not the +0.205 that three cases had advertised.
+The shipped 31.2 M-parameter teacher segments five lung lobes at Dice **0.8867** [0.859, 0.914] for 1.62 µs/voxel — a cost **CoreML makes 8.5 % worse rather than better** — while a 0.35 M student first scored **0.062**, emitting nothing at all for three of the five lobes; that failure looked like a receptive-field ceiling and was neither, because 28× the training steps took it to 0.490 and then a defect in the *evaluation* accounted for most of the rest: enlarging the input tensor with **pure zero padding, not one voxel of new content, destroys 99.3 % of predicted foreground**, since `InstanceNorm3d` reads padding and air as the same value — fixing that alone takes the same weights to **0.746**. The same class of defect reaches the shipped product, and the honest measurement of it is the deflating one: **+0.013 all-organ Dice over the 59 evaluable test cases** for 1.18× time and +0.65 GB, not the +0.205 that three cases had advertised — and on the untouched test split, scored at last on a matched inference path, the 0.35 M student lands **0.4500 below** the teacher [−0.4877, −0.4118], which is the number that would have been flattered by quoting its 0.7667 against the teacher's 0.8867 across two different paths.
