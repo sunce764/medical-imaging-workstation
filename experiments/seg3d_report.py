@@ -40,6 +40,7 @@ def collect():
     n_ref = teacher.get('n_cases', 0)
     for p in sorted(glob.glob(os.path.join(RESULTS, "seg3d_student_ch*.json"))):
         d = json.load(open(p))
+        pending_unverified = None
         # 冒烟/中断产物必须挡在报告之外：目录里躺过一份 n_cases=2、best_ep=1、
         # Dice=0.031 的一轮冒烟结果，glob 会把它与教师的 57 例并排画进权衡曲线，
         # 看图的人无从分辨。判据取「测试集是否与教师同规模」——不同测试集本就
@@ -58,7 +59,9 @@ def collect():
                                 f"病例集合不同（学生独有 {len(only_s)}，教师独有 {len(only_t)}）"))
                 continue
         else:
-            unverified.append(os.path.basename(p))
+            # 注意：此处只登记，真正 append 放到全部闸门之后——否则被后续
+            # 闸门排除掉的产物仍会打印一条「未核验」警告，自相矛盾。
+            pending_unverified = os.path.basename(p)
         # 【口径必须一致，否则权衡曲线在比推理策略而不是比模型】
         # 教师基线由 seg3d_teacher.run_onnx 产出，走整幅 xy 沿 z 分块（zslab）。
         # 学生若用训练同尺寸滑窗（sliding）评，同一份权重能高出 0.25 Dice——
@@ -73,6 +76,13 @@ def collect():
         if not str(mode).startswith('zslab'):
             skipped.append((name, f"推理口径为 {mode}，与教师的 zslab 不可比"))
             continue
+        # 【tag 必须由产物自己带】配对检验要读同一模型的逐例 CSV。此前是用
+        # f"ch{ch}" 现拼文件名，丢掉了 depth、训练量与推理口径——于是表格取自
+        # 新产物、配对检验却读到历史遗留的 ch8 冒烟 CSV（2 例 5 叶次），两栏
+        # 展示的根本不是同一个模型。tag 从 JSON 的文件名反推，唯一且不会猜错。
+        d['_tag'] = name[len('seg3d_student_'):-len('.json')]
+        if pending_unverified:
+            unverified.append(pending_unverified)
         students.append(d)
     students.sort(key=lambda d: d['params'])
     return teacher, students, skipped, unverified
@@ -146,7 +156,7 @@ def main():
     if teacher is None:
         return 1
     for name, why in skipped:
-        print(f"  ⊘ 已排除 {name}：{why} —— 测试集不同则无从比较")
+        print(f"  ⊘ 已排除 {name}：{why}")
     # 未能核验「同一批病例」的，必须说出来：把关退化成只比规模时，读者有权知道
     for name in unverified:
         print(f"  ⚠ {name}：产物未记录病例清单，仅按测试集规模把关，"
@@ -178,7 +188,7 @@ def main():
     print("\n  === 相对教师（逐例配对检验）===")
     for s in students:
         r = next(x for x in rows[1:] if x['params_m'] == round(s['params'] / 1e6, 4))
-        pr = paired_test(f"ch{s['ch']}")
+        pr = paired_test(s['_tag'])
         print(f"  {r['model']:<26} 参数 1:{t['params_m']/r['params_m']:>6.0f}   "
               f"提速 {t['sec_per_case']/r['sec_per_case']:.2f}×   "
               f"内存 {r['peak_gb']/t['peak_gb']:.2f}×")
