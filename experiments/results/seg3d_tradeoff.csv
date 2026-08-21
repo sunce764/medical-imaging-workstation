@@ -1,0 +1,3 @@
+﻿model,classes,params_m,dice,ci_lo,ci_hi,sec_per_case,peak_gb,n_cases
+organs.onnx (teacher),25,31.2,0.8867,0.8587,0.9139,36.3,4.89,57
+UNet3D ch=8 (student),6,0.3512,0.4367,0.3972,0.4756,16.5,8.75,57
