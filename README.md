@@ -12,7 +12,7 @@
   <img alt="Teaching and research only" src="https://img.shields.io/badge/⚠️-teaching%2Fresearch%20·%20not%20a%20medical%20device-critical">
 </p>
 
-A desktop **CT imaging workstation** built with PySide6/Qt6. It brings clinical-style DICOM reading, AI multi-organ segmentation and a tomographic-reconstruction teaching lab into one application. The repository also contains **three documented quantitative studies, two multi-case validations, and an ablation that changed the product**, turning production code into measured, reproducible evidence.
+A desktop **CT imaging workstation** built with PySide6/Qt6. It brings clinical-style DICOM reading, AI multi-organ segmentation and a tomographic-reconstruction teaching lab into one application. The repository also contains **four documented quantitative studies, two multi-case validations, and an ablation that changed the product**, turning production code into measured, reproducible evidence.
 
 > [!WARNING]
 > **Teaching and research only.** This software is not a certified medical device and must not be used for clinical diagnosis. AI segmentation and organ measurements are automated estimates, not clinical findings.
@@ -23,7 +23,7 @@ A desktop **CT imaging workstation** built with PySide6/Qt6. It brings clinical-
 
 | Product | Runtime | Evidence | Data boundary |
 |---|---|---|---|
-| DICOM reader + AI segmentation + reconstruction lab | Python 3.10 · PySide6/Qt6 · CPU-only | Studies I–III · 57-case lung-lobe and 20-case multi-organ validations · a spacing ablation that fixed a real defect | Synthetic phantoms and de-identified public research CTs; no PHI is committed |
+| DICOM reader + AI segmentation + reconstruction lab | Python 3.10 · PySide6/Qt6 · CPU-only | Studies I–IV · 57-case lung-lobe and 20-case multi-organ validations · a spacing ablation that fixed a real defect | Synthetic phantoms and de-identified public research CTs; no PHI is committed |
 
 ## Interface
 
@@ -66,13 +66,14 @@ python main.py --data /path/to/dicom_dir # or load a DICOM directory at launch
 
 ## Measured evidence
 
-The experiments call the shipped production pipeline rather than a separate reimplementation. Studies I–III and the spacing ablation are documented in the [technical report](docs/technical_report.md); scripts and committed outputs are indexed under [`experiments/`](experiments/README.md).
+The experiments call the shipped production pipeline rather than a separate reimplementation. Studies I–III and the spacing ablation are documented in the [technical report](docs/technical_report.md); **Study IV is newer than that report** and lives, with every script and committed output, under [`experiments/`](experiments/README.md).
 
 | Evidence track | Measured finding | Scope and boundary |
 |---|---|---|
 | **Study I — reconstruction dose–quality** | Error saturates beyond ≈180 views; the best FBP filter switches from smoothing at sparse angles to sharp Ram-Lak at dense angles; ART is the most robust tested solver under Poisson photon noise. | Analytic 2-D Shepp-Logan phantom; matrix methods are limited to ≈64×64. [Preprint](docs/preprint_recon.md) |
 | **Study II — model provenance and Dice** | A label-overlap confusion matrix identifies the undocumented ONNX model as TotalSegmentator v2 `class_map_part_organs`, and corrects two label errors. Across **20 cases** the patient-level mean Dice is **0.909** (95% CI [0.889, 0.927]); the original single case at 0.922 was mildly optimistic but inside the interval. | Per-organ reliability varies far more than the aggregate implies: liver 0.982 and spleen 0.976 versus right upper lung lobe 0.773 and prostate 0.554 (present in only 7 cases). [`seg_multi.py`](experiments/seg_multi.py) |
 | **Study III — learned sparse-view reconstruction** | A self-implemented 1.9 M-parameter residual U-Net reduces RMSE by **3–6×**, raises lesion-contrast retention from 0.87 to **0.96–1.00**, records a 1.7% false-structure rate and retains an 0.81 out-of-distribution gain ratio. | Noise-free synthetic projections; the hallucination rate is a favourable-condition lower bound and does not transfer to photon-starved low-dose CT. |
+| **Study IV — compressing the segmenter, and the evaluation defect it exposed** | A 0.35 M-parameter 3D U-Net trained from scratch, measured against the shipped 31.2 M teacher. Scoring it surfaced a defect in the *evaluation* rather than the model: `InstanceNorm3d` normalises per sample over the spatial dims, and after HU rescaling air and zero-padding are the same value — so enlarging the inference tensor **destroys 99.3 % of predicted foreground without altering a single input voxel** (225,374 → 1,529). The same weights score **0.490 or 0.746** depending only on tensor size. Turning that suspicion on the shipped inference path — paired, all 24 organs, over the **59 of 61 test cases that contain at least one in-scope organ** — measures **+0.0133** [+0.0072, +0.0194] all-organ Dice for 1.18× time and +0.65 GB, improving **54 of 59** cases. | Five independent controls — negative controls, dose–response, zero-padding with content held identical, forward hooks on the norm layers, and a training-set control — each eliminate a different competing explanation. A 3-case pilot had advertised **+0.205** for that same change; the full split says **+0.013**, and the full-split run exists precisely to stop an outlier from becoming the headline. Student figures are validation-set only. [`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) |
 | **Ablation — the spacing contract** | The engine was skipping nnU-Net's mandatory resampling to the training spacing. Measured first (mean Dice 0.9219 → 0.7995 at twice the training spacing, small organs collapsing first and non-monotonically), then implemented. Across **20 paired cases** the same mismatched input recovers **0.684 → 0.840**, improving in **20/20** (Wilcoxon *p* = 1.9×10⁻⁶); inference on the bundled series drops from 100 s / 8.8 GB to **37 s / 3.0 GB**. | Only the coarser direction is testable on 32 GB; the finer side is argued from it being downsampling, not measured. Mask boundaries are now quantised to the 1.5 mm grid — structural accuracy up, pixel-level boundary precision down. [`seg_spacing.py`](experiments/seg_spacing.py) |
 | **Follow-up validation — lung lobes** | Across 57 public CTs, five-lobe mean Dice is **0.8867** (95% CI **[0.859, 0.914]**); right-upper-lobe Dice is 0.727 versus 0.967 in the original single case. | Validates five lung lobes only. Independently corroborated: a separate 20-case run measures the same right upper lobe at 0.773 using a different script and draw of cases. [`seg3d_teacher.py`](experiments/seg3d_teacher.py) |
 
