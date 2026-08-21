@@ -12,7 +12,7 @@
   <img alt="Teaching and research only" src="https://img.shields.io/badge/⚠️-teaching%2Fresearch%20·%20not%20a%20medical%20device-critical">
 </p>
 
-A desktop **CT imaging workstation** built with PySide6/Qt6. It brings clinical-style DICOM reading, AI multi-organ segmentation and a tomographic-reconstruction teaching lab into one application. The repository also contains **four documented quantitative studies, two multi-case validations, and an ablation that changed the product**, turning production code into measured, reproducible evidence.
+**3D multi-organ CT segmentation and tomographic reconstruction**, wrapped in a clinical-style DICOM workstation (PySide6/Qt6, CPU-only). Underneath the interface: the iterative solvers (DMR / ART / SIRT), direct-Fourier reconstruction and the analytic Shepp-Logan phantom are written from first principles; **two networks are trained from scratch** — a 1.9 M residual U-Net for sparse-view reconstruction and a 0.35 M 3D U-Net for lung-lobe segmentation; and the shipped 25-class ONNX segmenter, which arrived with no documentation of its origin, was identified and then validated against public ground truth across 297 CTs. **Four documented quantitative studies, two multi-case validations, and an ablation that changed the product** turn production code into measured, reproducible evidence.
 
 > [!WARNING]
 > **Teaching and research only.** This software is not a certified medical device and must not be used for clinical diagnosis. AI segmentation and organ measurements are automated estimates, not clinical findings.
@@ -51,6 +51,21 @@ The **built-in Shepp-Logan phantom** makes the whole reconstruction pipeline usa
 | **AI segmentation** | Background sliding-window ONNX inference for 25 classes, including 5 lung lobes · tri-planar colour overlay and clickable legend · cursor HUD · per-organ statistics and CSV export · 3-D marching-cubes surface preview, shape features and STL export · brush/eraser editing with undo · per-voxel confidence reporting |
 | **Reconstruction lab** | Built-in analytic Shepp-Logan phantom · Radon projection · BP / FBP with 5 filters / DFR · first-principles DMR, ART and SIRT solvers · error maps and RMSE · learned CNN post-processing with its training-view and input-filter constraints shown in the UI |
 | **Safety and review** | Display-layer de-identification · persistent AI disclaimer · model card covering measured provenance and unmeasured limits · bilingual EN / 中文 interface |
+
+## Implemented here, or called from a library
+
+Stated explicitly, because "I built a CT reconstruction lab" means very different things depending on the answer.
+
+| Component | How it exists here | Where |
+|---|---|---|
+| Radon projection · BP · FBP with 5 filters | **Called** — `skimage.transform.radon` / `iradon` | [`recon.py`](recon.py) |
+| Direct Fourier reconstruction (DFR) | **Written from first principles** — central-slice theorem: 1-D FFT per projection, polar→Cartesian interpolation, 2-D inverse FFT. Includes a half-pixel correction for even sizes that took a real debugging pass to find | [`recon.py`](recon.py) |
+| Shepp-Logan phantom | **Written from first principles** — ten analytic ellipses, not a bitmap from a library, so it renders at any resolution without interpolation loss | [`recon.py`](recon.py) |
+| System matrix · DMR · ART · SIRT | **Written from first principles** — per-pixel matrix construction with caching; ART is Kaczmarz row-action with precomputed row norms | [`recon.py`](recon.py) |
+| Sparse-view reconstruction CNN (1.9 M) | **Trained from scratch**, PyTorch, seed-fixed | [`recon_dl.py`](experiments/recon_dl.py) |
+| Lung-lobe 3D U-Net (0.35 M) | **Trained from scratch**, patient-level split, seed-fixed | [`seg3d_train.py`](experiments/seg3d_train.py) |
+| 25-class organ segmentation | **Third-party weights** (TotalSegmentator v2). The provenance recovery, label-map verification, and 20-case / 57-case validation are this project's work; the network is not | [`ai_engine.py`](ai_engine.py) |
+| DICOM I/O · MPR geometry · quantification · registration | **Written here** on top of `pydicom` / `numpy` / `scipy` | [`main.py`](main.py), [`mpr_geometry.py`](mpr_geometry.py), [`quantify.py`](quantify.py) |
 
 ## Quick start
 
