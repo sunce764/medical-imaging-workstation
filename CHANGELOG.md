@@ -150,6 +150,31 @@ The suite grew from 325 to **515 checks** (424 data-independent, run in CI). Cov
 
 ---
 
+## Evaluation-path round (2026-08)
+
+A third round, triggered by a number that did not add up rather than by a suspected defect. Its outcome revises conclusions the project had already published, so the retractions are recorded alongside the findings.
+
+### Found by refusing to accept a gap
+
+- **The evaluation was suppressing the foreground.** Training reported `val patch-Dice` 0.8186 at the best epoch while whole-volume scoring gave 0.4903. A gap of 0.33 between two metrics on the same weights is itself evidence; it had been explained away (foreground oversampling in patch scoring) and left alone. Switching inference from full-plane z-blocking to a sliding window at the **training patch size** takes the identical weights from **0.4903 to 0.7457**. Root cause: `InstanceNorm3d` normalises per sample over the spatial dims, and after clipping to [−1000, 400] and rescaling, air is exactly 0 — and so is zero-padding. The larger the tensor, the larger the near-zero fraction, the further the statistics drift, and the more foreground is flattened into background. Five independent controls each eliminate a different competing explanation: negative controls (cases with in-plane extent ≤128 move by +0.006 / −0.039 while a 265-wide case moves +0.727) rule out overlap-blending; a dose–response over window size rules out the sliding mechanism inflating Dice; **zero-padding with content held byte-identical** (predicted foreground 225,374 → 1,529, a 99.3% loss with no input voxel changed) rules out every content-based explanation; forward hooks on the norm layers show the first layer's std ratio at 0.59×; and a training-set control (seen cases move +0.35 to +0.57) rules out generalisation.
+- **This retracts a published causal explanation.** The compression study had attributed the student's failure — five-lobe Dice 0.062, with three lobes receiving zero predicted voxels in *every* case they appear in — to a receptive-field ceiling, supported by two controls on capacity and ERF. Both controls ran at 1,200 optimiser steps against nnU-Net's 250,000; at 28× the budget the same architecture reaches 0.490 and all five lobes appear, so both controls measured undertrained models. The "three lobes never predicted" observation is itself largely the padding artefact above. The original section is kept verbatim in `experiments/README.md` with the retraction stated at its head, because the reasoning that produced the wrong conclusion is part of the result.
+
+### Found by re-running at scale
+
+- **A three-case pilot overstated a product finding by an order of magnitude.** The same defect class reaches the shipped inference path (`ai_engine._run_onnx_multiorgan` feeds the full plane in z-blocks of 32 with a per-block `argmax`). On three cases, adding z-overlap appeared to be worth up to **+0.205** Dice. Over the full test split — 24 organs, paired, 59 of 61 cases carrying at least one in-scope organ — it is worth **+0.0133** [+0.0072, +0.0194], improving 54 of 59, for 1.18× wall-clock and +0.65 GB. On lung lobes alone the interval crosses zero. The honest description is "a cheap marginal improvement", not "a defect costing 20% accuracy". Both figures are published together, because the full-split run exists precisely to stop the outlier from becoming the headline.
+- **The re-implementation was checked against the published baseline before being trusted.** The reproduction of the shipped path scores 0.8867 over 234 lobe instances — identical to the previously published teacher baseline to four decimals (−0.0000).
+
+### Mistakes made in this round
+
+Recorded because a defect log that only lists other people's defects is not a defect log.
+
+- **Diagnostic artefacts were named by architecture alone**, so re-running the same model at a longer training budget silently overwrote the earlier results. Recovered from git. Artefact names now carry both the step count and the inference path, since the same weights differ by 0.25 Dice between the two paths.
+- **`ru_maxrss` was used as a per-case peak a second time**, in code written *after* the earlier round had already documented that it is a process-lifetime high-water mark and monotonically non-decreasing. The benchmark now runs one configuration per process, which removes the ambiguity structurally rather than relying on remembering.
+- **The 1,200-step weights were deleted before the defect was found**, so that budget can never be re-scored under the corrected path. How much of the original 0.062 was undertraining and how much was the evaluation defect is now permanently unrecoverable, and is stated as such.
+- **A streaming rewrite introduced a double-counting bug that three of four test cases did not catch.** Fusing overlapped logits, the fused result was written back into the same array before being cached, so the block-before-last was counted twice. Only the case whose final two blocks sit 2 slices apart exposed it. Caught by checking the streaming implementation voxel-for-voxel against the full-accumulation version — a check that existed only because the rewrite touched numerical output.
+
+---
+
 ## Known limitations (recorded faithfully, unfixed)
 
 - **MPR anisotropy uncorrected**: coronal/sagittal planes are displayed 1:1 by pixel; when slice thickness ≠ in-plane pixel spacing, the geometric proportions are distorted. A fix would require reworking the "scene coordinate = voxel index" mapping that runs through hover/measurement/cross-hairs — a non-surgical change whose risk outweighs its benefit, so it is recorded as a limitation. Caliper measurements use real mm, so **the measured values are correct**; only the displayed proportions do not match anatomy.
