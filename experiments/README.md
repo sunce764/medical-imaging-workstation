@@ -265,9 +265,39 @@ python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt              # lin
 python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt --infer zslab  # the defective path
 
 python experiments/seg3d_infer_bias.py all                     # line E, five controls, ~25 min
+python experiments/seg3d_infer_bias.py grid --yes               # 2x2 pilot, 3 cases (exploratory)
+python experiments/seg3d_infer_bias.py teacher --yes            # teacher window-size sweep, 3 cases
 python experiments/seg3d_infer_bias.py bench --config A --yes  # line F, shipped path, ~35 min
 python experiments/seg3d_infer_bias.py bench --config B --yes  # line F, +z overlap,  ~40 min
+
+# student on the held-out test split, both inference paths — see the note below on why both
+python experiments/seg3d_eval.py --ckpt results/seg3d_w8d3.pt --split test \
+       --infer sliding --tag ch8d3_33600s_sliding
+python experiments/seg3d_eval.py --ckpt results/seg3d_w8d3.pt --split test \
+       --infer zslab   --tag ch8d3_33600s_zslab
 ```
+
+**`--tag` is not optional for these weights.** They were trained before the checkpoint began
+recording its step count, so the scripts fall back to a name without it and warn. Passing `--tag`
+explicitly is what makes the filenames match the committed artefacts. Weights trained after that
+change name themselves correctly.
+
+**Two inference paths, two purposes, never mixed.** `zslab` feeds the full plane in z-blocks — the
+same partitioning `ai_engine` uses — so it is the only path comparable with the teacher baseline,
+and it is what the trade-off curve uses. `sliding` matches the training patch size and is what the
+student can actually achieve; line E measures 0.25 Dice between them on identical weights.
+`seg3d_report.py` reads the `infer` field recorded in each artefact and **refuses** anything that is
+not `zslab`, printing what it excluded — mixing the two would put one model on the curve twice at
+two different scores.
+
+`seg3d_infer_bias_grid.csv` and `..._teacher.csv` are **exploratory, 3 cases each**, kept because
+line F's headline number is a correction of what the grid suggested. Two caveats on the grid:
+columns `C_xy_block_only` and `D_both` come from code paths that were never cross-checked against a
+reference implementation (only the `B` column's was), and none of their values appear anywhere in
+this document; and `peak_gb_max` in that file is **not a peak** — it is `ru_maxrss`, a
+process-lifetime high-water mark read after several configurations had already run in the same
+process, which is why all three rows are nearly identical. The per-configuration memory figures in
+line F come from `bench`, which runs one configuration per process for exactly this reason.
 
 `seg3d_diag.py --infer` selects the inference path: `sliding` (training patch size — use this for
 accuracy) or `zslab` (full plane, teacher-comparable — use this for cost). They are not

@@ -59,6 +59,20 @@ def collect():
                 continue
         else:
             unverified.append(os.path.basename(p))
+        # 【口径必须一致，否则权衡曲线在比推理策略而不是比模型】
+        # 教师基线由 seg3d_teacher.run_onnx 产出，走整幅 xy 沿 z 分块（zslab）。
+        # 学生若用训练同尺寸滑窗（sliding）评，同一份权重能高出 0.25 Dice——
+        # 把两者并排画进「参数量 vs 精度」，读者会以为那是两个不同的模型。
+        # 判据优先取产物自带的 infer 字段；早于该字段的产物从文件名推断；
+        # 都取不到时视为 zslab——因为在 --infer 开关引入之前，这条路径是唯一的。
+        name = os.path.basename(p)
+        mode = d.get('infer')
+        if mode is None:
+            mode = ('sliding' if '_sliding' in name else
+                    'zslab' if '_zslab' in name else 'zslab（推断：早于 --infer 开关）')
+        if not str(mode).startswith('zslab'):
+            skipped.append((name, f"推理口径为 {mode}，与教师的 zslab 不可比"))
+            continue
         students.append(d)
     students.sort(key=lambda d: d['params'])
     return teacher, students, skipped, unverified

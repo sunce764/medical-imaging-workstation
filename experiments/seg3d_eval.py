@@ -104,6 +104,10 @@ def main():
     ap.add_argument('--ckpt', required=True)
     ap.add_argument('--split', default='test')
     ap.add_argument('--limit', type=int, default=0)
+    ap.add_argument('--infer', default='sliding', choices=['sliding', 'zslab'],
+                    help='sliding=按训练 patch 尺寸滑窗（测精度用，默认）；'
+                         'zslab=整幅 xy 沿 z 分块（与教师同分块，测成本用）')
+    ap.add_argument('--tag', default='', help='产物名后缀；缺省由 ckpt 推出')
     a = ap.parse_args()
 
     import resource
@@ -140,8 +144,14 @@ def main():
             print(f"  [{i}/{len(cases)}] {cid}: 真值无肺叶，跳过")
             continue
         t0 = time.perf_counter()
-        # 用与教师相同的 z 分块（dz 取训练 patch 的 z 边长，与 ai_engine 的 32 同量级）
-        seg = zslab_infer(net, img, tuple(ck['patch'])[0], dev)
+        # 【两条推理路径，用途不同，不可混用】
+        #   zslab  整幅 xy 沿 z 分块，与教师（ai_engine）同一分块口径 → 测**成本**
+        #   sliding 按训练 patch 尺寸滑窗 → 测**精度**
+        # 二者在同一份权重上相差 0.25 Dice：InstanceNorm3d 逐样本在空间维求统计量，
+        # 而 HU 归一化后空气与补零同为 0，张量越大统计量偏得越狠，前景被压成背景。
+        # 详见 seg3d_infer_bias.py 的五条对照。默认走 sliding，因为本脚本报的是 Dice。
+        seg = (sliding_infer(net, img, tuple(ck['patch']), dev, 0.25)
+               if a.infer == 'sliding' else zslab_infer(net, img, tuple(ck['patch'])[0], dev))
         dt = time.perf_counter() - t0
         rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         peak = rss / (1024 ** 3) if sys.platform == "darwin" else rss / (1024 ** 2)
@@ -156,9 +166,18 @@ def main():
               f"在场 {len(present)}/5  平均 Dice={np.nanmean(ds):.3f}")
         sys.stdout.flush()
 
-    # 必须带 depth：同一 ch 的不同深度是不同模型，共用文件名会互相覆盖，
-    # 且 seg3d_report 的 glob 无从分辨。与 seg3d_train 的权重命名规则保持一致。
-    tag = f"ch{ck['ch']}" if depth == 2 else f"ch{ck['ch']}d{depth}"
+    # 必须带 depth 与推理路径：同一 ch 的不同深度是不同模型；同一份权重在两条
+    # 推理路径下相差 0.25 Dice，混进同一文件名必然被误读。与 seg3d_diag 同规则。
+    base = f"ch{ck['ch']}" if depth == 2 else f"ch{ck['ch']}d{depth}"
+    tot = ck.get('total_steps')
+    if a.tag:
+        tag = a.tag
+    elif tot:
+        tag = f"{base}_{tot}s_{a.infer}"
+    else:
+        tag = f"{base}_{a.infer}"
+        print(f"  ⚠ 该 ckpt 未记训练量（早于该字段），产物名为 {tag}；"
+              f"需区分训练量请显式传 --tag")
     os.makedirs(RESULTS, exist_ok=True)
     with open(os.path.join(RESULTS, f"seg3d_student_{tag}.csv"), 'w', newline='',
               encoding='utf-8-sig') as f:
@@ -186,7 +205,12 @@ def main():
     print(f"  推理 {np.mean(times):.1f} ± {np.std(times):.1f} s/例   "
           f"{us_per_vox:.3f} μs/体素   全程峰值 {max(peaks):.2f} GB")
 
-    out = dict(ch=ck['ch'], depth=depth, params=npar, n_cases=len(set(r['case'] for r in rows)),
+    out = dict(ch=ck['ch'], depth=depth, params=npar,
+               # 推理口径必须随产物一起存：同一份权重在两条路径下相差 0.25 Dice，
+               # 而教师基线走的是 zslab。产物若不自描述，下游只能靠文件名猜，
+               # 而文件名是可以被改的。seg3d_report 据此拒绝混口径入权衡曲线。
+               infer=a.infer,
+               n_cases=len(set(r['case'] for r in rows)),
                cases=sorted(set(r['case'] for r in rows)),      # 供 report 校验是否同一批
                overall_mean=float(np.nanmean(allv)), overall_ci=[lo, hi],
                n_lobe_instances=len(allv), per_organ=per,
