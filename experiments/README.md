@@ -457,12 +457,15 @@ The test split holds 61 cases; **`s0099` and `s0340` contain none of the 24 orga
 - **A** = shipped behaviour. Reproduces the published teacher baseline exactly: **0.8867** [0.8587, 0.9139] over 234 lobe instances, −0.0000 against line A. The re-implementation is unbiased.
 - **B** = one change only: 25 % z-overlap with logit accumulation instead of per-block `argmax`.
 
-| paired over 59 cases | A | B | B − A |
-|---|---|---|---|
-| all organs, per-case mean | 0.8973 | 0.9105 | **+0.0133** [+0.0072, +0.0194] |
-| five lung lobes, per-case mean | 0.8714 | 0.8805 | +0.0091 **[−0.0162, +0.0306]** |
+| paired, test split | n | A | B | B − A |
+|---|---|---|---|---|
+| all organs, per-case mean | 59 | 0.8973 | 0.9105 | **+0.0133** [+0.0072, +0.0194] |
+| five lung lobes, per-case mean | **57** | 0.8714 | 0.8805 | +0.0091 **[−0.0162, +0.0306]** |
 
-**54 of 59 cases improve.** Largest gains `lung_upper_lobe_left` +0.048, `gallbladder` +0.024, `liver` +0.023; the only loss is `lung_upper_lobe_right` −0.028. On lung lobes alone the interval **crosses zero** — not significant.
+The two rows do not share a denominator: `s0062` and `s0188` carry in-scope organs but no
+lung lobe, so the lobe row is 57 cases, not 59. The header previously said 59 for both.
+
+**54 of 59 cases improve.** The five largest per-organ gains are `lung_upper_lobe_left` +0.048 (n=52), `lung_middle_lobe_right` +0.026 (n=48), `thyroid_gland` +0.025 (n=19), `adrenal_gland_left` +0.024 (n=48) and `gallbladder` +0.024 (n=41). **Two** organs lose, not one: `lung_upper_lobe_right` −0.028 (n=31) and `kidney_cyst_right` −0.040, the latter present in a single case. An earlier version of this paragraph named gains ranked 1st, 5th and 6th as "largest" and called the right-upper-lobe loss "the only loss"; both were recomputed from `seg3d_infer_bias_bench_A/B.csv` and corrected. On lung lobes alone the interval **crosses zero** — not significant.
 
 Cost: **1.18×** wall-clock, peak memory **8.44 → 9.09 GB** (+0.65 GB). For context, raising the block height to `DZ=64` was rejected earlier at 14.3 GB.
 

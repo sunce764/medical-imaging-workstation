@@ -667,6 +667,11 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.global_annotations = {'all': []}
         self._hidden_organs.clear()   # 换病例时清除上一例的图例隐藏状态
         self._mask_undo = []          # 换病例清撤销栈，防止旧切片号越界访问新蒙版
+        # 定量结果同样属于上一例：不清的话，走 _kickoff_ai 的那 ~100 秒里，患者面板与
+        # 影像已是新病例、而定量面板与「导出定量 CSV」仍是上一例的体积/HU——导出的文件
+        # 名用新 pid，内容却是旧病例，事后无从分辨。mask_restored 分支之所以看不出问题，
+        # 是因为它紧接着调了 _update_organ_stats()；_kickoff_ai 分支要等推理回调才调。
+        self._organ_stats = []
         z, y, x = self.volume_hu.shape
         # 默认将 3D 光标定位在体积中心（中间切片、中间行、中间列）
         self.current_3d_pos = [z // 2, y // 2, x // 2]
