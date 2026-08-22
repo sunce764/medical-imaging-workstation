@@ -296,7 +296,10 @@ class AnnotationMixin:
         idx = self.current_3d_pos[0]
         ds = self.dicom_datasets[idx]
         hu = self.volume_hu[idx]
-        sp = (self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0), self._dcm_float(ds, 'PixelSpacing', 1.0, idx=1))
+        # 列间距缺省回退到行间距而非 1.0：畸形 DICOM 的 PixelSpacing=[0.7, None] 下，
+        # 写死 1.0 会让面积/体积整体偏大（0.7 时 +42.9%）。与 main.py 同一口径。
+        _psr = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
+        sp = (_psr, self._dcm_float(ds, 'PixelSpacing', _psr, idx=1))
         h, w = hu.shape
         # 用 QPainter 将多边形光栅化为掩码图像
         mq = QImage(w, h, QImage.Format_Grayscale8); mq.fill(Qt.black)
@@ -526,8 +529,9 @@ class AnnotationMixin:
         if self.volume_mask is None or self.volume_hu is None or not self.dicom_datasets:
             return []
         ds = self.dicom_datasets[0]
-        spacing = (self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0),
-                   self._dcm_float(ds, 'PixelSpacing', 1.0, idx=1),
+        _psr = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
+        spacing = (_psr,
+                   self._dcm_float(ds, 'PixelSpacing', _psr, idx=1),  # 列间距缺省回退行间距
                    self._slice_spacing() or 1.0)   # 层间距而非层厚：见 main._slice_spacing
         # volume_conf 只在 ONNX 路径产出；手工编辑过蒙版后形状仍一致，故置信度沿用
         # 原推理结果——注意画笔改过的体素其置信度并非模型对新标签的置信度，

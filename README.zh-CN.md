@@ -107,7 +107,7 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 
 | 证据线 | 实测结果 | 适用边界 |
 |---|---|---|
-| **研究 I —— 重建剂量-质量** | 误差在 ≈180 视角后饱和；最优 FBP 滤波器从稀疏角的平滑滤波切换为稠密角的锐利 Ram-Lak；Poisson 光子噪声下 ART 是已测方法中最鲁棒者。后续对同一批系统矩阵做 SVD，**推翻了本研究自己对最小二乘失稳给出的解释**：条件数最差的是**最稀疏**采样，不是近方阵处。替代说法刻意只做定性——不声称对该尖峰的任何定量归因。 | 解析二维 Shepp-Logan 模体；矩阵法限制在 ≈64×64；ART/SIRT 迭代次数固定、未逐剂量调优。[预印本稿](docs/preprint_recon.md) · [条件数 CSV](experiments/results/exp_c_conditioning.csv) |
+| **研究 I —— 重建剂量-质量** | 误差在 ≈180 视角后饱和；最优 FBP 滤波器从稀疏角的平滑滤波切换为稠密角的锐利 Ram-Lak；Poisson 光子噪声下 ART 是已测方法中最鲁棒者。后续对同一批系统矩阵做 SVD 来检验本研究自己对最小二乘失稳的解释，结果**要改的是工具而非结论**：2-范数条件数对其中两个系统根本无定义，但最小二乘实际求逆的那部分谱上的噪声增益，恰在近方阵处取 23–37 倍的尖峰。替代说法刻意只做定性——不声称对该尖峰的任何定量归因。 | 解析二维 Shepp-Logan 模体；矩阵法限制在 ≈64×64；ART/SIRT 迭代次数固定、未逐剂量调优。[预印本稿](docs/preprint_recon.md) · [条件数 CSV](experiments/results/exp_c_conditioning.csv) |
 | **研究 II —— 模型出处与 Dice** | 标签重叠混淆矩阵实测出未文档化模型的标签方案即 TotalSegmentator v2 `class_map_part_organs`——21 个在场器官呈身份对角线——并纠正两处标签错误。被实测的是**标签映射**；由此推断这份权重就是那个上游 release，是很强的推断，但不是密码学意义上的证明。**20 例**患者级平均 Dice **0.909**（95% CI [0.889, 0.927]），单例 0.922 略偏乐观但落在区间内。 | 器官间可靠性差异远大于总体数字所示：肝 0.982、脾 0.976，而右肺上叶 0.773、前列腺 0.554（仅 7 例在场）。[`seg_multi.py`](experiments/seg_multi.py) |
 | **研究 III —— 学习式稀疏角重建** | 自实现 1.9M 参数残差 U-Net 将 RMSE 降低 **3–6 倍**，病灶对比度保留率从 0.87 提升至 **0.96–1.00**；虚假结构率为 1.7%，分布外增益比为 0.81。 | 使用无噪声合成投影；幻觉率是有利条件下的下界，不能外推至光子饥饿的低剂量 CT。 |
 | **研究 IV —— 压缩分割模型，以及它暴露出的评估缺陷** | 从零训练的 0.35M 3D U-Net，对照随软件发布的 31.2M 教师。给它打分时暴露出问题出在**评估**而非模型——同一份权重仅因张量尺寸不同即得 **0.490 或 0.746**（见上表）。把同样的怀疑用到产品推理路径上，配对覆盖全部 24 器官、**test 集 61 例中的 59 例**，得到全器官 Dice **+0.0133**［+0.0072, +0.0194］，**59 例中 54 例改善**，代价 1.18× 耗时与 +0.65GB。 | 五条针对性对照各自排除一种竞争解释（针对不同竞争解释，非统计独立）；3 例试跑曾给出的 **+0.205** 没能挺过全样本。在留出的 test 集上、以**同一条推理路径**相比，学生比教师低 **0.4500**［-0.4877, -0.4118］（234 个叶次）——0.35M 在此并未逼近 31.2M。两条推理路径混用，在同一份权重上值 0.33 Dice，故报告脚本拒绝把它们画进同一张图。[`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) · [完整记述](experiments/README.md) |
@@ -127,12 +127,12 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 9 个无 Qt 计算模块**。
-- 作者机器上全套 **586 项检查**，`SKIP_REAL_DATA=1` 可达 **495 项**。**干净的 CI runner 会更少**，该数字以 run 日志为准、不以本 README 为准：提交 `7a09744` 处 CI 记录 458 项，而同一命令在本地是 471 项。差值不是不稳定，而是那些需要「干净 clone 拿不到的产物」（未入库的 `.onnx.data` 权重与 `.pt` checkpoint）的检查在那里根本不会执行。留在 CI 之外的是需要 RIDER 序列或那些权重的部分——**不是**交互层，交互层由合成 DICOM 与合成鼠标/滚轮事件在 CI 中覆盖。
+- 作者机器上全套 **588 项检查**，`SKIP_REAL_DATA=1` 可达 **498 项**。**干净的 CI runner 会更少——当前为 479 项**。差值不是不稳定，而是那些需要「干净 clone 拿不到的产物」（未分发的 `.onnx.data` 权重与 `.pt` checkpoint）的检查在那里根本不会执行。479 这个数是**方法已被校准的预测**而非估计：在一份全新 clone 里跑 `SKIP_REAL_DATA=1` 能精确复现 CI 计数——在提交 `7a09744` 处该 clone 给出 **458**，正是 [CI 当时实际记录的数字](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32590281440)。最终仍以 run 日志为准，此处给的是该方法对下一次 run 的预测。留在 CI 之外的是需要 RIDER 序列或那些权重的部分——**不是**交互层，交互层由合成 DICOM 与合成鼠标/滚轮事件在 CI 中覆盖。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
-python tests/test_gui.py                     # 完整回归：本地 586 项；需本地 RIDER 数据
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 本地 495 项；干净 CI runner 更少（见上）
+python tests/test_gui.py                     # 完整回归：本地 588 项；需本地 RIDER 数据
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 本地 498 项；干净 CI runner 479 项（见上）
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```
@@ -140,7 +140,7 @@ coverage run tests/test_gui.py && coverage report
 <details>
 <summary><strong>覆盖率详情</strong></summary>
 
-离屏 Qt 覆盖率 **89%**（3300 条语句）。九个无 Qt 模块（`recon` 84%、`quantify` 100%、`segmentation` 86%、`mpr_geometry` 96%、`followup` 90%、`projection` 95%、`mesh3d` 96%、`registration` 98%、`model_card` 87%）均有独立单测；合成鼠标 press/move/release 序列会断言信号载荷（`graphics_view` 91%）。此前无人走过的几层提升明显：重建实验室 UI 调度 `recon_lab` 44% → **89%**，标注/分割编辑 `annotation_lab` 74% → **83%**，鼠标交互调度 `interaction.py` 64% → **98%**、随访对比 `compare_lab` 82% → **95%**。写这些断言的过程挖出三个只读代码发现不了的缺陷：光标移出体积后探针仍显示上一次的读数、模型说明卡遇到截断的 CSV 会崩、数字 id 的标注永远渲染不出也删不掉。因此，CI 全绿只代表数据无关子集通过，不等于所有本地数据交互测试均已运行。
+离屏 Qt 覆盖率 **90%**（3359 条语句）。九个无 Qt 模块（`recon` 86%、`quantify` 100%、`segmentation` 92%、`mpr_geometry` 96%、`followup` 90%、`projection` 95%、`mesh3d` 96%、`registration` 98%、`model_card` 87%）均有独立单测；合成鼠标 press/move/release 序列会断言信号载荷（`graphics_view` 91%）。此前无人走过的几层提升明显：重建实验室 UI 调度 `recon_lab` 44% → **89%**，标注/分割编辑 `annotation_lab` 74% → **83%**，鼠标交互调度 `interaction.py` 64% → **98%**、随访对比 `compare_lab` 82% → **95%**。写这些断言的过程挖出三个只读代码发现不了的缺陷：光标移出体积后探针仍显示上一次的读数、模型说明卡遇到截断的 CSV 会崩、数字 id 的标注永远渲染不出也删不掉。因此，CI 全绿只代表数据无关子集通过，不等于所有本地数据交互测试均已运行。
 
 </details>
 
@@ -173,7 +173,7 @@ coverage run tests/test_gui.py && coverage report
 
 **该申请覆盖的范围，精确到文件。** 提交的材料是 **2026-07-08** 的快照，包含 [`docs/build_source_pdf.py`](docs/build_source_pdf.py) 所列的十三个产品模块：`main.py`、`ui_builder.py`、`interaction.py`、`recon_lab.py`、`compare_lab.py`、`annotation_lab.py`、`ai_engine.py`、`graphics_view.py`、`recon.py`、`quantify.py`、`segmentation.py`、`mpr_geometry.py`、`constants.py`。两点与其让人猜，不如写明：
 
-- **当前代码已领先于该快照**，且是有意为之——登记以提交的材料为准，故快照冻结、产品继续演进。此处不主张当前代码**就是**已登记的版本。
+- **当前代码已领先于该快照**，且是有意为之——登记以提交的材料为准，故快照冻结、产品继续演进。此处不主张当前代码**就是**提交的那份快照——也不主张该申请已获登记；目前的状态是已提交、待受理。
 - **`experiments/` 不在登记范围内。** 这些研究是用来度量产品的代码，从未纳入申请，其结论也不在登记覆盖之列。
 
 本仓库仅供教学、科研与作品集审阅，**未授予任何复制、修改或再分发许可**；如需使用，请联系著作权人。集成的第三方组件依其各自许可，详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。

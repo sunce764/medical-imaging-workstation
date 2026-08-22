@@ -14,6 +14,10 @@ organs.onnx.data
 # 权重由 `python experiments/recon_dl.py matrix && ... export` 以固定种子重建。
 # 注意 ONNX 按【相对 .onnx 的路径】解析 .data，两者必须同目录。
 models/recon_dl_v*.onnx.data
+# 通配兜底：上面两条只匹配当下存在的确切文件名。新增/改名任何模型，其外部
+# 权重块都会是多 MB 的 .onnx.data，实测 `git check-ignore models/seg3d_v1.onnx.data`
+# 在只有具名规则时是 NOT-IGNORED，故加通配。
+*.onnx.data
 
 # ============================================================
 # 缓存与生成物
@@ -42,6 +46,15 @@ docs/coop_agreement*
 *.nii
 *.nii.gz
 *.npy
+# 其他医学影像格式（西门子 raw、MetaImage、NRRD、HDF5）——目前仓库里没有，
+# 但任何一份掉进工作区都不该入库。
+*.ima
+*.IMA
+*.dicom
+*.mhd
+*.mha
+*.nrrd
+*.h5
 *.npz
 
 # ============================================================
@@ -62,6 +75,10 @@ CLAUDE.md
 experiments/results/recon_dl_w*.pt
 # 研究四的 3D 分割权重，同理不入库（可由固定种子与固定 commit 的数据重建）
 experiments/results/seg3d_w*.pt
+# 同理兜底：训练权重写到别的目录或别的文件名一样不该入库。
+*.pt
+*.pth
+*.ckpt
 
 # 研究四的公开数据本地缓存（TotalSegmentator-CT-Lite 子集，约 2GB）。
 # 不入库：外部数据一律不随仓库分发；可由 `python experiments/seg3d_data.py fetch`

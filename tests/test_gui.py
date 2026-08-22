@@ -262,7 +262,7 @@ def test_mpr_aniso_aspect(v, app):
     v.views[1]['plane'] = saved_plane; v.update_display(); app.processEvents()
 
 
-def test_sampling_density(v):
+def test_sampling_density():
     print("[重建采样密度]")
     import recon
     th = recon.make_theta(180, 180 * 4)
@@ -1200,6 +1200,7 @@ def test_dialog_i18n_coverage(app):
     src_dir = _ROOT
     call_re = re.compile(r'QMessageBox\.(information|warning|critical|question)\s*\(')
     bad = []
+    scanned = 0
     for fn in ('main.py', 'annotation_lab.py', 'compare_lab.py', 'recon_lab.py',
                'interaction.py', 'ui_builder.py', 'graphics_view.py'):
         fp = os.path.join(src_dir, fn)
@@ -1221,6 +1222,13 @@ def test_dialog_i18n_coverage(app):
             if 'is_english' not in args and not re.search(r'\bif e\b', args):
                 line = text[:mt.start()].count('\n') + 1
                 bad.append(f"{fn}:{line} {mt.group(1)}")
+            scanned += 1
+    # 下限自检：本扫描器认的是字面 `QMessageBox.xxx(`。一次合法重构（模块级
+    # `MB = QMessageBox` 后改用 `MB.warning(...)`）就能让 12 处调用整体消失，
+    # 而 `check(not bad)` 会照样报「缺失 0 处」——即「解析出 0 条却通过」那一类。
+    # 故先断言扫到的调用点数量，定位写错时当场失败而不是伪装成通过。
+    check(scanned >= 15,
+          f"扫到 {scanned} 处 QMessageBox 调用（过少说明本测试的定位写错了）")
     check(not bad, f"每个 QMessageBox 都有语言分支（缺失 {len(bad)} 处"
                    + (f"：{'; '.join(bad[:4])}" if bad else "") + "）")
 
@@ -3042,7 +3050,15 @@ def test_confidence_map():
             b = feed['input_image']
             d, h, w = b.shape[2], b.shape[3], b.shape[4]
             o = np.zeros((1, n_cls, d, h, w), np.float32)
-            o[0, 5] = 40.0                   # 全部判为 label 5，且极确信
+            # 沿 x 铺三种已知的 softmax 情形，让引擎的置信度公式被真正钉住：
+            # 处处 label 5 胜出（保持既有 argmax 断言成立），但胜出幅度不同。
+            #   x%3==0 一类独大  -> max-prob≈1.0
+            #   x%3==1 与 7 号并列 -> max-prob=0.5（并列时 argmax 取小者，仍是 5）
+            #   x%3==2 幅度趋零   -> max-prob≈1/25=0.04
+            o[0, 5, :, :, 0::3] = 40.0
+            o[0, 5, :, :, 1::3] = 40.0
+            o[0, 7, :, :, 1::3] = 40.0
+            o[0, 5, :, :, 2::3] = 1e-6
             return [o]
 
     ai_engine._get_session = lambda p: _FakeSess()
@@ -3053,8 +3069,16 @@ def test_confidence_map():
         check(eng.confidence is not None and eng.confidence.shape == (Z, H, W),
               "引擎把 confidence 作为实例属性带出，形状与标签图一致")
         check(eng.confidence.dtype == np.uint8, f"confidence 为 uint8（{eng.confidence.dtype}）")
-        check(int(eng.confidence.min()) >= 254,
-              f"一类独大时置信度接近满值（min={int(eng.confidence.min())}）")
+        # 三档取值直接断言引擎产出的 uint8，而不是测试自己再算一遍 softmax。
+        # 旧版在测试里复刻了 `1.0 / out.sum(0)`，于是把 ai_engine 的公式改成
+        # `1.0 / out.sum(0) ** 2` 时全部 495 项仍然通过——形同虚设。
+        got = [int(eng.confidence[Z // 2, H // 2, x]) for x in (0, 1, 2)]
+        want = [255, 127, 10]                # 一类独大 / 二类并列 / 均匀
+        check(got == want,
+              f"置信度三档与 softmax max-prob 一致：实得 {got}，期望 {want}"
+              "（1.0 / 0.5 / 0.04 量化到 uint8）")
+        check(int(eng.confidence.max()) == 255 and int(eng.confidence.min()) >= 1,
+              f"置信度落在 [1,255]，0 留作哨兵（min={int(eng.confidence.min())}）")
         check(bool((seg == 5).all()), "标签图取到 argmax 所指类别")
     finally:
         ai_engine._get_session = saved
@@ -3626,6 +3650,7 @@ def main_run():
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
+        test_sampling_density()       # 纯 recon.make_theta，无 Qt / 真实数据
         test_model_checksums()        # 权重摘要清单与文档一致：纯文本 + 已入库 .onnx
         test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
     else:
@@ -3640,7 +3665,7 @@ def main_run():
         test_roi(v, app)
         test_mpr_ruler_spacing(v, app)
         test_mpr_aniso_aspect(v, app)
-        test_sampling_density(v)
+        test_sampling_density()
         test_compare(v, app)
         test_cine_keyboard(v, app)
         test_compliance(v, app)

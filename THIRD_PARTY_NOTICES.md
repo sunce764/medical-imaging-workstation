@@ -5,7 +5,7 @@ their **upstream-declared licenses**, and gives verifiable primary-source URLs. 
 2026-07-17 by reading the upstream `LICENSE` text / PyPI metadata directly.
 
 > **Disclaimer**: This file states the **fact** of "what upstream declared," with primary sources attached for
-> cross-checking; it is **not legal advice**. Before public release, commercial use, or redistribution, confirm
+> cross-checking; it is **not legal advice**. For commercial use, or for redistribution beyond this repository's review-only licence, confirm
 > compliance yourself (or through a legal professional).
 > Anything marked **to be confirmed** here is something the primary source cannot settle conclusively — **better
 > to flag the uncertainty than to presume.**
@@ -15,8 +15,9 @@ their **upstream-declared licenses**, and gives verifiable primary-source URLs. 
 ## 1. AI Segmentation Model (this repository **does redistribute** its computation graph)
 
 This repository git-tracks and distributes `models/organs.onnx` (45 KB, **computation graph only, no weights**).
-The 119 MB weights `models/organs.onnx.data` are **not** distributed with this repository (see `README.md` →
-"Model" for how to obtain them).
+The 119 MB weights `models/organs.onnx.data` are **not** distributed with this repository (see
+[`docs/ARCHITECTURE.md` → Getting the weights](docs/ARCHITECTURE.md#getting-the-weights) for how to obtain them,
+and `models/CHECKSUMS.sha256` for the digest of the exact blob every model-derived number here came from).
 
 | Item | License declared upstream | Primary source |
 |---|---|---|
@@ -64,7 +65,7 @@ while noting honestly that this characterization itself remains unsettled.
 
 | Data | License | Use | Primary source |
 |---|---|---|---|
-| **TotalSegmentator-CT-Lite** (single case `s0029`) | **CC-BY-4.0** | segmentation validation in `experiments/seg_validate.py` | [HuggingFace: YongchengYAO/TotalSegmentator-CT-Lite](https://huggingface.co/datasets/YongchengYAO/TotalSegmentator-CT-Lite) |
+| **TotalSegmentator-CT-Lite** — 297-case dataset, pinned at commit `6f14b84` (`experiments/results/seg3d_manifest.json`) | **CC-BY-4.0** | the original single-case validation in `experiments/seg_validate.py`, plus the 20-, 57- and 59-case evaluations in `seg_multi.py`, `seg_spacing.py`, `seg3d_teacher.py`, `seg3d_train.py` and `seg3d_infer_bias.py` | [HuggingFace: YongchengYAO/TotalSegmentator-CT-Lite](https://huggingface.co/datasets/YongchengYAO/TotalSegmentator-CT-Lite) |
 | **TotalSegmentator upstream original dataset** (the parent of CT-Lite) | **CC-BY-4.0** | same as above (indirectly) | [Zenodo 10047292](https://zenodo.org/records/10047292) |
 | **RIDER Lung CT** (local `肺癌/`) | TCIA public dataset; **de-identified via CTP** (`PatientIdentityRemoved=YES`) | local data for the full regression suite | [The Cancer Imaging Archive](https://www.cancerimagingarchive.net/) |
 
@@ -91,6 +92,8 @@ Versions are pinned by `requirements.txt` / `experiments/requirements-experiment
 | **NiBabel** | 5.4.2 | **MIT** (core package); its `COPYING` additionally covers bundled components under BSD-3-Clause / PDDL-1.0 / a custom permissive license | [PyPI](https://pypi.org/project/nibabel/) |
 | **Matplotlib** | 3.10.8 | **Matplotlib License Agreement** (its own license, adapted from the PSF license, BSD-compatible). **Note: there is no corresponding SPDX identifier; do not label it as `PSF-2.0`.** | [PyPI](https://pypi.org/project/matplotlib/) |
 | **remotezip** | 0.12.3 | **MIT** | [PyPI](https://pypi.org/project/remotezip/) |
+| **PyTorch** (`torch`) | 2.11.0 | **BSD-3-Clause** | [PyPI](https://pypi.org/project/torch/) |
+| **onnx** (the graph-inspection library; **not** the same package as ONNX Runtime above) | 1.21.0 | **Apache-2.0** — the licence text is included at [`licenses/APACHE-2.0.txt`](licenses/APACHE-2.0.txt) | [PyPI](https://pypi.org/project/onnx/) |
 
 Copyright and licenses of the above components remain with their respective authors; this project has not
 modified their source and does not distribute their code or binaries with the repository.

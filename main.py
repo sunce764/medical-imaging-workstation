@@ -642,9 +642,11 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # 信息的层之间，打乱解剖顺序。因此先做序列级判定——所有切片都含 z 坐标才按 z 排序，
         # 否则整列统一回退 InstanceNumber（序列内单调的采集序号）。
         def _has_ipp(ds):
+            # 必须显式查有限性：float('nan') 不抛异常，NaN 会安静地通过 try，
+            # 于是整列按 NaN 排序、解剖顺序彻底乱掉（NaN 与任何数比较均为 False）。
+            # compare_lab._zpos_array 已按同一理由加了 isfinite，排序这条路当时漏了。
             try:
-                float(ds.ImagePositionPatient[2])
-                return True
+                return math.isfinite(float(ds.ImagePositionPatient[2]))
             except Exception:
                 return False
 
