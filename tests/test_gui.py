@@ -1644,6 +1644,44 @@ def test_undo_restores_confidence():
           "两次撤销回到清空前的置信度")
 
 
+def test_stale_ai_cannot_overwrite_restored_mask():
+    """从磁盘恢复蒙版时，上一序列仍在跑的推理必须被作废且代次推进。
+
+    作废与代次自增原本只写在 _kickoff_ai 里，而 load_data 在磁盘已有缓存蒙版时会跳过它：
+    旧推理继续跑到底（~8.8GB 不释放），代次没变，于是它完成时 generation 比对【放行】，
+    旧序列的蒙版盖掉新序列刚恢复的那份，界面还照常显示绿色的「检出 N 个器官」。
+    shape 比对挡不住——两个序列常常都是 512²。纯逻辑，不建窗口、不跑推理。
+    """
+    print("[过期 AI 回调不得覆盖已恢复的蒙版]")
+    import main as _m
+
+    class _FakeThread:
+        def __init__(self): self.cancelled = False
+        def isRunning(self): return True
+        def cancel(self): self.cancelled = True
+
+    v = _m.MedicalViewer.__new__(_m.MedicalViewer)
+    v.ai_thread = _FakeThread(); v._ai_generation = 1
+    v.volume_hu = np.zeros((4, 8, 8), np.float32)
+    v.volume_mask = np.zeros((4, 8, 8), np.uint8); v.volume_mask[1][2:4, 2:4] = 12
+    v.volume_conf = None; v._ai_state = 'done'; v._ai_time_ms = 0.0; v._ai_fallback = False
+    v.recon_mode_active = True
+    v._update_organ_stats = lambda *a, **k: None
+    v.lbl_ai_status = type('L', (), {'setStyleSheet': lambda *a: None,
+                                     'setText': lambda *a: None})()
+    old_gen = v._ai_generation
+    new_gen = _m.MedicalViewer._invalidate_running_ai(v)
+    check(v.ai_thread.cancelled, "跳过 _kickoff_ai 时也作废了仍在跑的旧推理")
+    check(new_gen > old_gen, f"代次已推进（{old_gen} → {new_gen}）")
+
+    before = v.volume_mask.copy()
+    stale = np.zeros((4, 8, 8), np.uint8); stale[2][5:7, 5:7] = 5
+    _m.MedicalViewer.on_auto_ai_finished(v, stale, 99999.0, old_gen)
+    check(np.array_equal(v.volume_mask, before),
+          f"携带旧代次的回调被丢弃，蒙版仍是恢复的那份"
+          f"（标签 {sorted(int(x) for x in np.unique(v.volume_mask))}）")
+
+
 def test_anisotropic_pixel_spacing(app):
     """面内各向异性（PixelSpacing[0] != [1]）下，三个平面的 mm 换算与网格尺度都要对。
 
@@ -3449,6 +3487,7 @@ def main_run():
         test_projection()
         test_mesh3d()
         test_undo_restores_confidence()
+        test_stale_ai_cannot_overwrite_restored_mask()
         test_anisotropic_pixel_spacing(app)
         test_mpr_geometry()
         test_mask_cache_guard()
@@ -3516,6 +3555,7 @@ def main_run():
         test_projection()
         test_mesh3d()
         test_undo_restores_confidence()
+        test_stale_ai_cannot_overwrite_restored_mask()
         test_anisotropic_pixel_spacing(app)
         test_mpr_geometry()
         test_mask_cache_guard()

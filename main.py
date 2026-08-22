@@ -45,6 +45,22 @@ from recon_lab import ReconLabMixin
 from ui_builder import UiBuilderMixin
 
 
+def _int_tag(ds, name, default=0):
+    """读 DICOM 的整数标签，空值与非法值一律回落到 default。
+
+    与 MedicalViewer._dcm_float 同一职责，只是整数侧：getattr(ds, name, default) 的
+    默认值【只在标签缺失时生效】，而畸形 DICOM 常见的是标签在、值为空，此时 pydicom
+    回读 None，int(None) 抛的是 TypeError。排序键与形状分组都在 _read_dicom_dir 内，
+    异常从那里冲出去会绕过 load_data 的回滚，留下 dicom_datasets 与 volume_hu 互不
+    对应的半更新状态——比直接崩更糟，因为界面看起来还活着。
+    """
+    try:
+        v = getattr(ds, name, default)
+        return default if v is None else int(v)
+    except (TypeError, ValueError):
+        return default
+
+
 # AutoAIEngineThread → 已移至 ai_engine.py
 # =========================================================================
 # 主窗口：医学影像工作站
@@ -540,7 +556,9 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             for vd in self.views.values() if not vd['container'].isHidden()
         ])
         if mask_restored:
-            # 已从磁盘恢复分割，跳过 ~100s 的 AI 重算
+            # 已从磁盘恢复分割，跳过 ~100s 的 AI 重算。但仍必须作废上一序列可能还在跑的
+            # 推理并推进代次——否则它完成时会盖掉这份刚恢复的蒙版（见 _invalidate_running_ai）。
+            self._invalidate_running_ai()
             self._ai_state = 'done'
             self._ai_time_ms = 0.0
             self.lbl_ai_status.setStyleSheet("color: #00FF00; font-weight: bold;")
@@ -599,7 +617,13 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # 与上面"选切片最多的序列"同一取舍思路。Rows/Columns 是含 PixelData 时的必填 tag。
         shape_groups = defaultdict(list)
         for ds in datasets:
-            shape_groups[(int(getattr(ds, 'Rows', 0)), int(getattr(ds, 'Columns', 0)))].append(ds)
+            # 【getattr 的默认值挡不住空值】标签**缺失**时它给 0，但标签存在而值为空时
+            # pydicom 返回 None，int(None) 抛 TypeError——正是 _dcm_float 存在的理由，
+            # 而 int 这条路径一直没有对应防护。异常从 _read_dicom_dir 里冲出去，绕过了
+            # load_data 的回滚（那只覆盖 _build_volume_hu 返回 None 的情形），于是留下
+            # dicom_datasets=新坏序列、volume_hu=旧序列的半更新状态，此后每次切层都在
+            # update_display 里越界崩，界面等同废掉。
+            shape_groups[(_int_tag(ds, 'Rows'), _int_tag(ds, 'Columns'))].append(ds)
         if len(shape_groups) > 1:
             datasets = max(shape_groups.values(), key=len)
             r0, c0 = getattr(datasets[0], 'Rows', '?'), getattr(datasets[0], 'Columns', '?')
@@ -620,7 +644,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         if all(_has_ipp(ds) for ds in self.dicom_datasets):
             self.dicom_datasets.sort(key=lambda ds: float(ds.ImagePositionPatient[2]))
         else:
-            self.dicom_datasets.sort(key=lambda ds: int(getattr(ds, 'InstanceNumber', 0)))
+            self.dicom_datasets.sort(key=lambda ds: _int_tag(ds, 'InstanceNumber'))
         return True
 
     def _build_volume_hu(self):
@@ -683,16 +707,28 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.slider_slice.setValue(z // 2)
         return pid
 
+    def _invalidate_running_ai(self):
+        """作废仍在运行的推理并推进代次，返回新代次。
+
+        【换数据时无论要不要启动新推理，都必须调用】这两件事原本只写在 _kickoff_ai 里，
+        而 load_data 在磁盘已有缓存蒙版时会跳过 _kickoff_ai 直接用恢复的结果。后果有二：
+        上一序列的推理继续跑到底（~8.8GB 不释放），而且代次没变——它完成时
+        on_auto_ai_finished 的 generation 比对会【放行】，旧序列的蒙版覆盖掉新序列刚从
+        磁盘恢复的那份，界面还照常显示绿色的「检出 N 个器官」。shape 比对也挡不住：
+        两个序列常常都是 512²。触发条件是用户在那 ~100 秒里重新加载一次目录。
+        """
+        if self.ai_thread is not None and self.ai_thread.isRunning():
+            self.ai_thread.cancel()
+        self._ai_generation += 1
+        return self._ai_generation
+
     def _kickoff_ai(self):
         """启动后台 AI 推理。
         每次加载新数据时自增 generation 计数器；旧 AI 线程回调时若 generation 不匹配则静默
         丢弃结果，防止旧数据覆盖新数据的蒙版（竞态条件保护）。
         并作废上一个仍在运行的推理线程，避免多个 ~8.8GB 推理并发叠加导致内存翻倍/OOM。
         """
-        if self.ai_thread is not None and self.ai_thread.isRunning():
-            self.ai_thread.cancel()
-        self._ai_generation += 1
-        gen = self._ai_generation
+        gen = self._invalidate_running_ai()
         self._ai_state = 'running'
         self.lbl_ai_status.setStyleSheet("color: #F1C40F; font-weight: bold;")
         self.lbl_ai_status.setText("Processing AI Pipeline..." if self.is_english else "状态: AI 引擎自动运算中...")
