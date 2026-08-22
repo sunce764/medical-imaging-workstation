@@ -2876,17 +2876,42 @@ def test_doc_code_consistency():
         with open(os.path.join(_ROOT, rel), encoding='utf-8') as f:
             return f.read()
 
+    import ast
+
+    def calls_manual_seed(src):
+        """AST 判定是否真的调用了 torch.manual_seed(...)。
+
+        不用字符串搜索：注释、docstring、乃至本测试自己引用这个名字的地方都含有
+        同样的字面量，一旦有人把调用删掉只留注释，字符串搜索会继续报「有」。
+        """
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.Call):
+                f = node.func
+                if (isinstance(f, ast.Attribute) and f.attr == 'manual_seed'
+                        and isinstance(f.value, ast.Name) and f.value.id == 'torch'):
+                    return True
+        return False
+
     recon_dl = rd('experiments/recon_dl.py')
     seg3d_train = rd('experiments/seg3d_train.py')
-    docs = {n: rd(n) for n in ('README.md', 'README.zh-CN.md',
-                               'experiments/README.md', 'experiments/recon_dl.py')}
+    docs = {n: rd(n) for n in ('README.md', 'README.zh-CN.md', 'experiments/README.md',
+                               'experiments/recon_dl.py', 'docs/technical_report.md')}
 
-    # ① 代码里有 torch.manual_seed 时，任何文档都不得声称它没有（反之亦然）。
-    dl_seeded = 'torch.manual_seed' in recon_dl
+    # ① 文档关于 torch.manual_seed 的说法必须与代码事实一致——【两个方向都要拦】。
+    #    初版只拦了「代码有、文档说没有」，而注释里却写着「反之亦然」，于是这个
+    #    专门用来防「注释说了代码没做的事」的测试，自己就是那样一处。
+    dl_seeded = calls_manual_seed(recon_dl)
     denies = [n for n, t in docs.items()
               if re.search(r'never calls?\s+`?torch\.manual_seed|从未调用\s*`?torch\.manual_seed', t)]
+    affirms = [n for n, t in docs.items()
+               if re.search(r'gained\s+`?torch\.manual_seed|加入\s*`?torch\.manual_seed'
+                            r'|now takes `seed=0` and pins', t)]
     check(not (dl_seeded and denies),
-          f"recon_dl 有 manual_seed={dl_seeded} 时无文档声称它没有（违规: {denies or '无'}）")
+          f"recon_dl 有 manual_seed 时无文档声称它没有（违规: {denies or '无'}）")
+    # 只在断言真被触发时才列文件名：前件为假时列出来会让一条 PASS 看着像有问题。
+    _bad = affirms if not dl_seeded else []
+    check(not _bad, "recon_dl 无 manual_seed 时无文档声称已加入"
+                    + (f"（违规: {_bad}）" if _bad else "（当前代码确有调用，此向不适用）"))
 
     # ② 加种子后从未重跑比对过，因此不得出现「统计上等价」这类判断。
     #    否定用法也一并禁止——与其给检查器开例外，不如换一种说法。
@@ -2896,7 +2921,7 @@ def test_doc_code_consistency():
 
     # ③ seed-fixed 只能用于训练侧 RNG 确实固定、且产物也产自固定之后的那条线。
     #    研究四(seg3d_train)满足；研究三(recon_dl)的已提交产物早于补种子，不满足。
-    check('torch.manual_seed' in seg3d_train, "seg3d_train 确有 manual_seed（研究四标 seed-fixed 才成立）")
+    check(calls_manual_seed(seg3d_train), "seg3d_train 确有 manual_seed 调用（研究四标 seed-fixed 才成立）")
     bad = [n for n in ('README.md', 'README.zh-CN.md')
            for ln in docs[n].split('\n')
            if 'recon_dl' in ln and ('seed-fixed' in ln or '种子固定' in ln)]

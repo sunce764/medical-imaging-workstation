@@ -246,47 +246,29 @@ that was already at hand, at zero cost.
 
 ## Documentation-truth lock-in (2026-08)
 
-Three consecutive external audits of the published repository each found a defect the
-previous round had introduced. The pattern was always the same shape: write the prose
-describing the *current* state, then change the code, then never re-read the prose.
+**A documentation claim is now a testable assertion.** Prose describing the code used to be
+verified by reading, which fails in one specific way: you write the description, then change
+the code, and nothing forces you back to the description. It produced a README asserting that
+`recon_dl.py` "never calls `torch.manual_seed`" in the same commit that added the call.
+`tests/test_doc_code_consistency` (in the CI subset) now asserts the mechanically checkable
+part — whether a documented claim about `torch.manual_seed` matches an **AST-detected** call
+in *both* directions, that no document carries an equivalence claim no re-run supports, that
+Study III is not labelled `seed-fixed` while its published artefacts predate the seeding, and
+that the module count claimed in `ARCHITECTURE.md` equals the entries actually listed. It does
+not prove semantic agreement and does not claim to. AST rather than string search is load-
+bearing: deleting the real call while leaving the name in a comment keeps a text match alive,
+and was verified to be caught only by the AST form.
 
-### The worst instance, and what it produced
+**A parse failure must report itself as a parse failure.** The same test's first version located
+its input by splitting on a phrase that also appears in the sentence making the claim, and
+reported a documentation defect in a document that was correct. A parse-result assertion now
+precedes the comparison, so a broken locator cannot masquerade as a finding and send someone
+off to "fix" accurate prose.
 
-One commit's README asserted that `recon_dl.py` "never calls `torch.manual_seed`" while
-that same commit added the call at line 217. Reading either file alone looks fine; only
-reading both together exposes it, and nothing was forcing that.
-
-`tests/test_doc_code_consistency` now asserts the mechanically checkable part of the
-relationship — a documentation claim about `torch.manual_seed` must match whether the
-call exists, no document may carry an equivalence claim ("statistically equivalent")
-that no re-run supports, Study III must not be labelled `seed-fixed` while its published
-artefacts predate the seeding, and the module count claimed in `ARCHITECTURE.md` must
-equal the number of entries actually listed there. It does **not** prove semantic
-agreement and does not claim to.
-
-### Three defects the new test found within minutes of existing
-
-Its first run failed on a module count that was, in fact, correct: the check had split
-the document on a phrase that also occurs in the sentence making the claim, so it
-compared UI mixins against the compute-module count. Fixed, it then parsed zero entries,
-because the separator line it split on carries the marker at *both* ends. A parse-result
-assertion (`>= 5 entries`) now sits in front of the comparison, so a broken locator
-reports itself as a broken locator instead of masquerading as a documentation defect —
-which is exactly how it had been wasting attention.
-
-The third came from arithmetic that did not add up: the data-independent subset went
-424 → 430 while the full suite stayed at 515. The two suites are **separate hand-maintained
-call lists**, not a superset relation, and the new test had only been added to one of
-them. Both now call it: **521 full / 430 data-independent**, both re-run and passing.
-
-### Also corrected in this round
-
-`recon_dl.py`'s header still claimed "别人跑得出同样结果" without excluding training,
-which contradicted the reproducibility note written the day before. The README claimed
-each unarchived cost figure was flagged at its point of use; they are not, and the
-disclosure is now stated as being concentrated in one paragraph. And the versions of
-`docs/manual_*.md` were deliberately **left alone** — they correspond to the V1.0
-copyright-filing snapshot, so their 515/424 figures are correct for what they describe.
+**The two suites are separate hand-maintained call lists.** `main_run` dispatches to a
+data-independent list and a full list; they are not a superset relation. A new test added to one
+silently skips the other — caught here only because the subset moved 424 → 430 while the full
+suite stayed at 515. Both now call it: **522 full / 431 data-independent** (the 430/521 pair above is the count at the moment the gap was spotted; a later assertion added one to each).
 
 ## Known limitations (recorded faithfully, unfixed)
 

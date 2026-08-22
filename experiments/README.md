@@ -1,6 +1,6 @@
 # Quantitative Studies: Reconstruction + AI Segmentation
 
-This directory upgrades the main application's two major AI/algorithm capabilities from **feature implementations** into **quantitative studies**, producing reproducible, patient-data-free figures and metrics:
+This directory upgrades the main application's two major AI/algorithm capabilities from **feature implementations** into **quantitative studies**. Two qualifiers belong in this first sentence rather than buried later: the reconstruction studies are phantom-only, while the segmentation work runs on **public, de-identified human CT** (real patients, no identifiable information, nothing committed to this repository); and reproducibility is exact for the analytic and evaluation paths but **unverified for Study III's training**, whose PyTorch RNG was pinned only after its published results were produced. The figures and metrics below:
 
 - **Study I (reconstruction)** — uses the standard Shepp-Logan phantom to measure how `recon.py` reconstruction quality varies with dose / filter / algorithm.
 - **Study II (AI segmentation)** — uses a ground-truth-labelled public CT (TotalSegmentator-CT-Lite) to measure the Dice of `organs.onnx`, and to *recover by measurement* its 25-class label mapping.
