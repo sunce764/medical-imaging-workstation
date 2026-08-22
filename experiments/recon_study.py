@@ -53,7 +53,9 @@ os.makedirs(RESULTS, exist_ok=True)
 
 def get_phantom(n):
     """Shepp-Logan 体模，缩放到 n×n，归一化 [0,1]，施加与 radon(circle=True) 对齐的圆形掩码。
-    掩码后的图即"真值"(ground truth)：正弦图只编码内切圆内信息，圆外重建恒为 0，
+    掩码后的图即"真值"(ground truth)：施加掩码是为了让输入落进 radon(circle=True) 的
+    「圆外为零」前提（它只警告、不置零），并与 iradon 的输出支撑对齐（iradon 显式置零；
+    矩阵法 DMR/ART/SIRT 不置零，圆外确有非零解）。
     故只在圆内比较才公平。"""
     p = shepp_logan_phantom().astype(np.float32)      # 400×400, [0,1]
     p = ndimage.zoom(p, (n / p.shape[0], n / p.shape[1]))

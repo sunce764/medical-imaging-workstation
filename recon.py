@@ -126,7 +126,8 @@ def compute_sinogram(img_norm: np.ndarray, theta: np.ndarray) -> np.ndarray:
     # 源头已在 MedicalViewer._dcm_float 兜住（NaN 的 RescaleSlope/PixelSpacing 退回默认值），
     # 此处为纵深防御，也保护直接调用本模块的实验脚本。
     img_norm = np.nan_to_num(img_norm, nan=0.0, posinf=1.0, neginf=0.0)
-    # circle=True：只处理图像内切圆区域，与 iradon 默认行为一致，避免角落 padding 引入伪影
+    # circle=True：假定图像圆外为零（不是替你置零），与 iradon 的输出支撑一致。
+    # 输入已由 prepare_small_image/shepp_logan 掩过圆，故满足该前提。
     return radon(img_norm, theta=theta, circle=True)
 
 
@@ -338,7 +339,8 @@ def shepp_logan(n: int = 256) -> np.ndarray:
     而位图模体缩放到 64² 做 DMR/ART 时会先糊掉一轮。
 
     圆形掩码与 compute_sinogram（skimage radon 的 circle=True）口径一致：弦图只
-    编码内切圆内的信息，圆外重建恒为 0，不掩掉的话误差图会在四角显示虚假的大误差。
+    编码内切圆内的信息（对解析反投影 iradon 成立，它显式把圆外置零；矩阵法 DMR/ART/SIRT
+    并不置零），不掩掉的话误差图会在四角显示虚假的大误差。
 
     返回值域 [0,1]，与 generate_sinogram 对真实切片所做的归一化同口径，
     因此模体与真实数据走的是同一条重建链路，无需任何分支。
@@ -373,7 +375,13 @@ def prepare_small_image(img_norm: np.ndarray, n: int, angle_range: float,
       theta:     对应角度数组
 
     圆形掩码说明：
-      radon(circle=True) 只处理内切圆区域；若不施加此掩码，
+      radon(circle=True) 并不把圆外置零——它只在圆外有非零值时发一条 warning
+    （skimage/transform/radon_transform.py 的 `if np.any(image[outside...]): warn(...)`），
+    之后照常旋转整幅方图求和。掩码是为了让输入落进它的无警告前提、并与 iradon 的
+    输出支撑对齐（iradon 才是显式置零的，见其 `reconstructed[out_...] = 0.0`）。
+    实测：圆外单位冲激在 60 个角度里有 56 个投影质量为 0——旋转出方形即被静默丢弃，
+    所以圆外像素的前向模型不自洽，掩掉它们是让输入合法，不是让 radon「只算圆内」。
+      若不施加此掩码，
       原图角落有值而重建角落为0，误差图会在角落出现虚假大误差，
       迷惑用户误判算法质量。
     """

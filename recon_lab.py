@@ -427,7 +427,8 @@ class ReconLabMixin:
         步骤：
           1. 取当前切片的 HU 值，归一化到 [0, 1]
           2. 用双三次插值（ndimage.zoom）缩小到 n×n（n 由 UI 下拉框选择：16/32/64）
-          3. 施加圆形掩码（circle=True 的 radon 只处理内切圆区域，圆外置0）
+          3. 施加圆形掩码（radon(circle=True) 只假定圆外为零并发警告，不代为置零；
+             掩码是为了满足该前提并与 iradon 的输出支撑对齐）
              关键：若不施加此掩码，V1（原图）角落有值而 V4（重建）角落为0，
              误差图会在角落显示虚假的大误差，迷惑用户误判算法质量
           4. 对小图做 Radon 变换生成弦图，投影角由 UI 的角度范围(60/120/180/360°)
@@ -551,7 +552,14 @@ class ReconLabMixin:
         self.display_numpy_image(4, recon_lib.upscale_recon(img_recon, n))
         self._fit_recon_views(smooth=False)
 
-        rmse = float(np.sqrt(np.mean(error_map ** 2)))
+        # RMSE 只在内切圆内统计，与 experiments/recon_study.roi_metrics 同口径。
+        # 必要性：矩阵法（DMR/ART/SIRT）与解析法不同，圆外解并不为零
+        # （iradon 显式置零，最小二乘不会），按全幅统计会把圆外那部分算成
+        # 算法误差。改动理由是口径一致而非幅度：本实验室不加噪声，满秩档两种口径
+        # 差别极小（实测 60 视角全幅 0.0149 / 圆内 0.0154，90 视角两者均≈0），
+        # 但真值本身已被掩到圆内，误差就该在同一支撑上统计。
+        _cm = recon_lib._circle_mask(n) > 0
+        rmse = float(np.sqrt(np.mean(error_map[_cm] ** 2)))
         self.set_view_title(1, f"V1 [Orig {n}x{n}]" if self.is_english else f"V1 [原始 {n}x{n}]")
         self.set_view_title(2, "V2 [Sinogram]" if self.is_english else "V2 [投影弦图]")
         self.set_view_title(3, f"V3 [Error RMSE={rmse:.4f}]")
@@ -629,7 +637,14 @@ class ReconLabMixin:
         self.display_numpy_image(3, recon_lib.upscale_recon(error_map, n))
         self.display_numpy_image(4, recon_lib.upscale_recon(img_recon, n))
         self._fit_recon_views(smooth=False)
-        rmse = float(np.sqrt(np.mean(error_map ** 2)))
+        # RMSE 只在内切圆内统计，与 experiments/recon_study.roi_metrics 同口径。
+        # 必要性：矩阵法（DMR/ART/SIRT）与解析法不同，圆外解并不为零
+        # （iradon 显式置零，最小二乘不会），按全幅统计会把圆外那部分算成
+        # 算法误差。改动理由是口径一致而非幅度：本实验室不加噪声，满秩档两种口径
+        # 差别极小（实测 60 视角全幅 0.0149 / 圆内 0.0154，90 视角两者均≈0），
+        # 但真值本身已被掩到圆内，误差就该在同一支撑上统计。
+        _cm = recon_lib._circle_mask(n) > 0
+        rmse = float(np.sqrt(np.mean(error_map[_cm] ** 2)))
         self.set_view_title(1, f"V1 [Orig {n}x{n}]" if self.is_english else f"V1 [原始 {n}x{n}]")
         self.set_view_title(2, "V2 [Sinogram]" if self.is_english else "V2 [投影弦图]")
         self.set_view_title(3, f"V3 [Error RMSE={rmse:.4f}]")
