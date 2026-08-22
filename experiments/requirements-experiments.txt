@@ -4,6 +4,10 @@
 matplotlib==3.10.8   # 出图（曲线/柱状/混淆热图）
 nibabel==5.4.2       # 读取 TotalSegmentator nii.gz 影像与真值
 remotezip==0.12.3    # HTTP Range 从 HF 大压缩包里只抽单例（seg_validate 数据获取）
-torch==2.11.0          # 研究三：学习式重建的训练（recon_dl.py）。
-                      # App 运行【不需要】它——模型进 GUI 走 ONNX 导出，
-                      # 由主 requirements.txt 已有的 onnxruntime 推理。
+torch==2.11.0        # 研究三的学习式重建训练（recon_dl.py），以及研究四的
+                     # 3D 分割训练与全部评估（seg3d_train / seg3d_eval /
+                     # seg3d_diag / seg3d_infer_bias）——研究四才是主要使用者。
+                     # App 运行【不需要】它——模型进 GUI 走 ONNX 导出，
+                     # 由主 requirements.txt 已有的 onnxruntime 推理。
+onnx==1.21.0         # 只用于 seg3d_bench.py 读取 ONNX 图统计节点数与算子分布；
+                     # 与 onnxruntime 是两个不同的包，装了后者不等于有前者。

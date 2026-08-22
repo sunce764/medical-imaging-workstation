@@ -11,8 +11,7 @@ written permission of the copyright holders.
 Third-party components integrated by this project (e.g., the TotalSegmentator /
 nnU-Net segmentation model graph, PySide6/Qt, pydicom, NumPy, SciPy,
 scikit-image, ONNX Runtime, nibabel) remain under their respective licenses and
-copyrights; see README.md → "第三方组件 · Acknowledgements". The 119 MB model
-weights (organs.onnx.data) and any patient/DICOM data are NOT part of this
-repository.
+copyrights; see THIRD_PARTY_NOTICES.md. The 119 MB model weights
+(organs.onnx.data) and any patient/DICOM data are NOT part of this repository.
 
 To request permission for any use beyond review, contact the copyright holders.

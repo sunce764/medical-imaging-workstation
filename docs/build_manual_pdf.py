@@ -4,7 +4,7 @@
       （封面 + 目录 + 每节独立起页 + 图片），不增删任何功能描述。
 
 依赖：
-  - Python 库 markdown（`pip install markdown`）
+  - Python 库 markdown（`pip install markdown==3.10.2`，锁版与其余依赖一致）
   - Google Chrome（无头模式打印 PDF；支持中文系统字体）
 
 用法：  python docs/build_manual_pdf.py

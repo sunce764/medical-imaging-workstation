@@ -84,6 +84,7 @@ python main.py --data /path/to/dicom_dir # or load a DICOM directory at launch
 ```
 
 - **CPU-only; no GPU is required.** Full-volume AI inference takes about 100 seconds on the reference machine.
+- **Reproducing the studies needs more than the app does.** `environment.yml` installs what the workstation itself runs on; the experiments additionally need torch / matplotlib / nibabel / onnx / remotezip, pinned in [`experiments/requirements-experiments.txt`](experiments/requirements-experiments.txt).
 - Model weights (`models/organs.onnx.data`, 119 MB) are **not distributed in the repository**. Without them, segmentation falls back to a classical connected-component algorithm. See [Architecture → Model](docs/ARCHITECTURE.md#segmentation-model).
 
 ## Measured evidence
