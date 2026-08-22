@@ -489,6 +489,19 @@ test cases carrying lung lobes (234 lobe instances):
 | **Student** 0.35 M | `zslab` | **0.4367** | [0.3972, 0.4756] | 1.089 | 8.75 GB |
 | **Student** 0.35 M | `sliding` | **0.7667** | [0.7255, 0.8072] | 2.733 | 7.01 GB |
 
+> **The intervals above resample lobe instances, not cases.** `bootstrap_ci` and
+> `paired_test` treat the five lobes of one case as five independent draws, but lobes
+> within a case share a scan, a patient and an inference pass — they are clustered. A
+> case-level cluster bootstrap (5,000 reps, seed 0) widens the student intervals by up to
+> ~1.5×: student `zslab` becomes [0.3734, 0.4990] and the paired difference
+> [−0.5079, −0.3927]; the teacher's own interval barely moves ([0.8569, 0.9135]). By the
+> same argument the Wilcoxon at `seg3d_report.py` treats 234 clustered pairs as
+> independent, so **`p = 3.7×10⁻³⁹` is quoted to a precision the design does not support**
+> — the effective n is nearer 57. **No conclusion changes**: the paired interval stays far
+> from zero under either scheme, which is why the committed artefacts were left alone
+> rather than re-run over evidence already cited elsewhere. Read the difference as "far
+> below zero", not as 39 significant orders of magnitude.
+
 **Compared like for like, the gap is large and unambiguous.** Teacher and student on the same
 inference path, paired over all 234 instances: **−0.4500** [−0.4877, −0.4118], Wilcoxon
 *p* = 3.7×10⁻³⁹. A 0.35 M student does not approach a 31.2 M teacher on this task, and the

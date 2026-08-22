@@ -1644,6 +1644,61 @@ def test_undo_restores_confidence():
           "两次撤销回到清空前的置信度")
 
 
+def test_anisotropic_pixel_spacing(app):
+    """面内各向异性（PixelSpacing[0] != [1]）下，三个平面的 mm 换算与网格尺度都要对。
+
+    这条本地真实数据永远覆盖不到：RIDER 与 TotalSegmentator-Lite 面内都是方形像素，
+    行距等于列距，取错了也看不出来。而全链路曾经只读 PixelSpacing[0] 并把它同时当行距
+    与列距——横断面与冠状面的水平 mm 读数会错（0.5/1.5 下差 3 倍），横断面还会因
+    sp[0]==sp[1] 而跳过各向异性适配、把非方形体素画成方的；mesh 的体积/表面积与导出
+    STL 的尺寸整体错，数量级却仍对得上，肉眼看不出来。
+
+    合成 DICOM，不触发 AI 推理，不依赖真实数据。
+    """
+    print("[各向异性 PixelSpacing：三平面 mm 换算与网格尺度]")
+    import shutil
+    import tempfile
+
+    import pydicom
+    from pydicom.uid import generate_uid
+
+    import main as _m
+    import mesh3d as _mesh
+    from constants import AXIAL, CORONAL, SAGITTAL
+    d = tempfile.mkdtemp()
+    try:
+        uid = generate_uid()
+        for i in range(6):
+            _write_min_dcm(os.path.join(d, f"s{i}.dcm"), (16, 16), uid, ipp_z=i * 2.0, inst=i + 1)
+        for fn in os.listdir(d):                       # 覆写为各向异性
+            ds = pydicom.dcmread(os.path.join(d, fn))
+            ds.PixelSpacing = [0.5, 1.5]; ds.SliceThickness = 2.0
+            ds.save_as(os.path.join(d, fn))
+        v = _m.MedicalViewer(data_dir=d)
+        app.processEvents()
+        if v.ai_thread:
+            v.ai_thread.cancel()
+        vid = list(v.views)[0]
+        # sp = (垂直/Y 的 mm/px, 水平/X 的 mm/px)
+        want = {AXIAL: (0.5, 1.5), CORONAL: (2.0, 1.5), SAGITTAL: (2.0, 0.5)}
+        for pl, exp in want.items():
+            v.views[vid]['plane'] = pl
+            v.update_display(); app.processEvents()
+            got = tuple(round(float(t), 3) for t in v.views[vid]['view'].pixel_spacing)
+            check(got == exp, f"  plane={pl} 的 (垂直,水平) mm/px = {exp}（得 {got}）")
+        v.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+    # 网格尺度：行距≠列距时，三根轴必须各取各的
+    mask = np.zeros((10, 20, 20), np.uint8); mask[3:7, 6:14, 6:14] = 1   # z4 × row8 × col8
+    vt, fc = _mesh.extract_surface(mask, 1, (0.5, 1.5, 2.0), step=1, smooth=0, decimate_grid=0)
+    vol = _mesh.mesh_shape_stats(vt, fc)['volume_mm3']
+    exact = 4 * 2.0 * 8 * 0.5 * 8 * 1.5                 # = 384 mm³
+    check(abs(vol - exact) / exact < 0.10,
+          f"  网格体积 {vol:.0f} 对解析值 {exact:.0f} 在 10% 内（行列距混用会得 128 或 1152）")
+
+
 def test_mpr_geometry():
     """MPR 坐标几何纯函数直接单测——纯整数/数组运算，无 Qt / MedicalViewer。"""
     print("[MPR 坐标几何纯函数 mpr_geometry]")
@@ -3394,6 +3449,7 @@ def main_run():
         test_projection()
         test_mesh3d()
         test_undo_restores_confidence()
+        test_anisotropic_pixel_spacing(app)
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
@@ -3460,6 +3516,7 @@ def main_run():
         test_projection()
         test_mesh3d()
         test_undo_restores_confidence()
+        test_anisotropic_pixel_spacing(app)
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据

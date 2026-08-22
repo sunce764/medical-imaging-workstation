@@ -614,14 +614,19 @@ class AnnotationMixin:
                                     else "所选目标在当前蒙版中没有体素。")
             return
         ds = self.dicom_datasets[0] if self.dicom_datasets else None
-        ps = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0) if ds is not None else 1.0
+        # extract_surface 的 spacing 契约是 (行间距, 列间距, 层厚)，两者不可混用同一个值：
+        # 面内各向异性时，网格的体积/表面积/球形度与导出 STL 的尺寸会整体错，而数量级
+        # 仍然对得上，肉眼看不出来。此前这里传的是 (ps, ps, st)。
+        ps_row = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0) if ds is not None else 1.0
+        ps_col = self._dcm_float(ds, 'PixelSpacing', ps_row, idx=1) if ds is not None else 1.0
+        ps = ps_row      # 层间距估算的标量代表值
         # z 尺度取层间距而非层厚（重叠重建下二者可差一倍，网格会被拉伸/压扁）
         st = (self._slice_spacing() or (ps * 3)) if ds is not None else 1.0
         # marching cubes 在 512² 体积上 step=1 约 1.4s、step=2 约 0.11s（实测），
         # 故取 2：这是交互预览，不是几何精算；耗时与精度的取舍在 mesh3d 模块注释里说明。
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            verts, faces = mesh3d.extract_surface(self.volume_mask, lid, (ps, ps, st), step=2)
+            verts, faces = mesh3d.extract_surface(self.volume_mask, lid, (ps_row, ps_col, st), step=2)
             stats = mesh3d.mesh_shape_stats(verts, faces)
         finally:
             QApplication.restoreOverrideCursor()

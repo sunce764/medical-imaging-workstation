@@ -863,7 +863,14 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         ww_m, wl_m = self.slider_ww.value(), self.slider_wl.value()
         self.lbl_ww.setText(f"WW: {ww_m}"); self.lbl_wl.setText(f"WL: {wl_m}")
         ds = self.dicom_datasets[z]
-        px_sp = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
+        # 【行距与列距必须分开取】DICOM 的 PixelSpacing = [行间距, 列间距]，对应图像的
+        # 垂直(Y)与水平(X)。此前全链路只取 idx=0 并把它同时当行距与列距用，面内各向
+        # 异性时水平方向的 mm 换算、以及横断面的显示长宽比都会错。本项目现有数据
+        # （RIDER 与 TotalSegmentator-Lite）面内恰好都是方形像素，所以这个错误在本地
+        # 永远暴露不出来——与 _slice_spacing 里记下的那类坑同源。
+        ps_row = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)   # 行间距 → 垂直/Y
+        ps_col = self._dcm_float(ds, 'PixelSpacing', ps_row, idx=1)  # 列间距 → 水平/X
+        px_sp = ps_row      # 单值代表：仅用于层间距估算与四角叠加的 "Px" 一栏
         # 冠/矢状面的垂直方向是 z，其物理尺度是**层间距**而非层厚——重叠重建下二者
         # 可差一倍，用错会让 MPR 的解剖比例失真。缺失时估算为 px_sp×3（典型螺旋 CT 值）。
         slice_thick = self._slice_spacing() or (px_sp * 3)
@@ -871,7 +878,8 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         for vdata in self.views.values():
             if vdata['container'].isHidden():
                 continue
-            self._render_clinical_plane(vdata, z, y, x, ww_m, wl_m, px_sp, slice_thick)
+            self._render_clinical_plane(vdata, z, y, x, ww_m, wl_m, px_sp, slice_thick,
+                                        ps_row=ps_row, ps_col=ps_col)
 
         # 图例集中判定：仅当存在可见 Axial 视图开启 Anno 且蒙版有内容时才显示检出器官，
         # 否则清空——避免"关掉 Anno 后叠加已隐藏、图例却仍列着器官"的残留不一致。
@@ -983,7 +991,8 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
                   SAGITTAL: {'top': 'S', 'bottom': 'I', 'left': 'A', 'right': 'P'}}[plane]
         vdata['view'].set_overlay(corners, orient)
 
-    def _render_clinical_plane(self, vdata, z, y, x, ww_m, wl_m, px_sp, slice_thick):
+    def _render_clinical_plane(self, vdata, z, y, x, ww_m, wl_m, px_sp, slice_thick,
+                               ps_row=None, ps_col=None):
         """临床阅片分支：渲染单个视图的 2D 截面 + 蒙版 + 标注 + 十字线。"""
         plane = vdata['plane']
         pre = vdata['preset'].currentText()
@@ -1010,7 +1019,13 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             hu = self.volume_hu[:, y, :]     # (Z, X)：垂直=Z→SliceThickness，水平=X→PixelSpacing
         else:                                # SAGITTAL
             hu = self.volume_hu[:, :, x]     # (Z, Y)：垂直=Z→SliceThickness，水平=Y→PixelSpacing
-        sp = (px_sp, px_sp) if plane == AXIAL else (slice_thick, px_sp)
+        # sp = (垂直/Y 的 mm 每像素, 水平/X 的 mm 每像素)，见 graphics_view 的卡尺换算。
+        #   Axial    垂直=行→ps_row，水平=列→ps_col
+        #   Coronal  垂直=Z→层间距，水平=X(列)→ps_col
+        #   Sagittal 垂直=Z→层间距，水平=Y(行)→ps_row
+        r = px_sp if ps_row is None else ps_row
+        c = px_sp if ps_col is None else ps_col
+        sp = (r, c) if plane == AXIAL else (slice_thick, c if plane == CORONAL else r)
 
         # 窗宽窗位映射：HU → [0, 255] 线性映射
         img = np.clip(hu, wl - ww / 2, wl + ww / 2)
