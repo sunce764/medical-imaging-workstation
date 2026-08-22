@@ -147,6 +147,17 @@ class CompareMixin:
         stat = self._compare_stat_text(self.volume_hu[z], prior)
         self.set_view_title(2, (f"V2 [Prior{dtag} {z2 + 1}/{Z2} · {reg}]{rtag}{stat}" if self.is_english
                                 else f"V2 [既往{dtag} {z2 + 1}/{Z2} · {reg}]{rtag}{stat}"))
+        # 【V4 必须清空】对比模式只用到 V1/V2（V3 是差值图，由 _compare_stat_text 在可见时
+        # 渲染）。V4 没有任何分支写它——对比模式默认强制 1×2，V4 隐藏所以看不出来；可一旦
+        # 用户手动切回 2×2，V4 就挂着【进入对比之前】的那张临床图，标题也停在旧文本。
+        # 画面上于是出现「三个对比视图 + 一个主序列的陈旧 MPR」，且毫无提示。
+        v4 = self.views.get(4)
+        if v4 is not None and not v4['container'].isHidden():
+            v4['view'].set_image(QPixmap())      # 空图：宁可留白，也不显示会被误读的旧画面
+            v4['view'].set_overlay({}, {})
+            v4['view'].clear_annotations()
+            self.set_view_title(4, "V4 [unused in comparison mode]" if self.is_english
+                                else "V4 [对比模式下未使用]")
 
     def _compare_stat_text(self, cur, prev):
         """本层 HU 差异定量，返回可直接拼进 V2 标题的一段文字（无差异可比时返回提示）。

@@ -31,11 +31,19 @@ _MATRIX_CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".m
 # key 空间极小（≤ 4 种 n），无需淘汰策略。
 _CIRCLE_MASK_CACHE = {}
 
-# DFR Delaunay 三角剖分缓存：key=(num_detectors, len(theta), θ_start, θ_end)。
+# DFR Delaunay 三角剖分缓存：key=(num_detectors, len(theta), 角度表指纹)。
 # scipy.griddata 内部每次都会重做 Delaunay 三角剖分（O(N log N) 但常数极大），
 # 同参数复算时复用 Delaunay 对象可省去 60%-80% 的 DFR 总耗时；
 # 数学上完全等价，三角剖分由几何点集唯一确定。
-# key 空间小（≤ 4 探测器数 × 4 角度配置 ≈ 16 entry），无需淘汰策略。
+#
+# 【内存：有意的取舍，不是疏忽】原注释说「key 空间小（≈16 entry），无需淘汰策略」，
+# 那只数了条目数、没数单条体积。DFR 走的是全分辨率源图（512² 切片直接做 Radon，
+# 未降采样），点数 = 探测器数 × 角度数，最贵一档 512×1440 = 737,280 点，单个
+# Delaunay 对象 88.3MB。实测把 UI 可达的 12 种配置依次点一遍：缓存常驻由 48MB
+# （3 种）涨到 443MB（12 种），进程 maxRSS 375MB → 1603MB。
+# 仍不加淘汰：最贵那一档首次 3.03s、命中 0.05s，相差 60 倍，而重建实验室是交互式
+# 使用，淘汰会把「换个角度再看看」变成每次等三秒。443MB 相对本机 AI 推理 ~8.8GB 的
+# 峰值是可接受的代价。若日后目标机器内存吃紧，这里是第一个该动的地方。
 _DFR_TRI_CACHE = {}
 
 
@@ -146,6 +154,14 @@ def compute_bp(sinogram: np.ndarray, theta: np.ndarray) -> np.ndarray:
     缺陷：低频分量被过度叠加，边缘极度模糊（星形伪影）。
     对比目的：展示滤波（FBP）对图像质量的改善效果。
     """
+    # compute_fbp 的注释写着「此前只有矩阵/迭代法设了这道防线，解析法没有——防御
+    # 不一致，此处补齐」，但补齐时漏了同一节里的 compute_bp。实测 sino 里一个 NaN：
+    # 本函数输出非有限占比 0.7830，而 compute_fbp 是 0.0000。产品路径上传进来的是
+    # 有防护的 compute_sinogram 输出，故不可达；但 recon.py 是对外的纯计算模块，
+    # experiments/ 与直接调用者都能命中。
+    # 不转 dtype：np.asarray(..., dtype=float) 会把 float32 提升成 float64，
+    # 使本函数与 compute_fbp 内部未滤波路径的结果不再逐位相等——回归套件当场抓到。
+    sinogram = np.nan_to_num(sinogram, nan=0.0, posinf=0.0, neginf=0.0)
     # filter_name=None 表示纯反投影，不做任何频域滤波
     return iradon(sinogram, theta=theta, filter_name=None, circle=True)
 
@@ -361,6 +377,13 @@ def prepare_small_image(img_norm: np.ndarray, n: int, angle_range: float,
       原图角落有值而重建角落为0，误差图会在角落出现虚假大误差，
       迷惑用户误判算法质量。
     """
+    # 与 compute_sinogram 同一道防线：那里的注释写着「一个 NaN 像素经 Radon 的线积分
+    # 会污染所有穿过它的射线」，而本函数承担同一职责却没有它，且先过 ndimage.zoom
+    # （三次样条）——局部 NaN 会被扩散成【整幅】。实测 128² 输入里 4×4 个 NaN：
+    # 经本函数后小图与弦图的非有限占比达 1.0000 / 0.9997，而同一张图走
+    # compute_sinogram 是 0.0000。下游 DMR/ART/SIRT 的 _finite_clip 会把 NaN 归零，
+    # 于是界面拿到一张全黑图、没有任何提示——而同一份数据走 BP/FBP/DFR 完全正常。
+    img_norm = np.nan_to_num(img_norm, nan=0.0, posinf=0.0, neginf=0.0)
     h0, w0 = img_norm.shape
     # ndimage.zoom 使用样条插值缩放，clip 防止插值超出 [0,1] 范围（Gibbs 现象）
     img_small = np.clip(

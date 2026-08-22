@@ -533,6 +533,13 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # 不一致的半更新状态（否则后续按 idx 取切片会越界崩溃）。
         prev_datasets, prev_volume = self.dicom_datasets, self.volume_hu
         if not self._read_dicom_dir(path):
+            # 【失败必须可见】此前这里直接 return：选了空文件夹或放错的目录时，界面
+            # 一切不变、也没有任何提示，用户无从判断是加载失败还是加载了但没显示。
+            # 而紧邻的另一条失败路径（_build_volume_hu 返回 None）是弹框的——同一个
+            # 动作的两种失败，一种说话一种不说话，是更糟的不一致。
+            QMessageBox.warning(self, "Load Failed" if self.is_english else "加载失败",
+                                "No readable DICOM files were found in this folder."
+                                if self.is_english else "该文件夹中没有可读取的 DICOM 文件。")
             return
         pid = self._build_volume_hu()
         if pid is None:

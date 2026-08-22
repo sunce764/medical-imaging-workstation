@@ -242,9 +242,15 @@ def build_model_card(is_english=False):
         # 仍然留在本段，因为读者需要知道这一步存在、为什么必要、以及还剩什么没验证。
         base_d, end_d = pts[0][1], pts[-1][1]
         loss = 100 * (1 - end_d / base_d)
+        # 【倍率也要现算】同段的 base_d / end_d 都从 seg_spacing.csv 实读，唯独倍率曾是
+        # 字面量「一倍 / twice」。当前 CSV 是 1.5 → 3.0 恰好成立，但消融范围一改（补测
+        # 4.0mm，或补测比 1.5 更细的一档使 pts[0] 不再是训练 spacing），Dice 会跟着更新
+        # 而倍率不会——正是 _read_spacing 的 docstring 点名要避免的「重跑得到别的数值时，
+        # 卡片安静地继续显示旧数字」。下面的 elif 分支一直是现算的，此处对齐。
+        ratio = pts[-1][0] / pts[0][0] if pts[0][0] else float('nan')
         spacing_zh = (
             "<b>1. 体素间距（voxel spacing）已按 nnU-Net 契约重采样——必要性与效果均实测。</b>"
-            f"不做这一步的代价：spacing 偏离训练值一倍时平均 Dice 由 {base_d:.3f} 掉到 "
+            f"不做这一步的代价：spacing 偏离训练值 {ratio:g} 倍时平均 Dice 由 {base_d:.3f} 掉到 "
             f"{end_d:.3f}（−{loss:.0f}%）。现推理前先还原到训练 spacing，同一份失配输入下 "
             + (f"{multi[0]} 例配对验证下 Dice 由 <b>{multi[1]:.3f} 回升到 {multi[2]:.3f}</b>"
                f"（平均 {multi[3]:+.3f}，{multi[4]}/{multi[0]} 例全部改善）。"
@@ -260,7 +266,7 @@ def build_model_card(is_english=False):
         spacing_en = (
             "<b>1. Voxel spacing is now resampled per nnU-Net's contract — both the need and "
             "the effect are measured.</b> Skipping it costs real accuracy: mean Dice falls "
-            f"{base_d:.3f} → {end_d:.3f} (−{loss:.0f}%) at twice the training spacing. With "
+            f"{base_d:.3f} → {end_d:.3f} (−{loss:.0f}%) at {ratio:g}× the training spacing. With "
             + (f"resampling in place, mean Dice across {multi[0]} paired cases goes <b>{multi[1]:.3f} → "
              f"{multi[2]:.3f}</b> ({multi[3]:+.3f} on average, improving in {multi[4]}/{multi[0]}). "
              if multi else
