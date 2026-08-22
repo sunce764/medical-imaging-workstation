@@ -3120,6 +3120,11 @@ def test_label_palette():
                    for x, p in enumerate(ks) for q in ks[x + 1:])
     dmin, p1, p2 = pairs[0]
     check(dmin > 40, f"任意两类 RGB 欧氏距离 > 40（最近 {p1}↔{p2} = {dmin:.0f}）")
+    # LABEL_COLORS 里登记了颜色、LUT 里却没填的标签，画出来是全透明——功能静默
+    # 失效且界面无提示。构建 LUT 的循环只覆盖 1-24，区间外的特殊标签需逐个登记，
+    # LUNG_FALLBACK_LABEL 由 10 改为 254 时正是这样漏过一次。
+    missing = [k for k in C.LABEL_COLORS if C.LABEL_LUT[k][3] == 0]
+    check(not missing, f"LABEL_COLORS 的每个标签在 LUT 中都有非零 alpha（缺 {missing}）")
     check(len(set(C.LABEL_COLORS.values())) == len(C.LABEL_COLORS), "无两类共用同一 RGB")
 
 

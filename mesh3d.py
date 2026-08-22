@@ -267,7 +267,15 @@ def to_stl_bytes(verts: np.ndarray, faces: np.ndarray, name: str = "organ") -> b
     """
     if len(faces) == 0:
         return f"solid {name}\nendsolid {name}\n".encode()
-    tri = verts[faces]
+    # 【轴序必须在这里换】verts 的三列是 (z, y, x)——marching_cubes 按数组轴序返回，
+    # 而本模块的 mask 是 (Z, H, W)。STL 的三个槽位约定是 (x, y, z)，此前直接按
+    # v[0] v[1] v[2] 写出，等于把头足向写进了 x 槽：模型左右镜像、"前后"变"左右"，
+    # 而尺寸量级仍对，肉眼看不出来。
+    # 绕向【不要】另行补偿：marching_cubes 在 (z,y,x) 下返回的绕向本身是内向的
+    # （实测有符号体积 −4380 mm³，解析值 +4480），x↔z 互换这一次反射恰好把它翻成
+    # 外向。实测三种组合：原样 −4380、换轴序 +4380、换轴序又反转顶点顺序 −4380；
+    # 产品参数（step=2, smooth=10, decimate_grid=32）下同号。故只换轴序即可。
+    tri = verts[:, ::-1][faces]                # (z,y,x) -> (x,y,z)，绕向保持不动
     nrm = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
     ln = np.linalg.norm(nrm, axis=1, keepdims=True)
     # 用阈值而非 ==0 判退化面：marching cubes 会产出面积极小的三角形，其法向长度

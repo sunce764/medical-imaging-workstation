@@ -113,6 +113,7 @@ class AutoAIEngineThread:
         self.spacing = tuple(float(s) for s in spacing) if spacing is not None else None
         # 实际发生过重采样时记为 (原 shape, 送入模型的 shape)，供 UI 如实告知用户
         self.resampled_from = None
+        self.used_fallback = False   # 是否退到了数学降级（供界面如实标注，见 _run_body）
         # 逐体素置信度（softmax 最大类概率，量化为 uint8 的 0-255 对应 0-1）。
         # 走实例属性而非扩展 finished 信号：不改动已有的信号契约与回调签名。
         # Qt 队列连接的投递自带内存屏障，emit 前的写入对主线程槽函数可见。
@@ -195,10 +196,22 @@ class AutoAIEngineThread:
              尺寸，猜一个只会更糟；
           2. **已经足够接近 1.5mm**（各轴偏差 < 5%）——重采样本身带插值损失，
              为了消除 5% 的失配去引入一次插值不划算；
-          3. **重采样后体素数超过 _MAX_RESAMPLED_VOXELS**——对**粗** spacing（如层厚
+          3. **重采样后体素数超过上限，【且】比原始还大**——对**粗** spacing（如层厚
              5mm 的临床序列）重采样是**放大**，z 方向可涨 3 倍以上，会直接 OOM。
              此时宁可维持失配也不能把应用跑崩，并在返回值里让调用方知道跳过了。
+
+        第 3 条的「且比原始还大」不可省。此前的判据只看重采样后的体素数、不与原始比较，
+        于是当重采样是**缩小**（细 spacing → 1.5mm）而缩小后仍超上限时，也会跳过——
+        送进 ONNX 的反而是更大的原始体积，保护措施制造了它本要防的那次 OOM。
+        另外第 1、2 条在算 shape 之前就返回，本身不经过任何体积检查，那两条路径下
+        原始体积多大都不会被发现（1.5mm 各向同性的全身扫描恰好走第 2 条），故在
+        函数开头统一算一次原始体素数并在超限时告警——那种情形重采样帮不上忙，
+        能做的只有让它可见，而不是继续沉默。
         """
+        orig_n = int(np.prod(self.volume_hu.shape))
+        if orig_n > _MAX_RESAMPLED_VOXELS:
+            print(f"AI: 原始体积已达 {orig_n/1e6:.0f}M 体素，超出内存上限 "
+                  f"{_MAX_RESAMPLED_VOXELS/1e6:.0f}M；重采样与否都无法回避，推理可能失败")
         sp = self.spacing
         if sp is None or len(sp) != 3 or not all(np.isfinite(s) and s > 0 for s in sp):
             return None
@@ -206,9 +219,10 @@ class AutoAIEngineThread:
         if all(abs(x - 1.0) < 0.05 for x in f):
             return None
         shape = tuple(max(1, int(round(n * x))) for n, x in zip(self.volume_hu.shape, f, strict=True))
-        if int(np.prod(shape)) > _MAX_RESAMPLED_VOXELS:
-            print(f"AI: spacing {sp} 重采样后达 {np.prod(shape)/1e6:.0f}M 体素，超出内存上限，"
-                  f"跳过重采样（准确度将受 spacing 失配影响）")
+        new_n = int(np.prod(shape))
+        if new_n > _MAX_RESAMPLED_VOXELS and new_n > orig_n:
+            print(f"AI: spacing {sp} 重采样后达 {new_n/1e6:.0f}M 体素（原始 {orig_n/1e6:.0f}M），"
+                  f"放大且超出内存上限，跳过重采样（准确度将受 spacing 失配影响）")
             return None
         return f, shape
 
@@ -264,6 +278,11 @@ class AutoAIEngineThread:
         # 阈值取低密度空气 → 3D 连通域 → 剔除体表边界相连的体外空气 → 剩余内部空气取
         # 最大(及≥其5%的次大)连通域为双肺。
         if final_mask is None:
+            # 【降级必须可见】走到这里意味着 ONNX 没有产出结果（权重缺失、session 建不起来、
+            # 推理抛异常）。不标记的话，界面与「检出 N 个器官」的正常成功文案完全一样，
+            # 用户无从知道拿到的是连通域算法的粗略结果而非 25 类模型输出。
+            self.used_fallback = True
+            self.resampled_from = None   # 降级走原网格，重采样信息属于那次失败的 ONNX 尝试
             final_mask = segmentation.segment_lungs_fallback(self.volume_hu)
 
         if self._cancelled:

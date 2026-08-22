@@ -34,6 +34,7 @@ from constants import (
     CORONAL,
     LABEL_LUT,
     LABELS_JSON,
+    LUNG_FALLBACK_LABEL,
     MANUAL_TRACK_LABEL,
     RECON_DL_VIEWS,
     SAGITTAL,
@@ -149,13 +150,17 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
                     10: ("左肺上叶", "Lung UL (L)"), 11: ("左肺下叶", "Lung LL (L)"),
                     12: ("右肺上叶", "Lung UL (R)"), 13: ("右肺中叶", "Lung ML (R)"),
                     14: ("右肺下叶", "Lung LL (R)"),
-                    MANUAL_TRACK_LABEL: ("手动追踪", "Manual")}
+                    MANUAL_TRACK_LABEL: ("手动追踪", "Manual"),
+                    LUNG_FALLBACK_LABEL: ("肺（降级算法）", "Lungs (fallback)")}
         try:
             with open(LABELS_JSON, encoding='utf-8') as f:
                 data = json.load(f)
             names = {int(k): (v.get("name_zh", f"类{k}"), v.get("name_en", f"cls{k}"))
                      for k, v in data.get("labels", {}).items()}
             names[MANUAL_TRACK_LABEL] = ("手动追踪", "Manual")
+            # 与 MANUAL_TRACK_LABEL 同理强制注入：它不属于模型类别表，JSON 里不会有，
+            # 少了这条，降级结果在图例与定量面板里会显示成「类254」。
+            names[LUNG_FALLBACK_LABEL] = ("肺（降级算法）", "Lungs (fallback)")
             return names
         except Exception:
             return fallback
@@ -754,6 +759,13 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         if self.volume_mask is not None:
             ids = np.unique(self.volume_mask)
             n = int(((ids != 0) & (ids != MANUAL_TRACK_LABEL)).sum())
+        if getattr(self, '_ai_fallback', False):
+            # 降级时【不】沿用「检出 N 个器官」：那句话与 25 类模型跑通时完全一样，
+            # 而实际拿到的是连通域算法分出的双肺，既不分左右也不是模型输出。
+            return (f"AI unavailable — classical fallback: lungs only, not model output "
+                    f"({self._ai_time_ms:.0f}ms)" if self.is_english
+                    else f"AI 不可用 — 已降级为经典算法：仅双肺，非模型输出 "
+                         f"({self._ai_time_ms:.0f}ms)")
         txt = (f"Ready: {n} organs ({self._ai_time_ms:.0f}ms)" if self.is_english
                else f"状态: 检出 {n} 个器官 ({self._ai_time_ms:.0f}ms)")
         rs = getattr(self, '_ai_resampled', None)
@@ -801,9 +813,13 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # 逐体素置信度由引擎作为实例属性带出（见 ai_engine.confidence 的说明）。
         # 形状不符或走了数学降级路径时置 None——定量表据此决定是否显示置信度列。
         self._ai_resampled = getattr(self.ai_thread, 'resampled_from', None)
+        self._ai_fallback = bool(getattr(self.ai_thread, 'used_fallback', False))
         cf = getattr(self.ai_thread, 'confidence', None)
         self.volume_conf = cf if (cf is not None and cf.shape == final_mask.shape) else None
-        self.lbl_ai_status.setStyleSheet("color: #00FF00; font-weight: bold;")
+        # 降级不是成功：绿色是「25 类模型跑通了」的语义，此处改用琥珀色，配合
+        # _ai_done_text 里的文案，让「拿到的不是 AI 结果」在状态栏一眼可见。
+        self.lbl_ai_status.setStyleSheet("color: #FFC107; font-weight: bold;" if self._ai_fallback
+                                         else "color: #00FF00; font-weight: bold;")
         self.lbl_ai_status.setText(self._ai_done_text())
         self._update_organ_stats()
         if not self.recon_mode_active:
