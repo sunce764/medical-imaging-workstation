@@ -21,7 +21,7 @@ The 119 MB weights `models/organs.onnx.data` are **not** distributed with this r
 | Item | License declared upstream | Primary source |
 |---|---|---|
 | **TotalSegmentator** (code) | **Apache-2.0** | [LICENSE text](https://raw.githubusercontent.com/wasserth/TotalSegmentator/master/LICENSE) |
-| **TotalSegmentator weights — `total` task** (includes Task 291 `class_map_part_organs`, i.e. the source of this model) | **Apache-2.0** | [README "Subtasks" section](https://github.com/wasserth/TotalSegmentator): this task is listed under "Openly available for any usage (Apache-2.0 license)"; the weights are hosted in that Apache-2.0 repository's own [v2.0.0-weights release](https://github.com/wasserth/TotalSegmentator/releases) |
+| **TotalSegmentator weights — `total` task** (includes Task 291 `class_map_part_organs`, the task whose label scheme this model's outputs were measured to match; see `docs/ARCHITECTURE.md` → Getting the weights for why that is an inference about the weights' origin rather than a verified one) | **Apache-2.0** | [README "Subtasks" section](https://github.com/wasserth/TotalSegmentator): this task is listed under "Openly available for any usage (Apache-2.0 license)"; the weights are hosted in that Apache-2.0 repository's own [v2.0.0-weights release](https://github.com/wasserth/TotalSegmentator/releases) |
 | **nnU-Net v2** (the architecture source of this model) | **Apache-2.0** | [MIC-DKFZ/nnUNet](https://github.com/MIC-DKFZ/nnUNet) |
 
 **Upstream details worth knowing (to avoid over-extrapolation)**: TotalSegmentator is **licensed per task**, not
@@ -100,13 +100,15 @@ question open and told the reader to settle it "before publishing the repository
 published, so leaving a pre-publication gate standing would misdescribe the situation. What can be stated as
 fact, and what remains a legal judgment, are separated here.
 
-*Fact, about the current publication form.* This repository distributes its own Python source only. It
+*What is observable about the current publication form.* This repository distributes its own Python source only. It
 `import`s PySide6 at runtime, and **contains no Qt or PySide6 binaries, no statically linked artefacts, and no
 bundled or frozen executable** — a reader obtains PySide6 themselves from PyPI under the licence of their
 choosing. LGPL-3.0 obligations attach to *conveying* the library or a combined work containing it; this
-repository conveys neither, so on its face no LGPL distribution obligation is triggered by publishing it in
-this form. That is the reason no LGPL licence text is reproduced here, in contrast to `licenses/APACHE-2.0.txt`,
-which is reproduced precisely because that obligation *does* attach.
+repository conveys neither. **Our reading — this project's understanding, not legal advice — is therefore that
+publishing in this form triggers no LGPL distribution obligation**, and that is why no LGPL licence text is
+reproduced here, in contrast to `licenses/APACHE-2.0.txt`, which is reproduced because we read that obligation
+as attaching. Whether a licence obligation attaches is a question of legal application, not a fact this file can
+settle; only the sentence about what the repository does and does not contain is a matter of observation.
 
 *Open, and deliberately not answered here.* If this project were ever shipped as a bundle that includes Qt —
 a PyInstaller/py2app build, a wheel with binaries, an installer — then LGPL-3.0 §4 would apply to that bundle,

@@ -580,7 +580,7 @@ class AnnotationMixin:
         self.btn_mesh3d.setEnabled(True)
 
     def show_model_card(self):
-        """弹出模型说明卡：出处如何确证、实测到什么程度、有哪些已知局限。
+        """弹出模型说明卡：出处如何被推断出来、实测到什么程度、有哪些已知局限。
 
         内容全部由 model_card 从已跑出的实验产物现读现算，不在 UI 层硬编码任何数字——
         实验重跑后卡片自动跟着变，避免界面上的指标与 results/ 里的产物各说各话。

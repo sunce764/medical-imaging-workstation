@@ -96,7 +96,7 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 
 - **CPU-only，无需 GPU。** 在参考机器上，本机那条 RIDER 序列（**不随仓库分发**，见下方数据说明）的整卷 AI 推理约需 **37 秒、峰值约 3.0GB**。证据表里的 **100s / 8.8GB** 是*修复前*的数字——spacing 消融把 nnU-Net 的重采样步骤补了回去，推理因此同时更准也更省。
 - **复现研究所需的依赖多于运行 App。** `environment.yml` 装的是工作站本身运行所需；实验另需 torch / matplotlib / nibabel / onnx / remotezip，锁版见 [`experiments/requirements-experiments.txt`](experiments/requirements-experiments.txt)。
-- **两份权重属于 `artifact not distributed`**，都无法由一次普通 `git clone` 得到。两者的 SHA-256 已记入 [`models/CHECKSUMS.sha256`](models/CHECKSUMS.sha256)——该摘要锁定了本仓库全部模型相关数字所出自的那份确切字节；关于其来源**哪些没有被记录**，见 [架构 → 获取权重](docs/ARCHITECTURE.md#getting-the-weights)：
+- **两份权重属于 `artifact not distributed`**，都无法由一次普通 `git clone` 得到。两者的 SHA-256 已记入 [`models/CHECKSUMS.sha256`](models/CHECKSUMS.sha256)，同时收录研究三、四训练出的 6 个 PyTorch checkpoint。该文件写明这些摘要能证明什么、不能证明什么——它能让你核对另处取得的文件是否同一份，但摘要是**现在**取的、不是结果产出时取的，因此**不是**追溯性的溯源记录。关于来源**哪些从未被记录**，见 [架构 → 获取权重](docs/ARCHITECTURE.md#getting-the-weights)：
   - `models/organs.onnx.data`（119 MB）—— 第三方 TotalSegmentator v2 权重。不在此转载：本仓库的 `LICENSE` 是仅供审阅的专有许可，把 119 MB 的上游产物置于其下会模糊 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 划定的许可边界。重建方式见[架构说明 → 获取权重](docs/ARCHITECTURE.md#getting-the-weights)。缺失时分割自动降级为经典连通域算法，GUI 照常运行。
   - `models/recon_dl_v20.onnx.data`（7.4 MB）—— 本项目自训，供研究三的学习式重建使用。不入库；重建需**两**步：`python experiments/recon_dl.py matrix` 训练并写出 `.pt`，再 `python experiments/recon_dl.py export` 转成 ONNX 外部权重。**重建结果从未与已提交产物做过比对**，因此不对二者有多接近作任何声称。模体生成一直有种子；PyTorch 侧的 RNG 此前没有，直到 `train_one` 加入 `torch.manual_seed(seed)`——那是一处只约束*今后*运行的前瞻性修复，晚于研究三的每一份已提交结果。缺失时重建实验室照常运行，只是 CNN 后处理那一视图不可用。
   - 两个 `.onnx` 计算图（44 KB 与 20 KB）**已入库**，所以即使没有权重，网络结构本身也是可查的——上文那两个参数量 31.2M 与 1.9M，正是从这两个文件重算出来的。
@@ -107,7 +107,7 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 
 | 证据线 | 实测结果 | 适用边界 |
 |---|---|---|
-| **研究 I —— 重建剂量-质量** | 误差在 ≈180 视角后饱和；最优 FBP 滤波器从稀疏角的平滑滤波切换为稠密角的锐利 Ram-Lak；Poisson 光子噪声下 ART 是已测方法中最鲁棒者。后续对同一批系统矩阵做 SVD，**推翻了本研究自己对最小二乘失稳给出的解释**：条件数最差的是**最稀疏**采样，不是近方阵处。 | 解析二维 Shepp-Logan 模体；矩阵法限制在 ≈64×64；ART/SIRT 迭代次数固定、未逐剂量调优。[预印本稿](docs/preprint_recon.md) · [条件数 CSV](experiments/results/exp_c_conditioning.csv) |
+| **研究 I —— 重建剂量-质量** | 误差在 ≈180 视角后饱和；最优 FBP 滤波器从稀疏角的平滑滤波切换为稠密角的锐利 Ram-Lak；Poisson 光子噪声下 ART 是已测方法中最鲁棒者。后续对同一批系统矩阵做 SVD，**推翻了本研究自己对最小二乘失稳给出的解释**：条件数最差的是**最稀疏**采样，不是近方阵处。替代说法刻意只做定性——不声称对该尖峰的任何定量归因。 | 解析二维 Shepp-Logan 模体；矩阵法限制在 ≈64×64；ART/SIRT 迭代次数固定、未逐剂量调优。[预印本稿](docs/preprint_recon.md) · [条件数 CSV](experiments/results/exp_c_conditioning.csv) |
 | **研究 II —— 模型出处与 Dice** | 标签重叠混淆矩阵实测出未文档化模型的标签方案即 TotalSegmentator v2 `class_map_part_organs`——21 个在场器官呈身份对角线——并纠正两处标签错误。被实测的是**标签映射**；由此推断这份权重就是那个上游 release，是很强的推断，但不是密码学意义上的证明。**20 例**患者级平均 Dice **0.909**（95% CI [0.889, 0.927]），单例 0.922 略偏乐观但落在区间内。 | 器官间可靠性差异远大于总体数字所示：肝 0.982、脾 0.976，而右肺上叶 0.773、前列腺 0.554（仅 7 例在场）。[`seg_multi.py`](experiments/seg_multi.py) |
 | **研究 III —— 学习式稀疏角重建** | 自实现 1.9M 参数残差 U-Net 将 RMSE 降低 **3–6 倍**，病灶对比度保留率从 0.87 提升至 **0.96–1.00**；虚假结构率为 1.7%，分布外增益比为 0.81。 | 使用无噪声合成投影；幻觉率是有利条件下的下界，不能外推至光子饥饿的低剂量 CT。 |
 | **研究 IV —— 压缩分割模型，以及它暴露出的评估缺陷** | 从零训练的 0.35M 3D U-Net，对照随软件发布的 31.2M 教师。给它打分时暴露出问题出在**评估**而非模型——同一份权重仅因张量尺寸不同即得 **0.490 或 0.746**（见上表）。把同样的怀疑用到产品推理路径上，配对覆盖全部 24 器官、**test 集 61 例中的 59 例**，得到全器官 Dice **+0.0133**［+0.0072, +0.0194］，**59 例中 54 例改善**，代价 1.18× 耗时与 +0.65GB。 | 五条针对性对照各自排除一种竞争解释（针对不同竞争解释，非统计独立）；3 例试跑曾给出的 **+0.205** 没能挺过全样本。在留出的 test 集上、以**同一条推理路径**相比，学生比教师低 **0.4500**［-0.4877, -0.4118］（234 个叶次）——0.35M 在此并未逼近 31.2M。两条推理路径混用，在同一份权重上值 0.33 Dice，故报告脚本拒绝把它们画进同一张图。[`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) · [完整记述](experiments/README.md) |
@@ -127,12 +127,12 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 9 个无 Qt 计算模块**。
-- 全套 **562 项检查**；CI 跑其中**不需要本地研究数据**的 **471 项**。留在 CI 之外的是需要 RIDER 序列或 119MB 权重的那些，**并非交互层**——交互层通过合成 DICOM 与合成鼠标/滚轮事件，在 CI 内是被覆盖的。
+- 作者机器上全套 **586 项检查**，`SKIP_REAL_DATA=1` 可达 **495 项**。**干净的 CI runner 会更少**，该数字以 run 日志为准、不以本 README 为准：提交 `7a09744` 处 CI 记录 458 项，而同一命令在本地是 471 项。差值不是不稳定，而是那些需要「干净 clone 拿不到的产物」（未入库的 `.onnx.data` 权重与 `.pt` checkpoint）的检查在那里根本不会执行。留在 CI 之外的是需要 RIDER 序列或那些权重的部分——**不是**交互层，交互层由合成 DICOM 与合成鼠标/滚轮事件在 CI 中覆盖。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
-python tests/test_gui.py                     # 完整回归：562 项；需本地 RIDER 数据
-SKIP_REAL_DATA=1 python tests/test_gui.py    # CI 使用的 471 项数据无关检查
+python tests/test_gui.py                     # 完整回归：本地 586 项；需本地 RIDER 数据
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 本地 495 项；干净 CI runner 更少（见上）
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```
@@ -150,7 +150,7 @@ coverage run tests/test_gui.py && coverage report
 |---|---|---|
 | [架构说明](docs/ARCHITECTURE.md) | 英文 | 模块图、God-object 分解、分割模型出处和 AI 管线契约 |
 | [一个未被满足的推理契约](docs/spacing_contract.md) | 中文 | 一次完整的工程判断：发现产品违背模型前提、量化代价、修复、多例验证、声明未测边界 |
-| [软件说明书](docs/manual_zh.md) · [English](docs/manual_en.md) · [PDF](docs/manual_zh.pdf) | 中文 · EN | 按界面截图讲解全部用户功能 |
+| [软件说明书](docs/manual_zh.md) · [English](docs/manual_en.md) · [PDF](docs/manual_zh.pdf) | 中文 · EN | 按界面截图讲解全部用户功能。**打开 PDF 前请先看这条勘误：** 该文件是随软著登记提交的 V1.0 冻结快照，登记在审期间有意不作改动，因此封面仍把截图数据写作「非患者数据」。这是错的——TotalSegmentator-CT-Lite 是公开、已去标识的**人体** CT，影像来自真实患者，只是不含可识别 PHI。两个 Markdown 版本已是更正后的措辞。 |
 | [技术报告](docs/technical_report.md) | 英文 | 研究 I–III 的方法、图表与结果 |
 | [预印本稿 —— 研究 I](docs/preprint_recon.md) | 英文 | 学术格式的稀疏视角 / 低剂量重建研究 |
 | [实验](experiments/README.md) | 英文 | 实验脚本、图表、已入库产物，以及逐研究各不相同的可复现限度 |

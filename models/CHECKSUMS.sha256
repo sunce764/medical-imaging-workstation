@@ -1,15 +1,29 @@
-# SHA-256 checksums for the model artefacts referenced by this repository.
+# SHA-256 checksums for the model artefacts this repository's numbers depend on.
 #
-# The two .onnx graphs ARE committed; the two .onnx.data weight blobs are NOT
-# (see LICENSE and THIRD_PARTY_NOTICES.md for why). These digests exist so that a
-# blob obtained elsewhere can be checked against the exact bytes that produced
-# every model-derived number reported in docs/ and experiments/results/.
+# Scope, stated narrowly. These digests identify the bytes present on the author's
+# machine at the time this file was written or last regenerated. They let a third
+# party check that a blob obtained elsewhere is the same file. They do NOT prove
+# that a past result was produced by these bytes — nothing here is a retroactive
+# provenance record, because no digest was taken when those results were produced.
+#
+# Coverage: the two .onnx graphs (committed), their two .onnx.data weight blobs
+# (not committed - see LICENSE and THIRD_PARTY_NOTICES.md), and the six PyTorch
+# checkpoints under experiments/results/ that Studies III and IV trained and
+# scored (also not committed). Nothing else is covered.
 #
 # Verify from the repository root:   shasum -a 256 -c models/CHECKSUMS.sha256
-# On a plain clone the two .data lines report 'No such file or directory'.
-# This file records identity, not provenance: see docs/ARCHITECTURE.md
+# On a plain clone every line except the two .onnx graphs reports
+# 'No such file or directory'; that is expected, not a failure of this file.
+#
+# This file records identity, not origin: see docs/ARCHITECTURE.md
 # (Getting the weights) for what is and is not known about where they came from.
 360b7b97765d1582ce0a83e1381e00228a63833647553149bbbd5a9ffb61809e  models/organs.onnx
 0b96b9d1129129c3b0c3f4d761cdc26a3e52d607977c07336b893b88bfd312ce  models/organs.onnx.data
 b4dd27e076e3253a626a480e0ff0a6d4cc807fa234ef7a0e14fa065f87f6921c  models/recon_dl_v20.onnx
 76a183ea40d125fe7d335f4e9b7ea95c03b7ca5831cf29769fc36c3fd27a6e55  models/recon_dl_v20.onnx.data
+d122f5812b1f5d152a03276755a5076ddc58ac1a79794af3a9a37962d5b5c37f  experiments/results/recon_dl_w20.pt
+6a2c8108f924c78ff1f4be12fa9e7ac1116e304be07f4c5f142be87ad27892ca  experiments/results/seg3d_w4d3.pt
+8fe1940235dca9e69396f0a0f3cf2ddd61b0c83cf5162d8419f8872c250f61b3  experiments/results/seg3d_w4d3_ckpt.pt
+5fba4ce030ff36383df7ec958983adf6489ecf29ab17d682e426e2b497640e3f  experiments/results/seg3d_w8.pt
+da38d9b939701fca02c63e42c1efadd0e1e953af6435b2e5bb3543cef2330305  experiments/results/seg3d_w8d3.pt
+c3c61b77790648784da1214cf7b978aa570ec0ba66e5bfc22f6dde501fd12083  experiments/results/seg3d_w8d3_ckpt.pt

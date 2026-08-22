@@ -300,7 +300,7 @@ class UiBuilderMixin:
         self.lbl_disclaimer.setWordWrap(True)
         self.lbl_disclaimer.setStyleSheet("color: #C0392B; font-size: 10px;")
         ai_lay.addWidget(self.lbl_disclaimer)
-        # 模型说明卡：出处如何确证、实测到什么程度、有哪些已知局限。
+        # 模型说明卡：出处如何被推断出来、实测到什么程度、有哪些已知局限。
         # 常驻可点，不随分割状态禁用——「这个模型可不可信」在跑之前就该能查。
         # 样式上刻意弱于「导出 CSV / 三维重建」：那两个是日常操作，本按钮是查证入口，
         # 使用频率低一个量级，做成同等份量的全宽按钮会与免责声明抢注意力。

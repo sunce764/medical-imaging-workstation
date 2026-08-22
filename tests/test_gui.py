@@ -3061,15 +3061,18 @@ def test_confidence_map():
 
 
 def test_model_checksums():
-    """models/CHECKSUMS.sha256 必须与实际文件一致，且与文档表格里引用的摘要一致。
+    """models/CHECKSUMS.sha256 必须与实际文件一致，且与 ARCHITECTURE 表格逐行对应。
 
     由来：权重身份此前只有一句「TotalSegmentator v2」，第三方无法证明自己拿到的
     119MB 权重就是产出本仓库全部 Dice 的那一份。补了 CHECKSUMS.sha256 之后，新的
-    腐烂方式是「换了权重却忘了改摘要」或「文档表格里的缩写摘要与清单对不上」——
-    这两种都能机械判定，故锁进回归套件而不是靠记得。
+    腐烂方式是「换了权重却忘了改摘要」或「文档表格里的缩写摘要与清单对不上」。
 
-    数据无关：两个 .onnx 图已入库；两个 .data 权重不入库，缺席时只跳过其文件哈希，
-    清单与文档的一致性仍然照查（CHECKSUMS.sha256 本身是入库的）。
+    第一版断言只检查「文档里每个缩写摘要都能在清单里找到」，**交换表格里两个单元格
+    仍然会通过**——这正是审查指出的漏洞。现在改为按表格行绑定：organs 那一行的
+    摘要必须是 organs 的，recon_dl 那一行的必须是 recon_dl 的。
+
+    数据无关：两个 .onnx 图已入库；.data 权重与 .pt checkpoint 不入库，缺席时只跳过
+    其文件哈希，清单与文档的对应关系仍然照查（CHECKSUMS.sha256 本身是入库的）。
     """
     import hashlib
     import re
@@ -3078,7 +3081,6 @@ def test_model_checksums():
     manifest = os.path.join(root, "models", "CHECKSUMS.sha256")
     check(os.path.exists(manifest), "models/CHECKSUMS.sha256 存在")
 
-    # 解析清单：注释行以 # 开头，其余为「<64位十六进制>␠␠<相对路径>」
     entries = {}
     for line in open(manifest, encoding="utf-8").read().splitlines():
         line = line.strip()
@@ -3087,14 +3089,21 @@ def test_model_checksums():
         m = re.match(r"^([0-9a-f]{64})\s+(\S+)$", line)
         check(m is not None, f"清单行格式合法：{line[:60]}")
         if m:
+            check(m.group(2) not in entries, f"{m.group(2)} 在清单中只出现一次")
             entries[m.group(2)] = m.group(1)
 
-    expected = {"models/organs.onnx", "models/organs.onnx.data",
-                "models/recon_dl_v20.onnx", "models/recon_dl_v20.onnx.data"}
+    expected = {
+        "models/organs.onnx", "models/organs.onnx.data",
+        "models/recon_dl_v20.onnx", "models/recon_dl_v20.onnx.data",
+        "experiments/results/recon_dl_w20.pt",
+        "experiments/results/seg3d_w4d3.pt", "experiments/results/seg3d_w4d3_ckpt.pt",
+        "experiments/results/seg3d_w8.pt", "experiments/results/seg3d_w8d3.pt",
+        "experiments/results/seg3d_w8d3_ckpt.pt",
+    }
     check(set(entries) == expected,
-          f"清单恰好覆盖四个模型产物（多/缺：{set(entries) ^ expected or '无'}）")
+          f"清单恰好覆盖十个模型产物（多/缺：{set(entries) ^ expected or '无'}）")
+    check(len(set(entries.values())) == len(entries), "十个摘要互不相同（否则行绑定无意义）")
 
-    # 存在的文件必须逐字节对得上；缺席的（.data 不入库）跳过
     hashed = 0
     for rel, digest in sorted(entries.items()):
         path = os.path.join(root, rel)
@@ -3108,15 +3117,39 @@ def test_model_checksums():
         hashed += 1
     check(hashed >= 2, f"至少校验了两个入库的 .onnx 图（实际 {hashed}）")
 
-    # 文档表格里的缩写摘要（前8…后6）必须能在清单里找到对应项——
-    # 防「换了权重改了清单、却漏改文档表格」这一类单读一边看不出的矛盾。
+    # —— 逐行绑定 ARCHITECTURE 的摘要表格 ——
+    # 表格形如：| SHA-256 (graph, committed) | `<abbr>` | `<abbr>` |
+    # 左列是 organs.onnx，右列是 recon_dl_v20.onnx；两行分别对应 .onnx 与 .onnx.data。
     arch = open(os.path.join(root, "docs", "ARCHITECTURE.md"), encoding="utf-8").read()
-    abbrevs = re.findall(r"`([0-9a-f]{8})[…\.]{1,3}([0-9a-f]{6})`", arch)
-    check(len(abbrevs) >= 4, f"ARCHITECTURE 表格里解析出 {len(abbrevs)} 条缩写摘要（<4 说明本测试的定位写错了）")
-    full = set(entries.values())
-    for head, tail in abbrevs:
-        hit = [d for d in full if d.startswith(head) and d.endswith(tail)]
-        check(len(hit) == 1, f"文档摘要 {head}…{tail} 在清单中恰好匹配一项（匹配 {len(hit)} 项）")
+
+    def abbrev_row(label):
+        """取出该行的两个缩写摘要，按 (organs 列, recon_dl 列) 返回。"""
+        m = re.search(r"^\|\s*" + re.escape(label) + r"[^|]*\|([^|]*)\|([^|]*)\|",
+                      arch, re.M)
+        if not m:
+            return None
+        cells = []
+        for cell in (m.group(1), m.group(2)):
+            a = re.search(r"`([0-9a-f]{8})[…\.]{1,3}([0-9a-f]{6})`", cell)
+            cells.append(a.groups() if a else None)
+        return cells
+
+    bindings = [
+        ("SHA-256 (graph, committed)",
+         ["models/organs.onnx", "models/recon_dl_v20.onnx"]),
+        ("SHA-256 (`.data`, **not** committed)",
+         ["models/organs.onnx.data", "models/recon_dl_v20.onnx.data"]),
+    ]
+    for label, files in bindings:
+        cells = abbrev_row(label)
+        check(cells is not None and all(cells),
+              f"ARCHITECTURE 表格「{label[:22]}」行解析出两个缩写摘要（None 说明本测试定位写错）")
+        if not cells or not all(cells):
+            continue
+        for (head, tail), rel in zip(cells, files, strict=True):
+            want = entries[rel]
+            check(want.startswith(head) and want.endswith(tail),
+                  f"表格中 {rel} 对应的摘要 {head}…{tail} 与清单一致（交换单元格会在此失败）")
 
 
 def test_doc_code_consistency():
