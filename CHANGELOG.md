@@ -175,6 +175,75 @@ Recorded because a defect log that only lists other people's defects is not a de
 
 ---
 
+## Post-publication audit round (2026-08)
+
+Run after the repository went public, from six reader perspectives (first-time cloner,
+researcher reproducing a study, algorithm interviewer, legal reviewer, non-technical
+screener, hostile reviewer) and then a full evidence-chain pass.
+
+### Numbers re-derived independently, not re-read
+
+Every headline figure was recomputed from the committed per-case CSVs by code written
+fresh for the audit, rather than by re-running the project's own scripts — so an error
+inside those scripts could still surface. All of them held: teacher 0.8867, student
+0.4367 / 0.7667, paired −0.4500 over n=234 (Wilcoxon 3.7e-39), right-upper-lobe
+0.727 / 0.5459, z-overlap +0.0133 [+0.0072, +0.0194] with 54 of 59 improving at 1.184×,
+21-organ 0.9090 [0.889, 0.927] over 20 cases, spacing 0.6845 → 0.8399 with 20/20
+improving at p=1.91e-06, and the zero-padding control's 225,374 → 1,529 foreground
+voxels. Parameter counts were recomputed from the ONNX graphs: 31,194,809 and 1,927,841,
+matching the stated 31.2 M and 1.9 M. The split was re-run: 207 / 29 / 61, assertions
+passing. The full suite was re-run: 515 checks, all passing.
+
+### A description that contradicted the code it described
+
+The README explained streaming z-fusion with "no z position is ever covered by more
+than two blocks — so only an 8-slice tail needs to be retained". The code says the
+opposite, in a comment written when the defect was fixed: the final block is clamped to
+the volume edge, so its gap from the previous one can fall below the stride and some z
+positions are covered by **three**. Assuming two was precisely the assumption that
+caused the double-counting defect, and the implementation retains the raw logits of the
+two most recent blocks — not an 8-slice tail. The README had gone on repeating the
+refuted version. Rewritten to state the edge case, which is also the more convincing
+version of the story.
+
+### A number with no artefact behind it
+
+`8.44 → 9.09 GB` was measured, but `bench` only ever printed the peak to the terminal;
+nothing in `results/` backs it up, so no third party can check it without re-running
+59 cases twice. `bench` now appends to `seg3d_infer_bias_bench_peak.csv`, and the
+committed run is labelled measured-but-unarchived, since re-running would overwrite
+evidence cited elsewhere.
+
+### An evaluation-scope question that had never been written down
+
+Auditing every artefact against the split showed the 57- and 59-case rows are entirely
+within `test`, while the 20-case rows for Study II and the spacing ablation sit mostly
+in `train`. That is not a leak — those two lines measure third-party weights that
+predate the split — but it forbids one specific comparison (0.909 against any student
+number, since the student trained on 16 of those cases), and that was nowhere stated.
+Now documented as a table in `experiments/README.md`.
+
+### Also fixed
+
+`experiments/requirements-experiments.txt` was missing `onnx==1.21.0`, which
+`seg3d_bench.py` imports and which is a different package from `onnxruntime`; the same
+file credited torch to Study III when Study IV is its main user. `LICENSE` pointed at a
+README section that does not exist. `README.zh-CN.md` had drifted from the English
+version, carrying eight numbers the English text had already devolved to the detailed
+documents.
+
+### Mistakes made in this round
+
+Three findings were announced before checking the material that was already on disk,
+and all three were wrong: `matplotlib` / `nibabel` / `torch` were reported as
+undeclared when `experiments/requirements-experiments.txt` had them pinned all along
+(the earlier link scan had covered seven file extensions but not `.txt`); `markdown`
+was reported as undeclared when line 7 of `build_manual_pdf.py` declares it; and
+`seg_multi.csv` was read as 21 cases when its last row is a summary line. A fourth
+error was a mis-read of the wrong log file, nearly reporting the full suite as 1 check
+instead of 515. The pattern is identical each time — concluding before reading material
+that was already at hand, at zero cost.
+
 ## Known limitations (recorded faithfully, unfixed)
 
 - **MPR anisotropy uncorrected**: coronal/sagittal planes are displayed 1:1 by pixel; when slice thickness ≠ in-plane pixel spacing, the geometric proportions are distorted. A fix would require reworking the "scene coordinate = voxel index" mapping that runs through hover/measurement/cross-hairs — a non-surgical change whose risk outweighs its benefit, so it is recorded as a limitation. Caliper measurements use real mm, so **the measured values are correct**; only the displayed proportions do not match anatomy.

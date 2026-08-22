@@ -565,7 +565,19 @@ def bench():
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     pk = rss / (1024 ** 3) if sys.platform == 'darwin' else rss / (1024 ** 2)
     print(f"\n  配置 {a.config} 完成。本进程峰值内存 {pk:.2f} GB")
-    print(f"    → {os.path.basename(out_p)}")
+    # 【峰值必须落盘】此前它只 print 到终端，于是 README 里的 8.44 / 9.09 GB
+    # 无法由任何已提交产物核验，第三方要验证只能重跑 59 例 × 2 配置。写成
+    # 独立 sidecar 而不是加进 bench CSV 的列：那份 CSV 是逐器官一行、且靠
+    # 已有 case 集合做断点续跑，加列会让旧文件与新文件的表头不一致。
+    # ru_maxrss 是进程生命期高水位，因此这个数只在「一个配置一个进程」时有意义。
+    peak_p = os.path.join(RESULTS, 'seg3d_infer_bias_bench_peak.csv')
+    new_file = not os.path.exists(peak_p)
+    with open(peak_p, 'a', newline='', encoding='utf-8-sig') as f:
+        w = csv.writer(f)
+        if new_file:
+            w.writerow(['config', 'split', 'n_cases', 'peak_gb'])
+        w.writerow([a.config, a.split, len(cases), f"{pk:.2f}"])
+    print(f"    → {os.path.basename(out_p)}  /  {os.path.basename(peak_p)}")
     return 0
 
 

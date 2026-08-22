@@ -252,6 +252,25 @@ Two of the three lines below end in a negative result. They are reported at the 
 
 TotalSegmentator-CT-Lite (CC BY-4.0), fetched from a **pinned commit** with per-file SHA256 in `seg3d_manifest.json` — `seg_validate.py` used `/resolve/main`, a mutable branch ref, and could silently stop reproducing. 297 cases, all verified from the NIfTI headers to carry a **single spacing (1.5, 1.5, 1.5) mm** — read, not assumed. In-plane size varies widely (median 253 voxels, range 47–499), which matters for line C. **Patient-level** split with `SPLIT_SEED=0`: **207 train / 29 val / 61 test**. The split asserts its own disjointness and coverage at every call. Teacher and student are evaluated by the *same* code path (`seg3d_eval.py` imports `dice` and `bootstrap_ci` from `seg3d_teacher.py`), so no metric is implemented twice.
 
+**Which cases each line was scored on, and why two different answers are both correct.** An audit checked
+every committed per-case artefact against the split, and the answer is not uniform:
+
+| Artefact | Cases | Relative to the split |
+|---|---|---|
+| `seg3d_teacher_dice.csv`, both `seg3d_student_*` | 57 | **all in `test`** |
+| `seg3d_infer_bias_bench_A/B.csv` | 59 | **all in `test`** |
+| `seg_multi.csv`, `seg_spacing_fix_multi.csv` | 20 | 16 in `train`, 1 in `val`, 3 in `test` |
+
+The last row is **not** a leak. Those two lines measure the **third-party TotalSegmentator weights**, which
+were never trained on this dataset — the split exists for the student trained here, and does not apply to a
+model that predates it. `seg_multi.py:67` draws its 20 cases with `rng.permutation(...)[:n]` over all 297,
+seeded, and it was written before the split existed.
+
+What it does mean is a comparison that must never be made: **the 0.909 from those 20 cases cannot be put
+beside any student number**, because the student was trained on 16 of them. Every teacher-versus-student
+figure in Study IV avoids this by construction — all of them come from the 57- and 59-case `test` rows
+above, which the audit confirmed contain no training or validation case at all.
+
 ## Running
 
 ```bash
@@ -445,6 +464,8 @@ The test split holds 61 cases; **`s0099` and `s0340` contain none of the 24 orga
 **54 of 59 cases improve.** Largest gains `lung_upper_lobe_left` +0.048, `gallbladder` +0.024, `liver` +0.023; the only loss is `lung_upper_lobe_right` −0.028. On lung lobes alone the interval **crosses zero** — not significant.
 
 Cost: **1.18×** wall-clock, peak memory **8.44 → 9.09 GB** (+0.65 GB). For context, raising the block height to `DZ=64` was rejected earlier at 14.3 GB.
+
+> **Where each of those two numbers can be checked.** The 1.18× is recomputable from the committed per-case artefacts (`seg3d_infer_bias_bench_A.csv` / `_B.csv` carry a `sec` column). The two memory figures are **not** — at the time of the run the peak was only printed to the terminal, never written to a file, so nothing in `results/` backs them up. `bench` now appends `config, split, n_cases, peak_gb` to `seg3d_infer_bias_bench_peak.csv`, but **the committed run predates that change and was not re-run** — re-running would overwrite evidence cited above. Treat 8.44 / 9.09 as measured-but-unarchived until a future run regenerates them. Each figure is still a whole-process `ru_maxrss` from a run of exactly one configuration, which is the only way that counter means anything.
 
 A 2×2 grid separating the two factors (in-plane size × z-blocking) on three cases had suggested z-overlap was worth up to **+0.205**. Over the full split it is worth **+0.013**. That three-case figure was an outlier, and stating it here is the point: the honest version of this line is "a cheap marginal improvement", not "a defect costing 20 % accuracy". The full-split measurement exists to stop the outlier from becoming the headline.
 
