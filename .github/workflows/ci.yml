@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # 允许在 Actions 页面手动触发：仓库转公开后 badge 长期停在 no status，
+  # 而 push 触发要等下一次提交，手动口子让状态能立刻刷新。
+  workflow_dispatch:
 
 jobs:
   lint:

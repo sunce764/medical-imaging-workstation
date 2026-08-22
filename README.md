@@ -24,11 +24,11 @@
 
 ## Three results, if you only read one section
 
-| | Measured | Why it is the interesting part |
-|---|---|---|
-| **A defect in the evaluation, not in the model** | The same weights score **0.490 or 0.746** Dice — the only thing that changed is the **size of the inference tensor**, not one input voxel | `InstanceNorm3d` normalises per sample over the spatial dims; after HU rescaling, air and zero-padding are the same value. Enlarging the tensor erased **99.3 %** of predicted foreground (225,374 → 1,529 voxels). Five independent controls, each killing a different competing explanation |
-| **An ablation that changed the product** | Dice **0.684 → 0.840**, improving **20 of 20** paired cases (Wilcoxon *p* = 1.9×10⁻⁶); inference **100 s / 8.8 GB → 37 s / 3.0 GB** | The engine was silently skipping nnU-Net's mandatory resampling to the training spacing. Measured first, fixed second — and the fix made it both more accurate and cheaper |
-| **A pilot result that did not survive** | A 3-case pilot advertised **+0.205**; the full 59-case split says **+0.0133** [+0.0072, +0.0194] | Both numbers are in the repository. The full-split run exists precisely to stop an outlier from becoming the headline |
+**A defect in the evaluation, not in the model.** The same weights score **0.490 or 0.746** Dice — the only thing that changed is the size of the inference tensor, and not one input voxel. `InstanceNorm3d` normalises per sample over the spatial dims; after HU rescaling, air and zero-padding hold the same value, so enlarging the tensor erased **99.3 %** of the predicted foreground (225,374 → 1,529 voxels). Five independent controls each eliminate a different competing explanation.
+
+**An ablation that changed the product.** The engine was silently skipping nnU-Net's mandatory resampling to the training spacing. Measured first, fixed second: Dice **0.684 → 0.840**, improving **20 of 20** paired cases (Wilcoxon *p* = 1.9×10⁻⁶), while inference on the bundled series fell from **100 s / 8.8 GB to 37 s / 3.0 GB** — more accurate *and* cheaper.
+
+**A pilot result that did not survive.** A 3-case pilot advertised **+0.205** for adding z-overlap; the full 59-case split says **+0.0133** [+0.0072, +0.0194]. Both numbers are in this repository. The full-split run exists precisely to stop an outlier from becoming the headline.
 
 Python 3.10 · PySide6/Qt6 · **CPU-only, no GPU** · synthetic phantoms and de-identified public research CTs · **no PHI is committed**.
 
