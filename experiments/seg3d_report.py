@@ -164,18 +164,31 @@ def main():
     if not students:
         print("  尚无学生模型结果，请先跑 seg3d_train.py + seg3d_eval.py"); return 1
 
+    # 【峰值口径必须一致，且不一致时不许沉默】peak_gb_max 与 peak_gb_mean 是同一个
+    # 非递减计数器的两个统计量，混在同一列里比较会得出跨口径的比值：教师产物只有
+    # mean(4.89)、学生有 max(8.75)，静默回退的结果是 8.75/4.89=1.79×，而同口径
+    # (mean/mean) 只有 1.55×——这个 1.79× 曾作为干净结论进了报告。
+    def _peak(d, who):
+        if 'peak_gb_max' in d:
+            return round(d['peak_gb_max'], 2), 'max'
+        print(f"  ⚠ {who} 产物只有 peak_gb_mean、没有 peak_gb_max，本列改用 mean——"
+              f"与其他行若口径不同，peak_gb 一列不可直接相比")
+        return round(d['peak_gb_mean'], 2), 'mean'
+
+    t_peak, t_kind = _peak(teacher, '教师')
     rows = [dict(model="organs.onnx (teacher)", classes=25, params_m=round(TEACHER_PARAMS / 1e6, 2),
                  dice=round(teacher['overall_mean'], 4),
                  ci_lo=round(teacher['overall_ci'][0], 4), ci_hi=round(teacher['overall_ci'][1], 4),
                  sec_per_case=round(teacher['infer_sec_mean'], 1),
-                 peak_gb=round(teacher.get('peak_gb_max', teacher['peak_gb_mean']), 2), n_cases=teacher['n_cases'])]
+                 peak_gb=t_peak, peak_kind=t_kind, n_cases=teacher['n_cases'])]
     for s in students:
+        s_peak, s_kind = _peak(s, f"学生 {s['_tag']}")
         rows.append(dict(model=f"UNet3D ch={s['ch']} (student)", classes=6,
                          params_m=round(s['params'] / 1e6, 4),
                          dice=round(s['overall_mean'], 4),
                          ci_lo=round(s['overall_ci'][0], 4), ci_hi=round(s['overall_ci'][1], 4),
                          sec_per_case=round(s['infer_sec_mean'], 1),
-                         peak_gb=round(s.get('peak_gb_max', s['peak_gb_mean']), 2), n_cases=s['n_cases']))
+                         peak_gb=s_peak, peak_kind=s_kind, n_cases=s['n_cases']))
 
     print(f"  {'模型':<26}{'类数':>5}{'参数M':>10}{'Dice':>9}{'95%CI':>18}"
           f"{'秒/例':>8}{'峰值GB':>9}")

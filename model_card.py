@@ -268,8 +268,9 @@ def build_model_card(is_english=False):
         ratio = end_sp / base_sp
         detail = "; ".join(f"{o} {' → '.join(f'{v:.2f}' for v in ds)}" for o, ds in worst)
         spacing_zh = (
-            "<b>1. 体素间距（voxel spacing）未做重采样——且这一条已实测，不是推测。</b>"
-            "nnU-Net 的推理契约第一步是重采样到训练 spacing，本工具直接按原始 spacing 送入。"
+            "<b>1. 体素间距（voxel spacing）已按契约重采样——不做的代价已实测，不是推测。</b>"
+            "nnU-Net 的推理契约第一步是重采样到训练 spacing，本工具现已这样做"
+            "（<code>ai_engine.TARGET_SPACING</code>）。下面这条曲线是【不做】的代价："
             f"在同一例带真值数据上的消融（<code>experiments/seg_spacing.py</code>）显示，"
             f"{sps}mm 下平均 Dice 依次为 <b>{curve}</b>——"
             f"<b>spacing 变为 {ratio:g} 倍时掉 {loss:.0f}%</b>。"
@@ -277,9 +278,11 @@ def build_model_card(is_english=False):
             + f"受内存所限只测得到变粗方向，比 {base_sp:g}mm 更细的 spacing"
               "（如本机 RIDER 数据的 0.713mm）推理需 50GB 以上，仍属<b>未测量</b>。<br>")
         spacing_en = (
-            "<b>1. Voxel spacing is not resampled — and this is measured, not hypothetical.</b> "
-            "nnU-Net's inference contract begins by resampling to the training spacing; this tool "
-            "feeds the volume at its native spacing. An ablation on the same ground-truth case "
+            "<b>1. Voxel spacing is resampled per nnU-Net's contract — the cost of "
+            "<i>not</i> doing so is measured, not hypothetical.</b> The contract begins by "
+            "resampling to the training spacing, and this tool now does "
+            "(<code>ai_engine.TARGET_SPACING</code>). The curve below is what skipping it costs. "
+            "An ablation on the same ground-truth case "
             f"(<code>experiments/seg_spacing.py</code>) shows mean Dice going <b>{curve}</b> at "
             f"{sps} mm — a <b>{loss:.0f}% loss at {ratio:g}× the training spacing</b>. "
             + (f"Small structures fail first and not monotonically ({detail}). " if detail else "")
@@ -287,12 +290,18 @@ def build_model_card(is_english=False):
               "(such as the 0.713 mm RIDER series) need >50 GB to infer and remain "
               "<b>unmeasured</b>.<br>")
     else:
-        spacing_zh = ("<b>1. 体素间距（voxel spacing）未做重采样。</b>nnU-Net 的推理契约要求先"
-                      "重采样到训练 spacing，本工具直接按原始 spacing 送入；其代价尚未在本机测量"
-                      "（跑 <code>experiments/seg_spacing.py</code> 可得）。<br>")
-        spacing_en = ("<b>1. Voxel spacing is not resampled.</b> nnU-Net's contract requires "
-                      "resampling to the training spacing first; this tool does not, and the cost "
-                      "has not been measured here (run <code>experiments/seg_spacing.py</code>).<br>")
+        # 【产物缺失≠产品没做这件事】此前这两句写的是「本工具直接按原始 spacing 送入」，
+        # 而 ai_engine.TARGET_SPACING 早已实现重采样——读不到 CSV 是一次 I/O 事件，
+        # 不能据此对产品当前行为下断言。这里只说消融数据不在场。
+        spacing_zh = ("<b>1. 体素间距（voxel spacing）的代价尚未在本机测量。</b>本工具已按 "
+                      "nnU-Net 契约把体积重采样到训练 spacing（<code>ai_engine.TARGET_SPACING"
+                      "</code>）；但这一步究竟值多少 Dice、哪些器官最先垮，需跑 "
+                      "<code>experiments/seg_spacing.py</code> 才有数——本机尚未测量。<br>")
+        spacing_en = ("<b>1. The cost of voxel spacing has not been measured here.</b> This tool "
+                      "does resample to nnU-Net's training spacing "
+                      "(<code>ai_engine.TARGET_SPACING</code>); what that step is worth in Dice, "
+                      "and which organs fail first without it, comes from "
+                      "<code>experiments/seg_spacing.py</code>, which has not been run here.<br>")
 
     # 第 2 条随样本量状态而变：多例结果在场时，"n=1" 已不成立，此处必须换成仍然
     # 成立的限制——否则卡片上半段写着 20 例、下半段还挂着 n=1，自相矛盾（截图时发现）。

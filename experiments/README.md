@@ -418,7 +418,9 @@ Cost, for anyone reproducing: 280 epochs × 120 steps took **8.4 hours** on this
 
 `val patch-Dice` at the best epoch was **0.8186**, while whole-volume scoring gave **0.4903**. A gap of 0.33 between the training metric and the evaluation metric is itself a signal; it was not chased at the time.
 
-Switching inference from `zslab_infer` (full in-plane extent, z-blocked — chosen so the student's *cost* is comparable to the teacher's) to a sliding window at the **training patch size** takes the same weights from **0.4903** to **0.7457** [0.6515, 0.8312]. On the 19 cases whose lobes occupy a normal volume, from 0.6023 to **0.8373**; lung-versus-background from 0.8573 to **0.9677**.
+Switching inference from `zslab_infer` (full in-plane extent, z-blocked — chosen so the student's *cost* is comparable to the teacher's) to a sliding window at the **training patch size** takes the same weights from **0.4903** to **0.7457** [0.6515, 0.8312]. On a 19-case subgroup, from 0.6023 to **0.8373**; lung-versus-background from 0.8573 to **0.9677**.
+
+> **That subgroup is post-hoc, and this is the only place it is defined.** No script produces it and no artefact records it; "lobes occupy a normal volume" was a description, not a rule. The five cases dropped are **`s0073`, `s0098`, `s0179`, `s0246`, `s0330`** — the five smallest by total lobe volume, with the cut falling in an empty stretch of the data between 70k and 127k voxels. A threshold placed after seeing the data is a weaker thing than a pre-registered one, and it matters here: four of those five are also among the seven worst cases by full-sample Dice (0.000, 0.005, 0.005, 0.156, 0.158), so dropping them removes most of the tail. It is not simply "drop the worst" — `s0218` (0.015) and `s0014` (0.120) score worse than two of the dropped cases and were kept — but the overlap is large enough that the subgroup figure should be read as illustrative. **The full-sample 0.4903 → 0.7457 above is the result**; both are recomputable from `seg3d_diag_ch8d3_33600s_{zslab,sliding}.csv`.
 
 Five independent controls, each removing a different competing explanation:
 
@@ -490,7 +492,7 @@ test cases carrying lung lobes (234 lobe instances):
 **Compared like for like, the gap is large and unambiguous.** Teacher and student on the same
 inference path, paired over all 234 instances: **−0.4500** [−0.4877, −0.4118], Wilcoxon
 *p* = 3.7×10⁻³⁹. A 0.35 M student does not approach a 31.2 M teacher on this task, and the
-89:1 parameter ratio buys a 2.20× speed-up while costing 1.79× peak memory.
+89:1 parameter ratio buys a 2.20× speed-up while costing 1.79× peak memory — but that memory ratio **divides a max by a mean** and should not be read as a like-for-like figure. The student artefact carries `peak_gb_max` (8.75) while `seg3d_teacher_summary.json` carries only `peak_gb_mean` (4.89), and `seg3d_report.py` silently fell back to the mean for the teacher. Compared mean-to-mean the ratio is **1.55×** (7.60 / 4.89). Both numbers are `ru_maxrss`, whose caveats are in the box at line 341; the speed-up carries the in-loop-session caveat from the same box. The silent fallback is now an explicit warning in the code, but the committed `seg3d_tradeoff.csv` predates that and still mixes the two statistics in one `peak_gb` column.
 
 **The 0.7667 is the student's own ceiling, not a comparison.** It is what the architecture reaches
 once the evaluation defect of line E is removed — but the teacher was never re-scored under a
