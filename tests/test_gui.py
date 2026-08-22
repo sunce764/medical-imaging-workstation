@@ -2858,6 +2858,68 @@ def test_confidence_map():
         ai_engine._get_session = saved
 
 
+def test_doc_code_consistency():
+    """文档不得声称与代码相反的事实，也不得写下未被实验支持的等价性判断。
+
+    这条测试的由来：曾经在同一个提交里，README 写着 recon_dl.py「never calls
+    torch.manual_seed」，而那一行正是该提交加进去的——先写描述旧状态的文档、再改
+    代码、然后没有回头核对。通读发现不了这种矛盾，因为两份文件不会被同时读到。
+    锁成断言之后，改一边忘另一边就会当场失败。
+
+    只查能机械判定的部分：关键词与代码事实的对应关系。它不能证明语义一致，也不
+    声称能——语义仍要人读。纯文本比对，不依赖 Qt 与真实数据，进 SKIP_REAL_DATA 子集。
+    """
+    print("[文档与代码一致性 doc/code consistency]")
+    import re
+
+    def rd(rel):
+        with open(os.path.join(_ROOT, rel), encoding='utf-8') as f:
+            return f.read()
+
+    recon_dl = rd('experiments/recon_dl.py')
+    seg3d_train = rd('experiments/seg3d_train.py')
+    docs = {n: rd(n) for n in ('README.md', 'README.zh-CN.md',
+                               'experiments/README.md', 'experiments/recon_dl.py')}
+
+    # ① 代码里有 torch.manual_seed 时，任何文档都不得声称它没有（反之亦然）。
+    dl_seeded = 'torch.manual_seed' in recon_dl
+    denies = [n for n, t in docs.items()
+              if re.search(r'never calls?\s+`?torch\.manual_seed|从未调用\s*`?torch\.manual_seed', t)]
+    check(not (dl_seeded and denies),
+          f"recon_dl 有 manual_seed={dl_seeded} 时无文档声称它没有（违规: {denies or '无'}）")
+
+    # ② 加种子后从未重跑比对过，因此不得出现「统计上等价」这类判断。
+    #    否定用法也一并禁止——与其给检查器开例外，不如换一种说法。
+    equiv = [n for n, t in docs.items()
+             if 'statistically equivalent' in t or '统计上相当' in t]
+    check(not equiv, f"无未经重跑支持的等价性措辞（违规: {equiv or '无'}）")
+
+    # ③ seed-fixed 只能用于训练侧 RNG 确实固定、且产物也产自固定之后的那条线。
+    #    研究四(seg3d_train)满足；研究三(recon_dl)的已提交产物早于补种子，不满足。
+    check('torch.manual_seed' in seg3d_train, "seg3d_train 确有 manual_seed（研究四标 seed-fixed 才成立）")
+    bad = [n for n in ('README.md', 'README.zh-CN.md')
+           for ln in docs[n].split('\n')
+           if 'recon_dl' in ln and ('seed-fixed' in ln or '种子固定' in ln)]
+    check(not bad, f"能力表未把研究三标成 seed-fixed（违规 {len(bad)} 行）")
+
+    # ④ 主 README 声称的 Qt-free 模块数，必须与 ARCHITECTURE 清单实际条目一致。
+    arch = rd('docs/ARCHITECTURE.md')
+    # 必须用带 —— 前缀的分隔行定位：短语 "Qt-free compute modules" 在上方那句声称里
+    # 也出现，按它切会切到声称处，[1] 落进 UI mixins 清单而不是模块清单——本测试
+    # 初版就是这么写的，于是拿 8 个 mixin 去比 9，报了一个并不存在的缺陷。
+    block = arch.split('—— Qt-free compute modules')[1]
+    block = block.split('\n', 1)[1].split('——')[0]   # 跳过分隔行自身（它首尾都有 ——）
+    listed = re.findall(r'^([a-z_0-9]+)\.py\s{2,}', block, re.M)
+    listed = [m for m in listed if m != 'constants']          # 常量表不算计算模块
+    # 解析自检：清单空了几乎必然是这段定位写错，而不是文档真的一个模块都不列。
+    # 少了这一条，解析 bug 会伪装成「文档数目对不上」，把人引去改本来正确的文档。
+    check(len(listed) >= 5, f"模块清单解析出 {len(listed)} 条（<5 说明是本测试的定位写错了）")
+    words = {'eight': 8, 'nine': 9, 'ten': 10}
+    claimed = next((v for w, v in words.items() if f'{w} Qt-free' in arch), None)
+    check(claimed == len(listed),
+          f"ARCHITECTURE 声称 {claimed} 个 Qt-free 模块，清单实有 {len(listed)} 个 {listed}")
+
+
 def test_model_card():
     """模型说明卡：数字必须来自实验产物、局限段必须在场、双语都不夹带对方语言。
 
@@ -3221,6 +3283,7 @@ def main_run():
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
+        test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
     else:
         v = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌"))
         app.processEvents()
@@ -3285,6 +3348,7 @@ def main_run():
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
+        test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0
 

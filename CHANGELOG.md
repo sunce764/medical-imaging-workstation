@@ -244,6 +244,50 @@ error was a mis-read of the wrong log file, nearly reporting the full suite as 1
 instead of 515. The pattern is identical each time — concluding before reading material
 that was already at hand, at zero cost.
 
+## Documentation-truth lock-in (2026-08)
+
+Three consecutive external audits of the published repository each found a defect the
+previous round had introduced. The pattern was always the same shape: write the prose
+describing the *current* state, then change the code, then never re-read the prose.
+
+### The worst instance, and what it produced
+
+One commit's README asserted that `recon_dl.py` "never calls `torch.manual_seed`" while
+that same commit added the call at line 217. Reading either file alone looks fine; only
+reading both together exposes it, and nothing was forcing that.
+
+`tests/test_doc_code_consistency` now asserts the mechanically checkable part of the
+relationship — a documentation claim about `torch.manual_seed` must match whether the
+call exists, no document may carry an equivalence claim ("statistically equivalent")
+that no re-run supports, Study III must not be labelled `seed-fixed` while its published
+artefacts predate the seeding, and the module count claimed in `ARCHITECTURE.md` must
+equal the number of entries actually listed there. It does **not** prove semantic
+agreement and does not claim to.
+
+### Three defects the new test found within minutes of existing
+
+Its first run failed on a module count that was, in fact, correct: the check had split
+the document on a phrase that also occurs in the sentence making the claim, so it
+compared UI mixins against the compute-module count. Fixed, it then parsed zero entries,
+because the separator line it split on carries the marker at *both* ends. A parse-result
+assertion (`>= 5 entries`) now sits in front of the comparison, so a broken locator
+reports itself as a broken locator instead of masquerading as a documentation defect —
+which is exactly how it had been wasting attention.
+
+The third came from arithmetic that did not add up: the data-independent subset went
+424 → 430 while the full suite stayed at 515. The two suites are **separate hand-maintained
+call lists**, not a superset relation, and the new test had only been added to one of
+them. Both now call it: **521 full / 430 data-independent**, both re-run and passing.
+
+### Also corrected in this round
+
+`recon_dl.py`'s header still claimed "别人跑得出同样结果" without excluding training,
+which contradicted the reproducibility note written the day before. The README claimed
+each unarchived cost figure was flagged at its point of use; they are not, and the
+disclosure is now stated as being concentrated in one paragraph. And the versions of
+`docs/manual_*.md` were deliberately **left alone** — they correspond to the V1.0
+copyright-filing snapshot, so their 515/424 figures are correct for what they describe.
+
 ## Known limitations (recorded faithfully, unfixed)
 
 - **MPR anisotropy uncorrected**: coronal/sagittal planes are displayed 1:1 by pixel; when slice thickness ≠ in-plane pixel spacing, the geometric proportions are distorted. A fix would require reworking the "scene coordinate = voxel index" mapping that runs through hover/measurement/cross-hairs — a non-surgical change whose risk outweighs its benefit, so it is recorded as a limitation. Caliper measurements use real mm, so **the measured values are correct**; only the displayed proportions do not match anatomy.

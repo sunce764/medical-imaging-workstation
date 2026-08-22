@@ -41,7 +41,7 @@ Python 3.10 · PySide6/Qt6 · **CPU-only, no GPU** · synthetic phantoms and de-
 | [`seg3d_train.py`](experiments/seg3d_train.py) · [`seg3d_eval.py`](experiments/seg3d_eval.py) | 3D U-Net trained from scratch: patient-level split (`SPLIT_SEED=0` → 207/29/61), paired evaluation, bootstrap CI, Wilcoxon | [`seg3d_student_*_zslab.csv`](experiments/results/seg3d_student_ch8d3_33600s_zslab.csv), [`seg3d_teacher_dice.csv`](experiments/results/seg3d_teacher_dice.csv) |
 | [`recon_dl.py`](experiments/recon_dl.py) | 1.9 M residual U-Net for sparse-view reconstruction, measured for hallucination rate and out-of-distribution transfer rather than RMSE alone | [`recon_dl_matrix.csv`](experiments/results/recon_dl_matrix.csv), [`recon_dl_hallucination.csv`](experiments/results/recon_dl_hallucination.csv), [`recon_dl_ood.csv`](experiments/results/recon_dl_ood.csv) |
 
-Most figures above are recomputable from the committed CSVs — but not all, so the exceptions are named rather than waved at. Parameter counts come from the two committed `.onnx` graphs; the 207/29/61 split from `seg3d_data.split()` over the manifest. Three cost figures are **single-machine measurements that were never archived**: the `8.44 / 9.09 GB` pair in Study IV, and the `100 s / 8.8 GB` → `37 s / 3.0 GB` pair for the local RIDER series. They were measured, not estimated, but nothing in `results/` lets a reader check them — each is flagged where it is quoted.
+Most figures above are recomputable from the committed CSVs — but not all, so the exceptions are named rather than waved at. Parameter counts come from the two committed `.onnx` graphs; the 207/29/61 split from `seg3d_data.split()` over the manifest. Three cost figures are **single-machine measurements that were never archived**: the `8.44 / 9.09 GB` pair in Study IV, and the `100 s / 8.8 GB` → `37 s / 3.0 GB` pair for the local RIDER series. They were measured, not estimated, but nothing in `results/` lets a reader check them. This paragraph is the single place that discloses it — the figures themselves appear in the sections above without a repeated caveat attached to each one.
 
 ## Interface
 
@@ -127,12 +127,12 @@ Three-dimensional medical volumes make memory and I/O the binding constraint lon
 ## Engineering and testing
 
 - The original God-object is decomposed into **5 UI mixins + 9 Qt-free compute modules**.
-- The full suite is **515 checks** (needs local research data); CI runs the **424 data-independent** ones, leaving interaction tests outside CI.
+- The full suite is **521 checks** (needs local research data); CI runs the **430 data-independent** ones, leaving interaction tests outside CI.
 - Reconstruction tests assert numerical correctness, not merely finite output; DICOM loading is defensive against malformed metadata.
 
 ```bash
-python tests/test_gui.py                     # full suite: 515 checks; requires local RIDER data
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 424 data-independent checks used by CI
+python tests/test_gui.py                     # full suite: 521 checks; requires local RIDER data
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 430 data-independent checks used by CI
 ruff check .                                 # lint
 coverage run tests/test_gui.py && coverage report
 ```
