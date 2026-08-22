@@ -211,9 +211,11 @@ def train_one(n_views, ntrain=600, nval=80, epochs=40, bs=8, ch=32, lr=1e-3, see
     """
     # 【torch 侧的种子也必须固定】此前只有 build_set 里的 RandomState 固定了模体
     # 数据，权重初始化与下面的 torch.randperm 打乱都没固定——同一条命令重跑会得到
-    # 统计上相当、但并非同一份的权重。seg3d_train.py:223 一直是这么做的，此处是遗漏。
-    # 已提交的 recon_dl_* 产物跑在本行加入之前，故那批结果只可重建、不可逐位复现，
-    # README 与本目录 README 均按此口径写明，不含糊过去。
+    # 另一份权重。seg3d_train.py:223 一直是这么做的，此处是遗漏。
+    # 【范围】本行只约束今后的运行。已提交的 recon_dl_* 产物跑在它加入之前，且
+    # 【尚未】用固定种子重跑并与那批产物比对过——因此既不声称二者一致，也不对
+    # 二者有多接近作任何断言，那需要一次实际的重跑作证据。README 与本目录
+    # README 均按此口径写明。
     torch.manual_seed(seed)
     xtr, ytr, _ = build_set(SEED_TRAIN, ntrain, n_views, 'ramp')
     xva, yva, lva = build_set(SEED_VAL, nval, n_views, 'ramp')

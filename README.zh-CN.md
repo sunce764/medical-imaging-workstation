@@ -41,7 +41,7 @@ Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开
 | [`seg3d_train.py`](experiments/seg3d_train.py) · [`seg3d_eval.py`](experiments/seg3d_eval.py) | 从零训练的 3D U-Net：患者级划分（`SPLIT_SEED=0` → 207/29/61）、配对评估、bootstrap CI、Wilcoxon | [`seg3d_student_*_zslab.csv`](experiments/results/seg3d_student_ch8d3_33600s_zslab.csv)、[`seg3d_teacher_dice.csv`](experiments/results/seg3d_teacher_dice.csv) |
 | [`recon_dl.py`](experiments/recon_dl.py) | 用于稀疏视角重建的 1.9M 残差 U-Net，测的不只是 RMSE，还有虚构结构率与分布外迁移 | [`recon_dl_matrix.csv`](experiments/results/recon_dl_matrix.csv)、[`recon_dl_hallucination.csv`](experiments/results/recon_dl_hallucination.csv)、[`recon_dl_ood.csv`](experiments/results/recon_dl_ood.csv) |
 
-上面多数数字可由已提交的 CSV 重算——但并非全部，故把例外逐个点名而非一笔带过：参数量来自已入库的两个 `.onnx` 计算图，207/29/61 来自 `seg3d_data.split()` 对 manifest 的划分，而研究四里的 `8.44 / 9.09 GB` 当初根本没有落盘（已在引用处标注）。
+上面多数数字可由已提交的 CSV 重算——但并非全部，故把例外逐个点名而非一笔带过。参数量来自已入库的两个 `.onnx` 计算图；207/29/61 来自 `seg3d_data.split()` 对 manifest 的划分。另有三个成本数字属于**单机实测但未归档**：研究四的 `8.44 / 9.09 GB`，以及本机 RIDER 序列的 `100s / 8.8GB` → `37s / 3.0GB`。它们是实测而非估计，但 `results/` 里没有任何东西能让读者核验——每一处都在引用点标注了。
 
 ## 界面
 
@@ -80,7 +80,7 @@ Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开
 | 直接傅里叶重建（DFR） | **按第一性原理自行实现** —— 中心切片定理：逐投影 1D FFT、极坐标到直角坐标插值、2D 逆 FFT。含偶数尺寸下的半像素修正，这处是实打实调出来的 | [`recon.py`](recon.py) |
 | Shepp-Logan 模体 | **按第一性原理自行实现** —— 十个解析椭圆叠加，而非取自图像库的位图，因而任意分辨率下无插值失真 | [`recon.py`](recon.py) |
 | 系统矩阵 · DMR · ART · SIRT | **按第一性原理自行实现** —— 逐像素构建系统矩阵并缓存；ART 为 Kaczmarz 逐射线更新，行范数预计算 | [`recon.py`](recon.py) |
-| 稀疏视角重建 CNN（1.9M） | **从零训练**，PyTorch，种子固定 | [`recon_dl.py`](experiments/recon_dl.py) |
+| 稀疏视角重建 CNN（1.9M） | **从零训练**，PyTorch。模体数据始终有种子；训练侧 RNG 是在这批结果产出*之后*才固定的 | [`recon_dl.py`](experiments/recon_dl.py) |
 | 肺叶分割 3D U-Net（0.35M） | **从零训练**，患者级划分，种子固定 | [`seg3d_train.py`](experiments/seg3d_train.py) |
 | 25 类器官分割 | **第三方权重**（TotalSegmentator v2）。溯源识别、标签映射确证、20 例与 57 例验证是本项目的工作；网络本身不是 | [`ai_engine.py`](ai_engine.py) |
 | DICOM 读写 · MPR 几何 · 定量 · 配准 | **本项目编写**，构建在 `pydicom` / `numpy` / `scipy` 之上 | [`main.py`](main.py)、[`mpr_geometry.py`](mpr_geometry.py)、[`quantify.py`](quantify.py) |
@@ -98,7 +98,7 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 - **复现研究所需的依赖多于运行 App。** `environment.yml` 装的是工作站本身运行所需；实验另需 torch / matplotlib / nibabel / onnx / remotezip，锁版见 [`experiments/requirements-experiments.txt`](experiments/requirements-experiments.txt)。
 - **两份权重属于 `artifact not distributed`**，都无法由一次普通 `git clone` 得到：
   - `models/organs.onnx.data`（119 MB）—— 第三方 TotalSegmentator v2 权重。不在此转载：本仓库的 `LICENSE` 是仅供审阅的专有许可，把 119 MB 的上游产物置于其下会模糊 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 划定的许可边界。重建方式见[架构说明 → 获取权重](docs/ARCHITECTURE.md#getting-the-weights)。缺失时分割自动降级为经典连通域算法，GUI 照常运行。
-  - `models/recon_dl_v20.onnx.data`（7.4 MB）—— 本项目自训，供研究三的学习式重建使用。不入库是因为它**可重建**——这比「可复现」弱，此处如实标明。重建需**两**步：`python experiments/recon_dl.py matrix` 训练并写出 `.pt`，再 `python experiments/recon_dl.py export` 转成 ONNX 外部权重。**重建出来的是统计上相当的模型，不是同一份权重**——模体生成有种子（`RandomState`），但 `recon_dl.py` 从未调用 `torch.manual_seed`，权重初始化与 `torch.randperm` 打乱都没有固定。缺失时重建实验室照常运行，只是 CNN 后处理那一视图不可用。
+  - `models/recon_dl_v20.onnx.data`（7.4 MB）—— 本项目自训，供研究三的学习式重建使用。不入库；重建需**两**步：`python experiments/recon_dl.py matrix` 训练并写出 `.pt`，再 `python experiments/recon_dl.py export` 转成 ONNX 外部权重。**重建结果从未与已提交产物做过比对**，因此不对二者有多接近作任何声称。模体生成一直有种子；PyTorch 侧的 RNG 此前没有，直到 `train_one` 加入 `torch.manual_seed(seed)`——那是一处只约束*今后*运行的前瞻性修复，晚于研究三的每一份已提交结果。缺失时重建实验室照常运行，只是 CNN 后处理那一视图不可用。
   - 两个 `.onnx` 计算图（44 KB 与 20 KB）**已入库**，所以即使没有权重，网络结构本身也是可查的——上文那两个参数量 31.2M 与 1.9M，正是从这两个文件重算出来的。
 
 ## 量化证据
