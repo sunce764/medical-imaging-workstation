@@ -1,6 +1,6 @@
 <h1 align="center">医学影像工作站 + 重建实验室</h1>
 
-<p align="center"><strong>CT 阅片 · AI 分割 · 可复现重建研究</strong></p>
+<p align="center"><strong>一份医学影像算法作品集</strong> —— CT 重建、三维分割，<br>以及决定这两者能不能被相信的那部分测量工作</p>
 
 <p align="center"><a href="README.md">English</a> · <strong>简体中文</strong></p>
 
@@ -31,6 +31,17 @@
 **一个没能站住的试跑结果。** 加 z 向重叠这件事，3 例试跑曾给出 **+0.205**；全量 59 例只有 **+0.0133**［+0.0072, +0.0194］。两个数字都留在这个仓库里。跑全样本的意义，正在于拦住离群值成为头条。
 
 Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开去标识研究 CT · **仓库不提交 PHI**。
+
+### 作为算法作品集来看？先看这四个文件
+
+| 文件 | 里面是什么 | 支撑产物 |
+|---|---|---|
+| [`recon.py`](recon.py) | 基于中心切片定理的直接傅里叶重建（含偶数尺寸的半像素修正）、解析 Shepp-Logan 模体，以及 DMR / ART / SIRT 求解器——均按第一性原理自行实现。Radon/FBP 调 scikit-image，下方表格逐项写明哪个是哪个 | [`exp_a_dose_quality.csv`](experiments/results/exp_a_dose_quality.csv)、[`exp_b_filters.csv`](experiments/results/exp_b_filters.csv) |
+| [`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) | 定位评估缺陷的五条对照，以及让 59 例配对比较得以放进内存的流式 z 融合 | [`_pad.csv`](experiments/results/seg3d_infer_bias_pad.csv)、[`_norm.csv`](experiments/results/seg3d_infer_bias_norm.csv)、[`_bench_A/B.csv`](experiments/results/seg3d_infer_bias_bench_B.csv) |
+| [`seg3d_train.py`](experiments/seg3d_train.py) · [`seg3d_eval.py`](experiments/seg3d_eval.py) | 从零训练的 3D U-Net：患者级划分（`SPLIT_SEED=0` → 207/29/61）、配对评估、bootstrap CI、Wilcoxon | [`seg3d_student_*_zslab.csv`](experiments/results/seg3d_student_ch8d3_33600s_zslab.csv)、[`seg3d_teacher_dice.csv`](experiments/results/seg3d_teacher_dice.csv) |
+| [`recon_dl.py`](experiments/recon_dl.py) | 用于稀疏视角重建的 1.9M 残差 U-Net，测的不只是 RMSE，还有虚构结构率与分布外迁移 | [`recon_dl_matrix.csv`](experiments/results/recon_dl_matrix.csv)、[`recon_dl_hallucination.csv`](experiments/results/recon_dl_hallucination.csv)、[`recon_dl_ood.csv`](experiments/results/recon_dl_ood.csv) |
+
+上面引用的每个数字都可由已提交的 CSV 重算；仅有的两个例外已在出现处标明。
 
 ## 界面
 
@@ -83,9 +94,12 @@ python main.py                           # 空载启动
 python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ```
 
-- **CPU-only，无需 GPU。** 在参考机器上整卷 AI 推理约需 100 秒。
+- **CPU-only，无需 GPU。** 在参考机器上，随附序列的整卷 AI 推理约需 **37 秒、峰值约 3.0GB**。证据表里的 **100s / 8.8GB** 是*修复前*的数字——spacing 消融把 nnU-Net 的重采样步骤补了回去，推理因此同时更准也更省。
 - **复现研究所需的依赖多于运行 App。** `environment.yml` 装的是工作站本身运行所需；实验另需 torch / matplotlib / nibabel / onnx / remotezip，锁版见 [`experiments/requirements-experiments.txt`](experiments/requirements-experiments.txt)。
-- 模型权重（`models/organs.onnx.data`，119 MB）**不随仓库分发**；缺失时自动降级为经典连通域算法。详见[架构说明 → 模型](docs/ARCHITECTURE.md#segmentation-model)。
+- **两份权重属于 `artifact not distributed`**，都无法由一次普通 `git clone` 得到：
+  - `models/organs.onnx.data`（119 MB）—— 第三方 TotalSegmentator v2 权重。不在此转载：本仓库的 `LICENSE` 是仅供审阅的专有许可，把 119 MB 的上游产物置于其下会模糊 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) 划定的许可边界。重建方式见[架构说明 → 获取权重](docs/ARCHITECTURE.md#getting-the-weights)。缺失时分割自动降级为经典连通域算法，GUI 照常运行。
+  - `models/recon_dl_v20.onnx.data`（7.4 MB）—— 本项目自训，供研究三的学习式重建使用。不入库是因为它完全可复现：`python experiments/recon_dl.py matrix` 以固定种子重训即可得到。缺失时重建实验室照常运行，只是 CNN 后处理那一视图不可用。
+  - 两个 `.onnx` 计算图（44 KB 与 20 KB）**已入库**，所以即使没有权重，网络结构本身也是可查的——上文那两个参数量 31.2M 与 1.9M，正是从这两个文件重算出来的。
 
 ## 量化证据
 

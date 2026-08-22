@@ -4,7 +4,7 @@ Technical reference for the module layout, the segmentation-model reverse-engine
 
 ## Module layout
 
-The main window is a `MedicalViewer` **God object** decomposed into five UI mixins plus eight Qt-free compute modules that are unit-tested in isolation.
+The main window is a `MedicalViewer` **God object** decomposed into five UI mixins plus nine Qt-free compute modules that are unit-tested in isolation.
 
 ```
 main.py            MedicalViewer + entry point (--data load, clinical render, W/L, tools, layout, AI scheduling, i18n, keyboard nav)
@@ -56,7 +56,7 @@ The label→organ mapping was originally undocumented (no `dataset.json`). It wa
 - **Input** `[1, 1, D, H, W]`, each spatial dim padded to a multiple of 32; HU clipped to `[-1000, 400]` and normalised to `[0, 1]`.
 - **Output** `[1, 25, D, H, W]` logits — take `argmax` over the class axis (not a threshold).
 - **Sliding window** along z in blocks of 32; must be run on the **full x-y frame** (a 256 centre-crop destroys global context and mislabels lung as background).
-- Full-volume inference is CPU-only, ≈ 8.8 GB peak, ≈ 100 s per volume.
+- Full-volume inference is CPU-only: **≈ 37 s at ≈ 3.0 GB peak** per volume since the spacing contract was implemented (`ai_engine.TARGET_SPACING = 1.5`). Before that fix it was ≈ 100 s at ≈ 8.8 GB — that older pair is still quoted in the evidence table as the *before* side of the ablation.
 
 ### Getting the weights
 

@@ -4,8 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "medical-imaging-workstation"
-version = "0.1.0"
-description = "Desktop CT imaging workstation (PySide6): clinical MPR viewer, from-scratch tomographic reconstruction lab, and AI multi-organ segmentation."
+# V1.0 是软著提交的快照（2026-07-08，13 个模块）；工作树已刻意领先于它，
+# 故不写 1.0.0——那会暗示当前代码就是被登记的那一版。
+version = "1.1.0.dev0"
+description = "Desktop CT imaging workstation (PySide6): clinical MPR viewer, a tomographic reconstruction lab whose DFR/DMR/ART/SIRT solvers and analytic phantom are written from first principles (Radon/FBP call scikit-image), and AI multi-organ segmentation."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary — All rights reserved" }
@@ -23,7 +25,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # 量化研究复现（App 运行不需要）
-experiments = ["matplotlib>=3.8", "nibabel>=5.0", "remotezip>=0.12"]
+experiments = ["matplotlib>=3.8", "nibabel>=5.0", "remotezip>=0.12", "torch>=2.0", "onnx>=1.16"]
 # 开发工具链
 dev = ["ruff>=0.6", "coverage>=7.0"]
 # 从 docs/manual_zh.md 生成说明书 PDF（另需本机 Google Chrome，见 docs/build_manual_pdf.py）
@@ -37,6 +39,8 @@ py-modules = [
     "main", "recon", "ai_engine", "constants", "graphics_view",
     "annotation_lab", "compare_lab", "interaction", "recon_lab", "ui_builder",
     "quantify", "segmentation", "mpr_geometry",
+    # 以下 5 个晚于软著 V1.0 快照，此前一直漏在列表外
+    "followup", "projection", "mesh3d", "registration", "model_card",
 ]
 
 [tool.ruff]

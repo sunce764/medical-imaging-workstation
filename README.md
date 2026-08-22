@@ -1,6 +1,6 @@
 <h1 align="center">Medical Imaging Workstation + Reconstruction Lab</h1>
 
-<p align="center"><strong>CT reading · AI segmentation · reproducible reconstruction research</strong></p>
+<p align="center"><strong>A medical-imaging algorithm portfolio</strong> — CT reconstruction, 3D segmentation,<br>and the measurement work that decides whether either can be believed</p>
 
 <p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
@@ -31,6 +31,17 @@
 **A pilot result that did not survive.** A 3-case pilot advertised **+0.205** for adding z-overlap; the full 59-case split says **+0.0133** [+0.0072, +0.0194]. Both numbers are in this repository. The full-split run exists precisely to stop an outlier from becoming the headline.
 
 Python 3.10 · PySide6/Qt6 · **CPU-only, no GPU** · synthetic phantoms and de-identified public research CTs · **no PHI is committed**.
+
+### Reviewing this as an algorithm portfolio? Start with these four files
+
+| File | What it holds | Backing artefacts |
+|---|---|---|
+| [`recon.py`](recon.py) | Direct Fourier reconstruction from the central-slice theorem (incl. the half-pixel correction for even sizes), the analytic Shepp-Logan phantom, and the DMR / ART / SIRT solvers — all written from first principles. Radon/FBP call scikit-image; the table below says which is which | [`exp_a_dose_quality.csv`](experiments/results/exp_a_dose_quality.csv), [`exp_b_filters.csv`](experiments/results/exp_b_filters.csv) |
+| [`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) | The five controls that located the evaluation defect, and the streaming z-fusion that made the paired 59-case comparison fit in memory | [`_pad.csv`](experiments/results/seg3d_infer_bias_pad.csv), [`_norm.csv`](experiments/results/seg3d_infer_bias_norm.csv), [`_bench_A/B.csv`](experiments/results/seg3d_infer_bias_bench_B.csv) |
+| [`seg3d_train.py`](experiments/seg3d_train.py) · [`seg3d_eval.py`](experiments/seg3d_eval.py) | 3D U-Net trained from scratch: patient-level split (`SPLIT_SEED=0` → 207/29/61), paired evaluation, bootstrap CI, Wilcoxon | [`seg3d_student_*_zslab.csv`](experiments/results/seg3d_student_ch8d3_33600s_zslab.csv), [`seg3d_teacher_dice.csv`](experiments/results/seg3d_teacher_dice.csv) |
+| [`recon_dl.py`](experiments/recon_dl.py) | 1.9 M residual U-Net for sparse-view reconstruction, measured for hallucination rate and out-of-distribution transfer rather than RMSE alone | [`recon_dl_matrix.csv`](experiments/results/recon_dl_matrix.csv), [`recon_dl_hallucination.csv`](experiments/results/recon_dl_hallucination.csv), [`recon_dl_ood.csv`](experiments/results/recon_dl_ood.csv) |
+
+Every figure quoted above is recomputable from the committed CSVs; the two exceptions are labelled where they appear.
 
 ## Interface
 
@@ -83,9 +94,12 @@ python main.py                           # start without loading data
 python main.py --data /path/to/dicom_dir # or load a DICOM directory at launch
 ```
 
-- **CPU-only; no GPU is required.** Full-volume AI inference takes about 100 seconds on the reference machine.
+- **CPU-only; no GPU is required.** Full-volume AI inference on the bundled series takes about **37 s at ≈3.0 GB peak** on the reference machine. The **100 s / 8.8 GB** quoted in the evidence table is the *pre-fix* figure — the spacing ablation put nnU-Net's resampling step back in, which made inference both more accurate and cheaper.
 - **Reproducing the studies needs more than the app does.** `environment.yml` installs what the workstation itself runs on; the experiments additionally need torch / matplotlib / nibabel / onnx / remotezip, pinned in [`experiments/requirements-experiments.txt`](experiments/requirements-experiments.txt).
-- Model weights (`models/organs.onnx.data`, 119 MB) are **not distributed in the repository**. Without them, segmentation falls back to a classical connected-component algorithm. See [Architecture → Model](docs/ARCHITECTURE.md#segmentation-model).
+- **Two weight blobs are `artifact not distributed`**, and neither is recoverable from a plain `git clone`:
+  - `models/organs.onnx.data` (119 MB) — third-party TotalSegmentator v2 weights. Not redistributed here: this repository's own `LICENSE` is review-only, and re-hosting a 119 MB upstream artefact under it would muddy the licence boundary that [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) draws. Rebuild it by exporting from upstream — see [Architecture → Getting the weights](docs/ARCHITECTURE.md#getting-the-weights). Without it, segmentation falls back to a classical connected-component algorithm and the GUI still runs.
+  - `models/recon_dl_v20.onnx.data` (7.4 MB) — trained here, for Study III's learned reconstruction. Not committed because it is fully reproducible: `python experiments/recon_dl.py matrix` retrains it from a fixed seed. Without it the reconstruction lab still runs; only the CNN post-processing view is unavailable.
+  - The committed `.onnx` graphs (44 KB and 20 KB) **are** in the repository, so the architectures are inspectable even when the weights are not — the 31.2 M and 1.9 M parameter counts quoted above were recomputed from exactly these two files.
 
 ## Measured evidence
 

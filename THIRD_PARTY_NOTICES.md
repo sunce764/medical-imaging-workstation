@@ -32,8 +32,11 @@ tasks "require a separate license (free for non-commercial use; contact upstream
 task must be re-verified; do not extrapolate from this entry.**
 
 **Redistribution obligations (per Apache-2.0 §4)**:
-- **§4(a) requires providing recipients with a copy of the Apache-2.0 license** — this file's links and this
-  section serve that purpose; for the full text see <https://www.apache.org/licenses/LICENSE-2.0>.
+- **§4(a) requires providing recipients with a copy of the Apache-2.0 license** — the complete, unmodified
+  text is included in this repository at [`licenses/APACHE-2.0.txt`](licenses/APACHE-2.0.txt), so the
+  obligation is met by the distribution itself rather than by an external link. (Canonical copy:
+  <https://www.apache.org/licenses/LICENSE-2.0>. Earlier revisions of this file offered only the link,
+  which is weaker than what §4(a) asks for.)
 - **§4(b) statement of modification**: `models/organs.onnx` is **not the original upstream file**, but a
   computation graph exported from the upstream weights via `torch.onnx` (the exporter string is
   `pytorch 2.11.0`). This modification is hereby stated.
