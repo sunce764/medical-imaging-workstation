@@ -347,6 +347,26 @@ class AnnotationMixin:
         """
         if self.recon_mode_active or self.compare_mode_active:
             return
+        # 标注体系是【按 axial 层号】存、且 _render_annotations 只在 AXIAL 平面调用。
+        # 在冠/矢状面画出来的标注会被存到当前 axial 层号下、按 axial 的 spacing 换算
+        # 毫米、再画到另一个视图的不同解剖上——实测拖动中显示 60.0 mm、落库后变
+        # 20.0 mm。与其静默产出错误数字，不如在入口拒绝并说明。
+        src = self.sender()
+        plane = next((vd['plane'] for vd in self.views.values()
+                      if vd['view'] is src), AXIAL)
+        if plane != AXIAL:
+            if not getattr(self, '_warned_nonaxial_anno', False):
+                self._warned_nonaxial_anno = True
+                e = self.is_english
+                QMessageBox.information(
+                    self, "Axial only" if e else "仅支持横断面",
+                    ("Annotations are stored and rendered per axial slice, so they can only be "
+                     "drawn in an Axial view. The measurement you just made was discarded rather "
+                     "than saved against the wrong slice. Switch a view to Axial and try again.")
+                    if e else
+                    ("标注按横断面（Axial）层号存储与绘制，因此只能在 Axial 视图中标注。"
+                     "刚才那一笔已被丢弃，而不是错存到别的层上。请把某个视图切到 Axial 后重试。"))
+            return
         tk = 'all' if self.chk_global_scope.isChecked() else self.current_3d_pos[0]
         if tk not in self.global_annotations:
             self.global_annotations[tk] = []
@@ -450,6 +470,26 @@ class AnnotationMixin:
                 raw = json.load(f)
             if not isinstance(raw, dict):
                 return
+            meta = raw.pop('__meta__', None)
+            saved_uid = (meta or {}).get('series_uid', '') if isinstance(meta, dict) else ''
+            cur_uid = self._current_series_uid()
+            if saved_uid and cur_uid and saved_uid != cur_uid:
+                # 明确是另一序列：拒绝。标注坐标按切片号存，套到同形状的另一序列上
+                # 会落在完全不同的解剖上，而测距/ROI 会照样给出数字。
+                print(f"标注文件属于另一序列（{saved_uid} != {cur_uid}），已跳过加载：{af}")
+                e = self.is_english
+                QMessageBox.information(
+                    self, "Annotations not loaded" if e else "标注未加载",
+                    ("A saved annotation file exists for this patient, but it belongs to a "
+                     "different series and was not loaded — its slice indices would land on "
+                     "different anatomy here. It is left on disk, untouched.") if e else
+                    ("本患者存在已保存的标注文件，但它属于另一个序列，故未加载"
+                     "——其切片号在当前序列上对应的是不同解剖。原文件保留在磁盘上，未改动。"))
+                return
+            if not saved_uid:
+                # 旧版本产物没有 UID。与蒙版不同，标注是用户手工产出、无法重算，
+                # 故这里选择加载而非拒绝，但把「未能确认序列」如实说出来。
+                print(f"标注文件未记录 SeriesInstanceUID（旧版本产物），无法确认序列归属：{af}")
             for k, v in raw.items():
                 # JSON 键只能是字符串，数字键需要转回 int
                 key = int(k) if isinstance(k, str) and k.isdigit() else k
@@ -505,7 +545,12 @@ class AnnotationMixin:
         os.makedirs(ed, exist_ok=True)
         try:
             with open(os.path.join(ed, f"{pid}_annotations.json"), 'w', encoding='utf-8') as f:
-                json.dump({str(k): v for k, v in self.global_annotations.items()}, f, indent=4)
+                # 与蒙版同理记录 SeriesInstanceUID：文件按 PatientID 命名，同一患者的
+                # 随访/复扫序列会共用文件名。放在保留键 __meta__ 下——切片键都是数字
+                # 字符串或 'all'，不会冲突；旧文件没有该键，加载端按「无法确认」处理。
+                json.dump({'__meta__': {'series_uid': self._current_series_uid()},
+                           **{str(k): v for k, v in self.global_annotations.items()}},
+                          f, indent=4)
             # 一并保存 AI 多器官分割标签图，下次加载可直接恢复，免掉 ~100s 重算。
             # 必须连同 SeriesInstanceUID 一起写入：加载时据此确认是同一序列，
             # 避免把同一患者另一序列（随访/复扫）的蒙版张冠李戴（见 mask_cache_matches）。

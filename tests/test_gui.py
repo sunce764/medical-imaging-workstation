@@ -3084,6 +3084,84 @@ def test_confidence_map():
         ai_engine._get_session = saved
 
 
+def test_zero_grade_guards(app, m):
+    """四条会产出错误数字/错误影像的缺陷的回归锁。均无需真实数据。
+
+    由来：一轮子代理审查报出九条「归零级」缺陷，而当时 498 项回归**一条都没覆盖**。
+    共性是「静默给出一个看起来正常、实则错误的数」，正是最难靠肉眼发现的一类。
+    """
+    print("[归零级守卫：spacing 缺省 / 撤销栈 / NaN 排序 / 非 Axial 标注]")
+    from PySide6.QtGui import QPixmap
+
+    from constants import AXIAL, CORONAL
+
+    v = m.MedicalViewer(); app.processEvents()
+    if v.ai_thread:
+        v.ai_thread.cancel()
+
+    # ① set_image 的 pixel_spacing 缺省必须是「保持」而非「覆盖」。
+    #    曾缺省 (1.0,1.0) 并无条件赋值，于是 compare_lab 刷新蒙版时把真实间距抹平：
+    #    同样 100 像素，临床模式 69.9 mm、对比模式 99.9 mm。
+    view = v.views[1]['view']
+    view.pixel_spacing = (0.7, 0.7)
+    view.set_image(QPixmap(8, 8))                      # 不传 spacing
+    check(view.pixel_spacing == (0.7, 0.7),
+          f"set_image 不传 spacing 时保持原值（得 {view.pixel_spacing}）")
+    view.set_image(QPixmap(8, 8), None, (1.5, 1.5))    # 显式传才覆盖
+    check(view.pixel_spacing == (1.5, 1.5),
+          f"显式传入才覆盖（得 {view.pixel_spacing}）")
+
+    # ② AI 回调整卷换蒙版必须清撤销栈。栈里是推理【开始前】的切片快照，
+    #    推理期间用户可以画笔编辑；不清的话一次 Ctrl+Z 会把该层 AI 分割整层抹掉。
+    v.volume_hu = np.zeros((3, 4, 4), np.float32)
+    v.volume_mask = np.zeros((3, 4, 4), np.uint8)
+    v._mask_undo = [(0, np.zeros((4, 4), np.uint8), None)]
+    v._ai_generation = 0
+    v.recon_mode_active = True          # 抑制 update_display（无 DICOM 时会越界），只验状态
+    try:
+        v.on_auto_ai_finished(np.ones((3, 4, 4), np.uint8), 1.0, generation=0)
+    finally:
+        v.recon_mode_active = False
+    check(v._mask_undo == [],
+          f"AI 结果落地后撤销栈被清空（剩 {len(v._mask_undo)} 条）")
+    check(bool(v.volume_mask.any()), "AI 蒙版确实落地了（前一条不是因为没跑到）")
+
+    # ③ DICOM 排序守卫必须显式查有限性：float('nan') 不抛异常，
+    #    NaN 会安静通过 try，整列按 NaN 排序后解剖顺序彻底乱掉。
+    class _DS:
+        def __init__(self, z):
+            self.ImagePositionPatient = [0.0, 0.0, z]
+
+    for val, want, tag in ((1.0, True, '有限值'), (float('nan'), False, 'NaN'),
+                           (float('inf'), False, '+Inf'), (None, False, 'None')):
+        check(m.has_finite_ipp(_DS(val)) is want,
+              f"has_finite_ipp({tag}) = {m.has_finite_ipp(_DS(val))}（期望 {want}）")
+    check(m.has_finite_ipp(type('X', (), {})()) is False, "缺 IPP 标签 → False")
+    # 序列级统一：只要有一层不可用，整列就必须回退 InstanceNumber
+    mixed = [_DS(2.0), _DS(float('nan')), _DS(1.0)]
+    check(not all(m.has_finite_ipp(d) for d in mixed),
+          "混入一层 NaN 即整列判为不可按解剖 z 排序（防逐切片混排）")
+
+    # ④ 非 Axial 平面的标注必须被拒绝，而不是按 axial 层号错存。
+    v.dicom_datasets = []
+    v.volume_hu = np.zeros((3, 4, 4), np.float32)
+    v.current_3d_pos = [1, 0, 0]
+    v.global_annotations = {}
+    v._warned_nonaxial_anno = True          # 抑制模态框，只验状态
+    v.views[1]['plane'] = CORONAL
+    v.views[1]['view'].annotation_added.emit(
+        {'id': 'x1', 'type': 'ruler', 'p1': [0, 0], 'p2': [3, 3]})
+    app.processEvents()
+    check(all(not vv for vv in v.global_annotations.values()) or not v.global_annotations,
+          f"冠状面标注被拒绝，未入库（现有 {v.global_annotations}）")
+    v.views[1]['plane'] = AXIAL
+    v.views[1]['view'].annotation_added.emit(
+        {'id': 'x2', 'type': 'ruler', 'p1': [0, 0], 'p2': [3, 3]})
+    app.processEvents()
+    check(any(a['id'] == 'x2' for lst in v.global_annotations.values() for a in lst),
+          "横断面标注正常入库（守卫未误伤）")
+
+
 def test_model_checksums():
     """models/CHECKSUMS.sha256 必须与实际文件一致，且与 ARCHITECTURE 表格逐行对应。
 
@@ -3651,6 +3729,7 @@ def main_run():
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
         test_sampling_density()       # 纯 recon.make_theta，无 Qt / 真实数据
+        test_zero_grade_guards(app, m)  # 归零级守卫：合成数据，无真实数据依赖
         test_model_checksums()        # 权重摘要清单与文档一致：纯文本 + 已入库 .onnx
         test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
     else:
@@ -3721,6 +3800,7 @@ def main_run():
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
+        test_zero_grade_guards(app, m)  # 归零级守卫：合成数据，无真实数据依赖
         test_model_checksums()        # 权重摘要清单与文档一致：纯文本 + 已入库 .onnx
         test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))

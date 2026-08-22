@@ -236,7 +236,7 @@ class MedicalGraphicsView(QGraphicsView):
             painter.drawText(W - m - ofm.horizontalAdvance(o['right']), H // 2 + ofm.ascent() // 2, o['right'])
         painter.restore()
 
-    def set_image(self, pixmap, mask_qimg=None, pixel_spacing=(1.0, 1.0)):
+    def set_image(self, pixmap, mask_qimg=None, pixel_spacing=None):
         """更新当前视图的影像和蒙版。
 
         fitInView 守卫逻辑：
@@ -246,7 +246,12 @@ class MedicalGraphicsView(QGraphicsView):
           保留医生的放大查看状态——这是医学影像工作站的基本用户体验要求。
         """
         self.image_item.setPixmap(pixmap)
-        self.pixel_spacing = pixel_spacing
+        # None = 保持现有间距。缺省曾是 (1.0, 1.0) 并【无条件覆盖】，于是任何
+        # 不传该参数的调用（compare_lab 刷新蒙版、显示单张图）都会把真实间距抹成
+        # 1 mm/px：同样 100 像素，临床模式量得 69.9 mm，对比模式量得 99.9 mm。
+        # 覆盖是显式行为，缺省必须是无副作用的。
+        if pixel_spacing is not None:
+            self.pixel_spacing = pixel_spacing
         rect = pixmap.rect()
         # sceneRect 必须随图像尺寸更新，否则 fitInView 会基于旧尺寸计算缩放比，
         # 导致多平面（冠状/矢状面）分辨率不同时显示错位
@@ -259,7 +264,7 @@ class MedicalGraphicsView(QGraphicsView):
             self.mask_item.show()
         else:
             self.mask_item.hide()
-        if abs(pixel_spacing[0] - pixel_spacing[1]) > 1e-9:
+        if abs(self.pixel_spacing[0] - self.pixel_spacing[1]) > 1e-9:
             # 各向异性（冠/矢状面：层厚≠面内像素间距）：按物理尺寸做非均匀适配，
             # 使显示比例符合解剖。每次都重适配（MPR 面不保留 Ctrl 缩放，可接受）。
             self._apply_aniso_fit()

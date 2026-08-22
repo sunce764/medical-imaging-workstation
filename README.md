@@ -127,12 +127,12 @@ Three-dimensional medical volumes make memory and I/O the binding constraint lon
 ## Engineering and testing
 
 - The original God-object is decomposed into **5 UI mixins + 9 Qt-free compute modules**.
-- On the author's machine the full suite is **588 checks** and `SKIP_REAL_DATA=1` reaches **498**. **A clean CI runner reaches fewer — currently 479** — and the gap is not flakiness: it is checks that need artefacts a clean clone does not have (the undistributed `.onnx.data` blobs and `.pt` checkpoints), which simply do not execute there. That figure is a *prediction with a validated method* rather than a guess: running `SKIP_REAL_DATA=1` inside a fresh clone reproduces CI's count exactly — at commit `7a09744` the clone gives **458**, which is what [CI actually logged](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32590281440) there. The run log remains the authority; this number is what that method predicts the next run will show. What stays out of CI is everything requiring the RIDER series or those blobs — *not* the interaction layer, which is covered in CI through synthesised DICOM and synthesised mouse/wheel events.
+- On the author's machine the full suite is **600 checks** and `SKIP_REAL_DATA=1` reaches **510**. **A clean CI runner reaches fewer — currently 491** — and the gap is not flakiness: it is checks that need artefacts a clean clone does not have (the undistributed `.onnx.data` blobs and `.pt` checkpoints), which simply do not execute there. That figure is a *prediction with a validated method* rather than a guess: running `SKIP_REAL_DATA=1` inside a fresh clone reproduces CI's count exactly — at commit `7a09744` the clone gives **458**, which is what [CI actually logged](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32590281440) there. The run log remains the authority; this number is what that method predicts the next run will show. What stays out of CI is everything requiring the RIDER series or those blobs — *not* the interaction layer, which is covered in CI through synthesised DICOM and synthesised mouse/wheel events.
 - Reconstruction tests assert numerical correctness, not merely finite output; DICOM loading is defensive against malformed metadata.
 
 ```bash
-python tests/test_gui.py                     # full suite: 588 locally; requires local RIDER data
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 498 locally; 479 on a clean CI runner (see above)
+python tests/test_gui.py                     # full suite: 600 locally; requires local RIDER data
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 510 locally; 491 on a clean CI runner (see above)
 ruff check .                                 # lint
 coverage run tests/test_gui.py && coverage report
 ```

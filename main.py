@@ -45,6 +45,23 @@ from recon_lab import ReconLabMixin
 from ui_builder import UiBuilderMixin
 
 
+def has_finite_ipp(ds) -> bool:
+    """该 dataset 是否带有【有限的】ImagePositionPatient[2]（DICOM 排序键的可用性判据）。
+
+    必须显式查有限性：`float('nan')` 不抛异常，NaN 会安静地通过 try/except，
+    于是整列按 NaN 排序——而 NaN 与任何数比较均为 False，排序结果彻底乱掉，
+    解剖顺序错乱且无任何告警。compare_lab._zpos_array 已按同一理由加了 isfinite，
+    排序这条路当时漏了。
+
+    排序键必须【序列级统一】：全部 dataset 都有有限 z 才按解剖 z 排，
+    否则整列回退 InstanceNumber，绝不逐切片混排。
+    """
+    try:
+        return math.isfinite(float(ds.ImagePositionPatient[2]))
+    except Exception:
+        return False
+
+
 def _int_tag(ds, name, default=0):
     """读 DICOM 的整数标签，空值与非法值一律回落到 default。
 
@@ -641,16 +658,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # 逐切片回退（部分切片缺 ImagePositionPatient）会把缺位置信息的层按序号插进有位置
         # 信息的层之间，打乱解剖顺序。因此先做序列级判定——所有切片都含 z 坐标才按 z 排序，
         # 否则整列统一回退 InstanceNumber（序列内单调的采集序号）。
-        def _has_ipp(ds):
-            # 必须显式查有限性：float('nan') 不抛异常，NaN 会安静地通过 try，
-            # 于是整列按 NaN 排序、解剖顺序彻底乱掉（NaN 与任何数比较均为 False）。
-            # compare_lab._zpos_array 已按同一理由加了 isfinite，排序这条路当时漏了。
-            try:
-                return math.isfinite(float(ds.ImagePositionPatient[2]))
-            except Exception:
-                return False
-
-        if all(_has_ipp(ds) for ds in self.dicom_datasets):
+        if all(has_finite_ipp(ds) for ds in self.dicom_datasets):
             self.dicom_datasets.sort(key=lambda ds: float(ds.ImagePositionPatient[2]))
         else:
             self.dicom_datasets.sort(key=lambda ds: _int_tag(ds, 'InstanceNumber'))
@@ -854,6 +862,12 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self._ai_state = 'done'
         self._ai_time_ms = time_ms
         self.volume_mask = final_mask
+        # 整卷换蒙版必须同时清撤销栈：栈里存的是【推理开始前】那一版的切片快照，
+        # 推理期间用户完全可以画笔编辑（无任何守卫阻止）。不清的话，AI 回来后
+        # 按一次 Ctrl+Z 就会把该层的 AI 分割整层覆盖回旧快照——器官体积静默变小
+        # 而界面无任何提示。重置(_reset)与换病例(load_data)两处早已这么做，
+        # 这条路径当时漏了。
+        self._mask_undo = []
         # 逐体素置信度由引擎作为实例属性带出（见 ai_engine.confidence 的说明）。
         # 形状不符或走了数学降级路径时置 None——定量表据此决定是否显示置信度列。
         self._ai_resampled = getattr(self.ai_thread, 'resampled_from', None)

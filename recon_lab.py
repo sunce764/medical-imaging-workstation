@@ -186,8 +186,19 @@ class ReconLabMixin:
             return None, None
         img = self.volume_hu[self.current_3d_pos[0]]
         denom = img.max() - img.min()
-        norm = (img - img.min()) / (denom if denom > 0 else 1.0)
-        return norm.astype(np.float32), ("Origin" if self.is_english else "原图")
+        if not np.isfinite(denom) or denom <= 0:
+            # 均匀切片（空白定位像、全空气层）：归一化没有意义，重建出来必是全黑，
+            # 而耗时栏照样报成功。直接判为不可重建，由调用方给提示。
+            return None, None
+        norm = (img - img.min()) / denom
+        norm = norm.astype(np.float32)
+        # 与 recon.prepare_small_image 同一处理：radon(circle=True) 只作用于内切圆，
+        # 圆外像素根本不进弦图。不掩膜的话 V1 展示的「真值」含有重建永远拿不到的
+        # 内容，误差图便把这部分算成算法误差——实测圆内 FBP 峰值差达显示范围的 26.9%，
+        # 而 skimage 的警告只进 stderr，界面上看不到。
+        norm = norm * recon_lib._circle_mask(norm.shape[0]) if norm.shape[0] == norm.shape[1] \
+            else norm
+        return norm, ("Origin" if self.is_english else "原图")
 
     def toggle_phantom(self):
         """载入/卸下内置 Shepp-Logan 模体。
@@ -590,7 +601,14 @@ class ReconLabMixin:
             QApplication.processEvents()
             return prog_iter.wasCanceled()
 
+        # done[0] 记实际完成的迭代数：两个求解器都在 cancel 时 break，但只返回
+        # (图, 耗时)，调用方无从得知跑了几轮。中途取消后若照 n_iter 报告，标题与
+        # 耗时会同时失真（实测 3 轮的结果被标成 50it，RMSE 差 17 倍、耗时差 20 倍），
+        # 而这正是本实验室要教的对比量。progress_cb 每完成一轮调用一次，故 last+1。
+        done = [0]
+
         def _progress(it):
+            done[0] = it + 1
             prog_iter.setValue(it + 1)
             QApplication.processEvents()
 
@@ -602,6 +620,7 @@ class ReconLabMixin:
                 A, p_vec, n, n_iter, cancel_check=_cancel, progress_cb=_progress)
 
         prog_iter.close()
+        n_done = done[0]                   # 实际完成轮数；未取消时等于 n_iter
 
         self._last_recon_img = img_recon   # 供"生成弦图"按钮对重建结果做正向投影
         error_map = np.abs(img_small - img_recon)
@@ -614,5 +633,12 @@ class ReconLabMixin:
         self.set_view_title(1, f"V1 [Orig {n}x{n}]" if self.is_english else f"V1 [原始 {n}x{n}]")
         self.set_view_title(2, "V2 [Sinogram]" if self.is_english else "V2 [投影弦图]")
         self.set_view_title(3, f"V3 [Error RMSE={rmse:.4f}]")
-        self.set_view_title(4, f"V4 [{method} {n_iter}it {n}x{n}]")
-        self.lbl_time.setText(f"{method} ({n_iter}it): {t_ms:.1f} ms" if self.is_english else f"{method} ({n_iter}次迭代)耗时: {t_ms:.1f} ms")
+        _cancelled = n_done < n_iter
+        _tag = f"{n_done}/{n_iter}it" if _cancelled else f"{n_iter}it"
+        self.set_view_title(4, f"V4 [{method} {_tag} {n}x{n}]"
+                            + (" (cancelled)" if _cancelled and self.is_english else
+                               "（已取消）" if _cancelled else ""))
+        _sfx = ((f"  ← cancelled, not the {n_iter}-iteration result" if self.is_english
+                 else f"  ← 已取消，非 {n_iter} 次迭代的结果") if _cancelled else "")
+        self.lbl_time.setText((f"{method} ({_tag}): {t_ms:.1f} ms" if self.is_english
+                               else f"{method} ({_tag} 迭代)耗时: {t_ms:.1f} ms") + _sfx)
