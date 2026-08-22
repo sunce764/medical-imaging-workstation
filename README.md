@@ -16,8 +16,8 @@
 
 - **Written from first principles** — direct Fourier reconstruction via the central-slice theorem, the analytic Shepp-Logan phantom, and the DMR / ART / SIRT iterative solvers.
 - **Two networks trained from scratch** — a 1.9 M residual U-Net for sparse-view reconstruction, and a 0.35 M 3D U-Net for lung lobes.
-- **A shipped model that arrived with no documented origin** — identified by measurement, then validated against public ground truth across 297 CTs.
-- **Four quantitative studies, two multi-case validations, and an ablation that changed the product** — the experiments call the production code, not a reimplementation.
+- **A shipped model that arrived with no documented origin** — identified by measurement, then validated against public ground truth on 20- and 57-case samples drawn from a 297-case public dataset.
+- **Four quantitative studies, two multi-case validations, and an ablation that changed the product** — the reconstruction studies `import recon` and call the same functions the GUI does; the segmentation studies replicate `ai_engine`'s pipeline step-for-step and run the very same `organs.onnx`.
 
 > [!WARNING]
 > **Teaching and research only.** This software is not a certified medical device and must not be used for clinical diagnosis. AI segmentation and organ measurements are automated estimates, not clinical findings.
@@ -46,7 +46,7 @@ Python 3.10 · PySide6/Qt6 · **CPU-only, no GPU** · synthetic phantoms and de-
 |:---:|:---:|
 | ![Built-in phantom reconstruction](docs/img/gui_recon_phantom.png) | ![Model card](docs/img/gui_model_card_en.png) |
 
-The **built-in Shepp-Logan phantom** makes the whole reconstruction pipeline usable with nothing imported — V3 is unfiltered back-projection (a blur), V4 the filtered version resolving the same phantom down to its smallest lesions. Because the phantom's ground truth is known analytically, the error view measures distance to the truth rather than to another reconstruction. The **model card** states how the model's identity was established by measurement, how far it has been validated, and what remains unmeasured; every number on it is read live from `experiments/results/`, so re-running an experiment updates the card.
+The **built-in Shepp-Logan phantom** makes the whole reconstruction pipeline usable with nothing imported — V3 is unfiltered back-projection (a blur), V4 the filtered version resolving the same phantom down to its smallest lesions. Because the phantom's ground truth is known analytically, the error view measures distance to the truth rather than to another reconstruction. The **model card** states how the model's identity was established by measurement, how far it has been validated, and what remains unmeasured; every measured figure on it is read live from `experiments/results/`, so re-running an experiment updates the card.
 
 > Screenshots use **TotalSegmentator-CT-Lite** (CC-BY-4.0), a de-identified public research dataset; no PHI is committed to this repository. The phantom and model-card views need no data at all.
 
@@ -89,7 +89,7 @@ python main.py --data /path/to/dicom_dir # or load a DICOM directory at launch
 
 ## Measured evidence
 
-The experiments call the shipped production pipeline rather than a separate reimplementation. Studies I–III and the spacing ablation are documented in the [technical report](docs/technical_report.md); **Study IV is newer than that report** and lives, with every script and committed output, under [`experiments/`](experiments/README.md).
+What the experiments measure is the shipped pipeline, at two different degrees of directness: the reconstruction work `import recon`s and calls the GUI's own functions, while the segmentation work replicates `ai_engine`'s preprocessing and sliding-window inference step-for-step against the very same `organs.onnx`. Study IV's student is a separate model trained from scratch, and its product-line measurements replicate the shipped inference path rather than calling it. Studies I–III and the spacing ablation are documented in the [technical report](docs/technical_report.md); **Study IV is newer than that report** and lives, with every script and committed output, under [`experiments/`](experiments/README.md).
 
 | Evidence track | Measured finding | Scope and boundary |
 |---|---|---|
