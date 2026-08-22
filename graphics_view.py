@@ -341,6 +341,11 @@ class MedicalGraphicsView(QGraphicsView):
             self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
             z = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
             self.scale(z, z)
+            # 必须在这里置位：resizeEvent 用 _user_zoomed 判断该不该重新 fitInView，
+            # 而全仓库【没有一处把它设为 True】——于是那道守卫从未生效，医生放大到某个
+            # 结节后拖一下分割条或改一下窗口大小，缩放就被打回原状。翻片之所以能保住
+            # 缩放，是 set_image 另有一条按 m11≈1 判断的守卫，与本标志无关。
+            self._user_zoomed = True
         else:
             self.wheel_scrolled.emit(event.angleDelta().y())
 

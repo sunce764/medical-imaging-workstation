@@ -52,7 +52,7 @@ class ReconLabMixin:
             self.set_view_title(1, "V1 [Ground Truth]" if self.is_english else "V1 [真实切片]")
         self._set_recon_pending_titles()
         for v in self.views.values():
-            v['cb_plane'].hide(); v['preset'].hide(); v['chk_anno'].hide(); v['lock'].hide()
+            v['cb_plane'].hide(); v['preset'].hide(); v['chk_anno'].hide()
         self.update_display()
 
     def _exit_recon_mode(self):
@@ -66,7 +66,7 @@ class ReconLabMixin:
             v['view'].mask_item.setPixmap(QPixmap())
             v['view'].resetTransform()
             v['view'].setRenderHint(QPainter.SmoothPixmapTransform, True)
-            v['cb_plane'].show(); v['preset'].show(); v['chk_anno'].show(); v['lock'].show()
+            v['cb_plane'].show(); v['preset'].show(); v['chk_anno'].show()
             self.set_view_title(vid, f"V{vid}")
         prev = self._pre_recon_layout
         self._apply_grid_visibility(prev)

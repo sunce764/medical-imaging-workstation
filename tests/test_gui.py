@@ -743,9 +743,18 @@ def test_recon_numerics():
     err_dmr = float(np.abs(dmr - img).max())
     check(err_dmr < 1e-4, f"DMR 满秩无噪系统精确还原：max|err| = {err_dmr:.2e}")
     check(ms >= 0.0, f"DMR 返回耗时 {ms:.1f} ms")
-    key = (n_s, len(theta_s), round(float(theta_s[0]), 4), round(float(theta_s[-1]), 4))
+    # 键由 build_system_matrix 自己给出，不在测试里复刻它的构成——此前这里手拼
+    # (n, 角度数, 首, 尾)，于是缓存键的定义改动测试无法发现，而「首尾相同、中间不同」
+    # 的角度表撞键这个缺陷，恰恰就藏在那个定义里。
+    _, key = R.build_system_matrix(n_s, theta_s, A, None)
     A_c, key_c = R.build_system_matrix(n_s, theta_s, A, key)
     check(A_c is A and key_c == key, "build_system_matrix 命中内存缓存直接复用（不重建、不起子进程）")
+    # 长度、首、尾全同但中间不同的两张角度表必须给出不同的键，否则会静默复用错矩阵
+    ta = np.array([0, 60, 120, 150, 170], float)
+    tb = np.array([0, 5, 10, 15, 170], float)
+    ka = R.build_system_matrix(n_s, ta, A, None)[1]
+    kb = R.build_system_matrix(n_s, tb, A, None)[1]
+    check(ka != kb, f"首尾相同、中间不同的角度表不撞键（{ka} vs {kb}）")
     # ---- 6) ART / SIRT：迭代应收敛，误差随迭代下降 ----
     stop = {"n": 0}
     def _cancel(): stop["n"] += 1; return True          # 定义在循环外：避免闭包捕获循环变量（ruff B023）

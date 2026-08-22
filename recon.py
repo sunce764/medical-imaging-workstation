@@ -173,6 +173,21 @@ def compute_fbp(sinogram: np.ndarray, theta: np.ndarray, filter_name: str) -> tu
 # DFR（直接傅里叶重建）
 # -------------------------------------------------------------------------
 
+def _theta_fingerprint(theta) -> str:
+    """把整张角度表压成 8 位十六进制指纹，用于缓存键。
+
+    【为什么不能只用 (长度, 首, 尾)】那三项相同的角度表可以完全不同：
+    [0,60,120,150,170] 与 [0,5,10,15,170] 长度、首、尾全同。实测撞键的后果——
+    DFR 三角剖分缓存复用错剖分，整幅重建图相对峰值差 196%；system matrix 直接原样
+    返回上一张 A，两者逐元素最大差 1.06，而且它还【落盘】，跨进程跨会话持久生效。
+    当前所有调用方都经 make_theta 产出均匀 linspace，对均匀网格 (首,尾,点数) 是单射，
+    所以此前没出事；但任何一次「换个角度表」的实验设计变更都会静默复用错矩阵，
+    而错的是结果本身，不会报错。
+    """
+    a = np.ascontiguousarray(np.asarray(theta, dtype=np.float64))
+    return hashlib.sha1(a.tobytes()).hexdigest()[:8]
+
+
 def compute_dfr(sinogram: np.ndarray, theta: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """直接傅里叶重建法（DFR），基于傅里叶中心切片定理。
 
@@ -223,8 +238,7 @@ def compute_dfr(sinogram: np.ndarray, theta: np.ndarray) -> tuple[np.ndarray, np
     # 缓存复用避免每次 griddata 重做剖分（DFR 主要瓶颈）。
     # 数学完全等价：LinearNDInterpolator(tri, values) 与
     # griddata(points, values, ..., method='linear') 用相同三角剖分 + 重心插值算法。
-    tri_key = (num_detectors, len(theta),
-               round(float(theta[0]), 4), round(float(theta[-1]), 4))
+    tri_key = (num_detectors, len(theta), _theta_fingerprint(theta))
     tri = _DFR_TRI_CACHE.get(tri_key)
     if tri is None:
         tri = Delaunay(points)
@@ -396,19 +410,19 @@ def build_system_matrix(n: int, theta: np.ndarray, cached_A: np.ndarray | None,
       A:   系统矩阵，shape=(n_rays, n²)，float32
       key: 本次计算的缓存键
 
-    缓存键 = (n, 角度数, 起始角, 终止角)；图像尺寸和角度配置不变时直接复用。
+    缓存键 = (n, 角度数, 整张角度表的 sha1 指纹)；见 _theta_fingerprint 说明为何不能只取首尾。
     64×64 × 180角的 A 矩阵约需数分钟构建，缓存节省大量等待时间。
     """
-    key = (n, len(theta), round(float(theta[0]), 4), round(float(theta[-1]), 4))
+    key = (n, len(theta), _theta_fingerprint(theta))
     if cached_A is not None and cached_A_key == key:
         return cached_A, key
 
-    # 磁盘缓存命中：A 矩阵在 (n, n_angles, θ_start, θ_end) 完全相同时是确定值，
+    # 磁盘缓存命中：A 矩阵在 (n, n_angles, 角度表指纹) 完全相同时是确定值，
     # 第一次算完后写盘，之后所有进程启动都可秒级 np.load 复用，无任何精度损失。
     # 文件名嵌入 _WORKER_HASH：worker 代码改动后哈希变，旧缓存被自然忽略（无需手动清理）。
     cache_file = os.path.join(
         _MATRIX_CACHE_DIR,
-        f"A_n{key[0]}_na{key[1]}_t{key[2]:.4f}_{key[3]:.4f}_{_WORKER_HASH}.npy"
+        f"A_n{key[0]}_na{key[1]}_th{key[2]}_{_WORKER_HASH}.npy"
     )
     if os.path.exists(cache_file):
         try:

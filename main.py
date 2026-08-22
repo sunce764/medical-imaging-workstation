@@ -330,7 +330,6 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             vdata['sp_thick'].setSuffix(" sl" if e else " 层")
             vdata['sp_thick'].setToolTip("Slab thickness in slices" if e else "投影层块厚度（层数）")
             vdata['chk_anno'].setText("Anno" if e else "显示")
-            vdata['lock'].setText("Lock" if e else "锁定")
 
         # 三个解析重建按钮的「为什么禁用」提示（DMR/ART 自造弦图故不在此列）
         for _b in (self.btn_dfr, self.btn_bp, self.btn_fbp):
@@ -484,7 +483,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         for b in [self.btn_dmr, self.btn_art]: b.setEnabled(has_data)
         for v in self.views.values():
             v['cb_plane'].setCurrentIndex(AXIAL)
-            v['preset'].setCurrentIndex(0); v['lock'].setChecked(False)
+            v['preset'].setCurrentIndex(0)
             v['chk_anno'].setChecked(True)
             v['view']._user_zoomed = False
             v['view'].fitInView(v['view'].scene.sceneRect(), Qt.KeepAspectRatio)

@@ -517,9 +517,12 @@ class UiBuilderMixin:
         cb_proj.currentIndexChanged.connect(lambda i, s=sp_thick: (s.setEnabled(i > 0), self.update_display()))
         sp_thick.valueChanged.connect(self.update_display)
         an = QCheckBox(); an.setObjectName("ViewOption"); an.setChecked(True); an.stateChanged.connect(self.update_display)
-        lk = QCheckBox(); lk.setObjectName("ViewOption"); lk.stateChanged.connect(self.update_display)
+        # 曾经这里还有一个「锁定 / Lock」复选框：只被创建、改文案、复位与显隐，
+        # 全仓库【没有一处读它的 isChecked()】——它连着 update_display，点一下会重绘
+        # 一帧，看着像有反应，实际什么也没锁。阅片软件里「锁定」有明确的语义预期，
+        # 摆一个不生效的开关比不摆更糟，故删除而非留着待实现。
         tl.addWidget(lt); tl.addWidget(cb_plane); tl.addWidget(ps); tl.addWidget(cb_proj); tl.addWidget(sp_thick)
-        tl.addStretch(); tl.addWidget(an); tl.addWidget(lk)
+        tl.addStretch(); tl.addWidget(an)
         v = MedicalGraphicsView(vid)
         v.clicked_pos.connect(lambda p, id=vid: self.measure_hu(p, id))
         v.wheel_scrolled.connect(lambda d, id=vid: self.on_wheel_mpr(d, id))
@@ -531,7 +534,7 @@ class UiBuilderMixin:
         v.mouse_hovered.connect(lambda pos, id=vid: self.sync_crosshair(pos, id))
         v.seg_paint_requested.connect(lambda pts, er, id=vid: self.handle_seg_paint(id, pts, er))
         lay.addWidget(t); lay.addWidget(v); t.raise_()
-        self.views[vid] = {'container':c, 'cb_plane': cb_plane, 'preset':ps, 'lock':lk, 'chk_anno':an, 'view':v, 'plane': plane, 'title_label': lt,
+        self.views[vid] = {'container':c, 'cb_plane': cb_plane, 'preset':ps, 'chk_anno':an, 'view':v, 'plane': plane, 'title_label': lt,
                            'cb_proj': cb_proj, 'sp_thick': sp_thick}
         cb_plane.currentIndexChanged.connect(lambda idx, v_id=vid: self.change_view_plane(v_id, idx))
 
