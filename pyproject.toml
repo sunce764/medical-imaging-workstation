@@ -24,6 +24,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# 【版本口径】本文件全篇用 >= 声明下界，不是锁版。确切锁版以 requirements.txt 与
+# experiments/requirements-experiments.txt 为准（那里是 ==），已提交的 results/
+# 由那些确切版本跑出——experiments 实测环境为 torch==2.11.0、onnx==1.21.0。
 # 量化研究复现（App 运行不需要）
 experiments = ["matplotlib>=3.8", "nibabel>=5.0", "remotezip>=0.12", "torch>=2.0", "onnx>=1.16"]
 # 开发工具链

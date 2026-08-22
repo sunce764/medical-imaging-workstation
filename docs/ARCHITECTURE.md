@@ -25,6 +25,7 @@ followup.py        follow-up comparison metrics (HU difference map + per-slice s
 projection.py      slab projection (MIP / MinIP / AIP) across the three planes
 mesh3d.py          organ surface reconstruction (marching cubes), shape features, numpy renderer (drives the drag-to-rotate preview), STL export
 registration.py    2-D rigid registration (phase correlation + rotation search) with an NCC safety valve
+model_card.py      model card: reads experiments/results/ live and renders provenance, validated scope and unmeasured limits
 constants.py       tool / plane constants + multi-organ palette
 —— resources ——
 style.qss          dark theme
@@ -33,7 +34,7 @@ models/organs.onnx segmentation model graph (external weights not committed — 
 
 ### Design: why the compute modules are Qt-free
 
-Anything numerically testable is factored out of the Qt widgets into a pure module (`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d` / `registration`), so it can be exercised with synthetic data in the data-independent test subset — no display, no real DICOM, no 119 MB weights. New testable logic follows the same pattern rather than being buried in a Qt- or data-dependent path.
+Anything numerically testable is factored out of the Qt widgets into a pure module (`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d` / `registration` / `model_card`), so it can be exercised with synthetic data in the data-independent test subset — no display, no real DICOM, no 119 MB weights. New testable logic follows the same pattern rather than being buried in a Qt- or data-dependent path.
 
 ## Segmentation model
 
@@ -56,7 +57,7 @@ The label→organ mapping was originally undocumented (no `dataset.json`). It wa
 - **Input** `[1, 1, D, H, W]`, each spatial dim padded to a multiple of 32; HU clipped to `[-1000, 400]` and normalised to `[0, 1]`.
 - **Output** `[1, 25, D, H, W]` logits — take `argmax` over the class axis (not a threshold).
 - **Sliding window** along z in blocks of 32; must be run on the **full x-y frame** (a 256 centre-crop destroys global context and mislabels lung as background).
-- Full-volume inference is CPU-only: **≈ 37 s at ≈ 3.0 GB peak** per volume since the spacing contract was implemented (`ai_engine.TARGET_SPACING = 1.5`). Before that fix it was ≈ 100 s at ≈ 8.8 GB — that older pair is still quoted in the evidence table as the *before* side of the ablation.
+- Full-volume inference is CPU-only. On **the one local RIDER series this was measured on** (233 slices, 0.713 mm in-plane), it takes **≈ 37 s at ≈ 3.0 GB peak** since the spacing contract was implemented (`ai_engine.TARGET_SPACING = 1.5`); before that fix the same series took ≈ 100 s at ≈ 8.8 GB, which is the *before* side quoted in the README's evidence table. Both are single-series measurements, not a per-volume average — after resampling, cost tracks the scanned field of view rather than the acquisition spacing.
 
 ### Getting the weights
 
