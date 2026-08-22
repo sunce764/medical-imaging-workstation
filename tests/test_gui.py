@@ -2910,7 +2910,9 @@ def test_doc_code_consistency():
     affirms = [n for n, t in docs.items()
                if re.search(r'gained\s+`?torch\.manual_seed|加入\s*`?torch\.manual_seed'
                             r'|now takes `seed=0` and pins|RNG was pinned|pinned only after'
-                            r'|RNG 是在.*才固定|AST-detected', t)]
+                            r'|RNG 是在.*才固定', t)]   # 不含 AST-detected：
+    # 那是在介绍检查机制，不是在声称调用当前存在——把它算作肯定陈述，会让
+    # 「将来合法删除 seed 并同步了所有事实文档」的情形反被这条断言判为违规。
     check(not (dl_seeded and denies),
           f"recon_dl 有 manual_seed 时无文档声称它没有（违规: {denies or '无'}）")
     # 只在断言真被触发时才列文件名：前件为假时列出来会让一条 PASS 看着像有问题。

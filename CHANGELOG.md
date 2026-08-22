@@ -255,8 +255,9 @@ self-check is part of it — commenting out the real call must flip the AST verd
 string search still matches. Scope is deliberately narrow: it covers the wordings currently in
 use rather than every possible phrasing, and it does not prove semantic agreement.
 
-`main_run` dispatches to two hand-maintained call lists (data-independent / full) that are
-**not** a superset relation, so a test added to one silently skips the other.
+`main_run` dispatches to two **separately hand-maintained** call lists (data-independent /
+full). The full list does currently contain every data-independent test, but it does not
+*inherit* them — a test added to one list silently skips the other until both are edited.
 
 ## Known limitations (recorded faithfully, unfixed)
 
