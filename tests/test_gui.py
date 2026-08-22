@@ -2895,7 +2895,8 @@ def test_doc_code_consistency():
     recon_dl = rd('experiments/recon_dl.py')
     seg3d_train = rd('experiments/seg3d_train.py')
     docs = {n: rd(n) for n in ('README.md', 'README.zh-CN.md', 'experiments/README.md',
-                               'experiments/recon_dl.py', 'docs/technical_report.md')}
+                               'experiments/recon_dl.py', 'docs/technical_report.md',
+                               'CHANGELOG.md')}
 
     # ① 文档关于 torch.manual_seed 的说法必须与代码事实一致——【两个方向都要拦】。
     #    初版只拦了「代码有、文档说没有」，而注释里却写着「反之亦然」，于是这个
@@ -2903,15 +2904,27 @@ def test_doc_code_consistency():
     dl_seeded = calls_manual_seed(recon_dl)
     denies = [n for n, t in docs.items()
               if re.search(r'never calls?\s+`?torch\.manual_seed|从未调用\s*`?torch\.manual_seed', t)]
+    # 【覆盖范围有限，如实说明】这里匹配的是【目前文档里实际用过的】几种措辞，
+    # 不是「任何声称已加入种子的说法」。换一种写法就可能漏——所以本测试只声称
+    # 「覆盖已知措辞的双向检查」，不声称锁死了全部文档表述。
     affirms = [n for n, t in docs.items()
                if re.search(r'gained\s+`?torch\.manual_seed|加入\s*`?torch\.manual_seed'
-                            r'|now takes `seed=0` and pins', t)]
+                            r'|now takes `seed=0` and pins|RNG was pinned|pinned only after'
+                            r'|RNG 是在.*才固定|AST-detected', t)]
     check(not (dl_seeded and denies),
           f"recon_dl 有 manual_seed 时无文档声称它没有（违规: {denies or '无'}）")
     # 只在断言真被触发时才列文件名：前件为假时列出来会让一条 PASS 看着像有问题。
     _bad = affirms if not dl_seeded else []
     check(not _bad, "recon_dl 无 manual_seed 时无文档声称已加入"
                     + (f"（违规: {_bad}）" if _bad else "（当前代码确有调用，此向不适用）"))
+
+    # ①b 变异自检：把真实调用注释掉之后，AST 判定必须翻转为 False，而字符串搜索
+    #     仍会报 True。没有这一条，「AST 比字符串搜索强」就只是注释里的一句声称。
+    mutated = recon_dl.replace('    torch.manual_seed(seed)\n',
+                               '    # torch.manual_seed(seed)\n')
+    check(mutated != recon_dl and not calls_manual_seed(mutated)
+          and 'torch.manual_seed' in mutated,
+          "变异自检：注释掉调用后 AST 翻转为 False，而字符串搜索仍为 True")
 
     # ② 加种子后从未重跑比对过，因此不得出现「统计上等价」这类判断。
     #    否定用法也一并禁止——与其给检查器开例外，不如换一种说法。

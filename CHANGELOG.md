@@ -246,29 +246,17 @@ that was already at hand, at zero cost.
 
 ## Documentation-truth lock-in (2026-08)
 
-**A documentation claim is now a testable assertion.** Prose describing the code used to be
-verified by reading, which fails in one specific way: you write the description, then change
-the code, and nothing forces you back to the description. It produced a README asserting that
-`recon_dl.py` "never calls `torch.manual_seed`" in the same commit that added the call.
-`tests/test_doc_code_consistency` (in the CI subset) now asserts the mechanically checkable
-part — whether a documented claim about `torch.manual_seed` matches an **AST-detected** call
-in *both* directions, that no document carries an equivalence claim no re-run supports, that
-Study III is not labelled `seed-fixed` while its published artefacts predate the seeding, and
-that the module count claimed in `ARCHITECTURE.md` equals the entries actually listed. It does
-not prove semantic agreement and does not claim to. AST rather than string search is load-
-bearing: deleting the real call while leaving the name in a comment keeps a text match alive,
-and was verified to be caught only by the AST form.
+`tests/test_doc_code_consistency` (CI subset) turns documentation claims about the code into
+assertions: a documented claim about the training seed must match an **AST-detected** call in
+both directions; no document may carry an equivalence claim that no re-run supports; Study III
+may not be labelled seed-fixed while its published artefacts predate the seeding; and the
+module count claimed in `ARCHITECTURE.md` must equal the entries it actually lists. A mutation
+self-check is part of it — commenting out the real call must flip the AST verdict while a plain
+string search still matches. Scope is deliberately narrow: it covers the wordings currently in
+use rather than every possible phrasing, and it does not prove semantic agreement.
 
-**A parse failure must report itself as a parse failure.** The same test's first version located
-its input by splitting on a phrase that also appears in the sentence making the claim, and
-reported a documentation defect in a document that was correct. A parse-result assertion now
-precedes the comparison, so a broken locator cannot masquerade as a finding and send someone
-off to "fix" accurate prose.
-
-**The two suites are separate hand-maintained call lists.** `main_run` dispatches to a
-data-independent list and a full list; they are not a superset relation. A new test added to one
-silently skips the other — caught here only because the subset moved 424 → 430 while the full
-suite stayed at 515. Both now call it: **522 full / 431 data-independent** (the 430/521 pair above is the count at the moment the gap was spotted; a later assertion added one to each).
+`main_run` dispatches to two hand-maintained call lists (data-independent / full) that are
+**not** a superset relation, so a test added to one silently skips the other.
 
 ## Known limitations (recorded faithfully, unfixed)
 
