@@ -15,6 +15,10 @@ Third-party components integrated by this project (e.g., the TotalSegmentator /
 nnU-Net segmentation model graph, PySide6/Qt, pydicom, NumPy, SciPy,
 scikit-image, ONNX Runtime, nibabel) remain under their respective licenses and
 copyrights; see THIRD_PARTY_NOTICES.md. The 119 MB model weights
-(organs.onnx.data) and any patient/DICOM data are NOT part of this repository.
+(organs.onnx.data) are NOT part of this repository, and neither is any raw
+DICOM or NIfTI image data, nor any identifiable personal health information
+(PHI). Screenshots and figures in the documentation are rendered from public,
+de-identified human CT (TotalSegmentator-CT-Lite, CC-BY-4.0) and from synthetic
+phantoms; the underlying images are of real patients, de-identified at source.
 
 To request permission for any use beyond review, contact the copyright holders.

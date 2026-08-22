@@ -95,13 +95,27 @@ Versions are pinned by `requirements.txt` / `experiments/requirements-experiment
 Copyright and licenses of the above components remain with their respective authors; this project has not
 modified their source and does not distribute their code or binaries with the repository.
 
-**To be confirmed (LGPL)**: this project `import`s PySide6 as pure Python source and **does not statically link
-or distribute any Qt binaries**. Under this form, the precise scope of the LGPL-3.0 obligations (whether the LGPL
-license text must accompany the distribution, whether a "relinkable" notice must be provided), and its
-compatibility with this repository's `LICENSE` ("All rights reserved" — a review-only, proprietary-style
-license), **are not resolved in this file** — the adversarial verification of this question could not be
-completed, and it is a legal judgment. **It should be confirmed before publishing the repository or distributing
-externally.**
+**LGPL scope, stated for the form this repository actually takes.** Earlier revisions of this file left the
+question open and told the reader to settle it "before publishing the repository". The repository has since been
+published, so leaving a pre-publication gate standing would misdescribe the situation. What can be stated as
+fact, and what remains a legal judgment, are separated here.
+
+*Fact, about the current publication form.* This repository distributes its own Python source only. It
+`import`s PySide6 at runtime, and **contains no Qt or PySide6 binaries, no statically linked artefacts, and no
+bundled or frozen executable** — a reader obtains PySide6 themselves from PyPI under the licence of their
+choosing. LGPL-3.0 obligations attach to *conveying* the library or a combined work containing it; this
+repository conveys neither, so on its face no LGPL distribution obligation is triggered by publishing it in
+this form. That is the reason no LGPL licence text is reproduced here, in contrast to `licenses/APACHE-2.0.txt`,
+which is reproduced precisely because that obligation *does* attach.
+
+*Open, and deliberately not answered here.* If this project were ever shipped as a bundle that includes Qt —
+a PyInstaller/py2app build, a wheel with binaries, an installer — then LGPL-3.0 §4 would apply to that bundle,
+and its requirements (notably that the recipient be able to relink or replace the Qt library, plus the
+accompanying notices and licence text) would have to be reconciled with this repository's `LICENSE`, which is
+review-only and proprietary in style. Our reading is that §4 is designed to permit exactly that combination —
+proprietary application code over a replaceable LGPL library — but **this is a legal question and nothing here
+is legal advice**; it would need counsel before any binary distribution. No such distribution exists or is
+planned, so the question is recorded as a known boundary of the current form, not as an unmet condition.
 
 ---
 

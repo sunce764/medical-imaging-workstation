@@ -50,7 +50,7 @@ The architecture was confirmed from the ONNX tensor names and structure:
 
 ### Provenance — measured, not assumed
 
-The label→organ mapping was originally undocumented (no `dataset.json`). It was **recovered by measurement**: the model was run on one ground-truth-labelled public CT (TotalSegmentator-CT-Lite, 1.5 mm isotropic) and a label-overlap confusion matrix was computed against the ground truth. This yields an **identity diagonal** — model label *k* → the *k*-th organ — establishing the model as **TotalSegmentator v2 `class_map_part_organs`** (24 organs + background). Over the 21 organs present, mean **Dice ≈ 0.92** on that case. A later 20-case run puts the patient-level mean at **0.909, 95% CI [0.889, 0.927]** — the single case was mildly optimistic but within the interval. Per-organ reliability varies far more than the aggregate suggests: liver 0.982 and spleen 0.976 at one end, right upper lung lobe 0.773 and prostate 0.554 at the other. See [`experiments/seg_multi.py`](../experiments/README.md). The experiment also corrected two earlier label errors: label 5 is **liver** (not heart), and the lung lobes are `10,11` = **left** and `12,13,14` = **right**. Reproduce via [`experiments/seg_validate.py`](../experiments/README.md).
+The label→organ mapping was originally undocumented (no `dataset.json`). It was **recovered by measurement**: the model was run on one ground-truth-labelled public CT (TotalSegmentator-CT-Lite, 1.5 mm isotropic) and a label-overlap confusion matrix was computed against the ground truth. This yields an **identity diagonal** — model label *k* → the *k*-th organ — which measures the label scheme to be **TotalSegmentator v2 `class_map_part_organs`** (24 organs + background). Two claims are worth keeping apart here: the *label mapping* is a measurement, and the code depends only on it; that these weights are that exact upstream release is an inference drawn from the mapping, the nnU-Net v2 layer names and the exporter string, and it is strong but not a cryptographic identification — see [Getting the weights](#getting-the-weights). Over the 21 organs present, mean **Dice ≈ 0.92** on that case. A later 20-case run puts the patient-level mean at **0.909, 95% CI [0.889, 0.927]** — the single case was mildly optimistic but within the interval. Per-organ reliability varies far more than the aggregate suggests: liver 0.982 and spleen 0.976 at one end, right upper lung lobe 0.773 and prostate 0.554 at the other. See [`experiments/seg_multi.py`](../experiments/README.md). The experiment also corrected two earlier label errors: label 5 is **liver** (not heart), and the lung lobes are `10,11` = **left** and `12,13,14` = **right**. Reproduce via [`experiments/seg_validate.py`](../experiments/README.md).
 
 ### Inference contract
 
@@ -62,6 +62,19 @@ The label→organ mapping was originally undocumented (no `dataset.json`). It wa
 ### Getting the weights
 
 The repository ships only the graph, so without `organs.onnx.data` the model cannot load and segmentation falls back to the classical algorithm in `segmentation.py`. To obtain the weights: install [TotalSegmentator](https://github.com/wasserth/TotalSegmentator) (v2, `class_map_part_organs` task), take its nnU-Net weights, and export to ONNX external-data format with `torch.onnx`; the resulting `.data` must sit next to the `.onnx`. Upstream licensing is summarised in [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md).
+
+**What is recorded, and what is not.** Every model-derived number in this repository was produced by one specific pair of files. Their SHA-256 digests are committed in [`models/CHECKSUMS.sha256`](../models/CHECKSUMS.sha256) and verify from the repository root with `shasum -a 256 -c models/CHECKSUMS.sha256`. What the ONNX graph itself carries — and therefore what anyone can re-read from the committed 44 KB file — is:
+
+| Property | `organs.onnx` | `recon_dl_v20.onnx` |
+|---|---|---|
+| SHA-256 (graph, committed) | `360b7b97…61809e` | `b4dd27e0…f6921c` |
+| SHA-256 (`.data`, **not** committed) | `0b96b9d1…d312ce` (124,878,848 B) | `76a183ea…7a6e55` (7,733,248 B) |
+| Exporter | `pytorch` 2.11.0 | `pytorch` 2.11.0 |
+| ONNX IR / opset | 10 / 16 | 10 / 17 |
+| Input | `input_image` `[1, 1, depth, height, width]` | `fbp` `[n, 1, h, w]` |
+| Output | `output_mask` `[1, 25, …]`, spatial dims padded up to a multiple of 32 | `recon` `[n, 1, h, w]` |
+
+Three things are **not** recorded, and no amount of re-reading the file recovers them: the exact upstream TotalSegmentator release tag or checkpoint filename the weights were taken from, the export script and its arguments, and any digest published by upstream to compare against. The export predates this repository's provenance discipline; `experiments/seg3d_data.py`, which pins a dataset commit and checksums every file it downloads, is what that discipline looks like once it existed. The practical consequence is stated plainly: a third party who exports their own weights from upstream can reasonably expect a functionally equivalent model, but **cannot verify byte-identity with the blob these numbers came from** unless they obtain that blob itself and match the digest above. The `recon_dl_v20` pair has the mirror-image problem — it was trained here, but before `train_one` pinned the PyTorch RNG, so re-training is not expected to reproduce those bytes either.
 
 ## AI inference threading
 

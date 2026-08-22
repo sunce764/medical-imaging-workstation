@@ -3,8 +3,8 @@
     "model": "models/organs.onnx",
     "num_classes": 25,
     "architecture": "nnU-Net v2 PlainConvUNet (3D 全分辨率)：decoder.encoder.stages.* + decoder.seg_layers.* 命名，6级编码器通道[32,64,128,256,320,320]，5级下采样(输入 pad 到 32 倍数)，InstanceNorm+LeakyReLU，PyTorch2.11 torch.onnx 导出。",
-    "provenance": "已确证 = TotalSegmentator v2 的 class_map_part_organs（24 器官 + 背景）。由单例带真值公开数据 TotalSegmentator-CT-Lite(s0029，1.5mm 各向同性，thorax-abdomen-pelvis) 实测：GUI 同款滑窗推理输出与真值逐标签重叠为完美对角线，21 个在场器官平均 Dice≈0.92，label 1-21 与官方方案精确一一对应。见 experiments/seg_validate.py 与 experiments/results/seg_confusion.png。",
-    "label_scheme": "TotalSegmentator class_map_part_organs（恒等映射，实测非推断）",
+    "provenance": "标签方案已实测 = TotalSegmentator v2 的 class_map_part_organs（24 器官 + 背景）；被实测的是标签映射本身，「这份权重即该上游 release」是由此得出的强推断而非密码学证明（见 docs/ARCHITECTURE.md 的 Getting the weights）。由单例带真值公开数据 TotalSegmentator-CT-Lite(s0029，1.5mm 各向同性，thorax-abdomen-pelvis) 实测：GUI 同款滑窗推理输出与真值逐标签重叠为完美对角线，21 个在场器官平均 Dice≈0.92，label 1-21 与官方方案精确一一对应。见 experiments/seg_validate.py 与 experiments/results/seg_confusion.png。",
+    "label_scheme": "TotalSegmentator class_map_part_organs（恒等映射，映射本身为实测）",
     "corrections": "推翻旧推断：label 5 是【肝】而非心脏（本模型无心脏/主动脉输出，二者在 TS 的另一 part，编号 51/52，超出 0-24）；肺叶 10,11=【左】(上/下)，12,13,14=【右】(上/中/下)——旧标注左右判反系放射惯例镜像所致。",
     "validation_note": "1-21 号为 s0029 实测 Dice；22-24(前列腺/左右肾囊肿)本例真值缺席，身份由已证方案确定。"
   },

@@ -51,7 +51,7 @@ TS_TOTAL = {
     17: "thyroid", 18: "small_bowel", 19: "duodenum", 20: "colon",
     21: "urinary_bladder",
     # 22-24 在原表中缺失，导致多例统计里这三类只显示为 "?"（本例真值恰无它们，
-    # 单例研究里没暴露）。身份由已确证的 class_map_part_organs 方案确定。
+    # 单例研究里没暴露）。身份由已实测的 class_map_part_organs 映射方案确定。
     22: "prostate", 23: "kidney_cyst_L", 24: "kidney_cyst_R",
     51: "heart", 52: "aorta",
 }

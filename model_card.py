@@ -182,16 +182,19 @@ def build_model_card(is_english=False):
     L.append(
         "TotalSegmentator v2 <code>class_map_part_organs</code> (24 organs + background), "
         "nnU-Net v2 PlainConvUNet, 3D full-resolution.<br>"
-        "The shipped ONNX carries <i>no</i> metadata naming its origin. The identity above was "
+        "The shipped ONNX carries <i>no</i> metadata naming its origin. The label scheme above was "
         "not read off a label file — it was <b>measured</b>: running the model on a public CT "
         "that ships with ground truth and computing the label-overlap confusion matrix yields a "
-        "clean diagonal.<br><br>"
+        "clean diagonal. What that measures is the <b>mapping</b>, which is all the software uses; "
+        "that these weights are that exact upstream release follows from it by inference, not by "
+        "any published checksum.<br><br>"
         if en else
         "TotalSegmentator v2 <code>class_map_part_organs</code>（24 器官 + 背景），"
         "nnU-Net v2 PlainConvUNet，3D 全分辨率。<br>"
-        "随附的 ONNX <i>没有任何</i>标明出处的元数据。上述身份不是从标签文件里读来的，"
+        "随附的 ONNX <i>没有任何</i>标明出处的元数据。上述标签方案不是从标签文件里读来的，"
         "而是<b>实测</b>出来的：拿一例自带真值的公开 CT 跑推理，与真值算标签重叠混淆矩阵，"
-        "得到干净的对角线。<br><br>")
+        "得到干净的对角线。被实测的是<b>标签映射</b>，也正是软件唯一依赖的部分；"
+        "「这份权重即该上游 release」是由此推出的，没有上游公布的校验和可对。<br><br>")
 
     L.append(f"<b>{'Measured accuracy' if en else '实测准确度'}</b><br>")
     if mo:

@@ -1,6 +1,6 @@
 # Quantitative Studies: Reconstruction + AI Segmentation
 
-This directory upgrades the main application's two major AI/algorithm capabilities from **feature implementations** into **quantitative studies**. Two qualifiers belong in this first sentence rather than buried later: the reconstruction studies are phantom-only, while the segmentation work runs on **public, de-identified human CT** (real patients, no identifiable information, nothing committed to this repository); and reproducibility differs by study rather than holding across all of them — **Study I** regenerates exactly from seeded code; **Study II** is a deterministic evaluation whose *input identity* was never pinned (`seg_validate.py` fetched its case through a mutable `/resolve/main` reference and the SHA256 of those files was never recorded, which is exactly the defect `seg3d_data.py` later fixed with a pinned commit and per-file checksums); **Study III**'s PyTorch RNG was pinned only after its published results were produced, so re-training has not been shown to reproduce them. The figures and metrics below:
+This directory upgrades the main application's two major AI/algorithm capabilities from **feature implementations** into **quantitative studies**. Two qualifiers belong in this first sentence rather than buried later: the reconstruction studies are phantom-only, while the segmentation work runs on **public, de-identified human CT** (real patients, no identifiable information, nothing committed to this repository); and reproducibility differs by study rather than holding across all of them — **Study I** regenerates exactly from seeded code; **Study II** is a deterministic evaluation whose *input identity* was never pinned (`seg_validate.py` fetched its case through a mutable `/resolve/main` reference and the SHA256 of those files was never recorded, which is exactly the defect `seg3d_data.py` later fixed with a pinned commit and per-file checksums); **Study III**'s PyTorch RNG was pinned only after the results reported here were produced, so re-training has not been shown to reproduce them. ("Reported" throughout this repository means reported *here* — nothing in this project has been peer-reviewed or published in a venue; `docs/preprint_recon.md` is a draft written in academic format and labelled as such.) The figures and metrics below:
 
 - **Study I (reconstruction)** — uses the standard Shepp-Logan phantom to measure how `recon.py` reconstruction quality varies with dose / filter / algorithm.
 - **Study II (AI segmentation)** — uses a ground-truth-labelled public CT (TotalSegmentator-CT-Lite) to measure the Dice of `organs.onnx`, and to *recover by measurement* its 25-class label mapping.
@@ -13,6 +13,7 @@ This directory upgrades the main application's two major AI/algorithm capabiliti
 python experiments/recon_study.py           # Experiments A + B (fast, pure FBP)
 python experiments/recon_study.py c          # Experiment C (needs to build the system matrix; slow the first time, then served from disk cache)
 python experiments/recon_study.py a b c      # run all
+python experiments/recon_cond.py             # Experiment C′ (SVD of C's system matrices; reuses the same cache)
 ```
 
 Outputs are written to `experiments/results/`: one PNG figure plus one CSV of raw data per experiment.
@@ -56,7 +57,7 @@ At low dose / sparse angles, apodisation filters (hann/hamming) that suppress hi
 | 90 | 0.087 | 0.090 | **0.050** | 0.075 |
 
 1. **ART is best throughout** — the non-negativity constraint plus per-ray (Kaczmarz) updates act as implicit regularisation, making it the most robust under noise.
-2. **Naive least-squares (DMR) is unstable under noise**, with RMSE spiking to **0.611** at 60 views: here 64 detectors × 60 views ≈ 3,840 equations ≈ 4,096 unknowns, so the system is nearly square and its **condition number is worst**, amplifying noise most violently; the 30-view case (under-determined, minimum-norm solution) and the 90-view case (over-determined, with an averaging effect) are by contrast more stable. This is the classic behaviour of an ill-posed inverse problem, not an implementation defect.
+2. **Naive least-squares (DMR) is unstable under noise**, with RMSE spiking to **0.611** at 60 views: here 64 detectors × 60 views gives 3,840 equations for 4,096 unknowns, so the system is nearly square, while the 30-view case (under-determined, minimum-norm solution) and the 90-view case (over-determined, with an averaging effect) are more stable. This is the classic behaviour of an ill-posed inverse problem, not an implementation defect. **This bullet used to end "and its condition number is worst there"; that was never measured, and when it finally was, it turned out to be wrong** — see C′ below.
 3. **SIRT is steady and conservative** (~0.075), far more robust than DMR; the price of its smoothing is that it trails ART slightly.
 
 The visual comparison in `exp_c_gallery.png` fully matches the RMSE: DMR is covered in salt-and-pepper noise, FBP shows streak artefacts, ART is the cleanest, SIRT is the smoothest.
@@ -99,7 +100,7 @@ The image is normalised to RAS and then converted to the GUI's (Z,H,W) axis orde
 ## Findings
 `exp` outputs: `seg_confusion.png` (confusion heatmap) · `seg_dice.csv` · `seg_mapping.md`
 
-1. **The mapping is measured to be an identity diagonal**: our#k → the k-th TotalSegmentator organ, matching one by one (this case's ground truth contains no prostate/kidney cyst, so labels 22/23 have no measured Dice; their identity is fixed by this mapping scheme). **This confirms the model = TotalSegmentator v2 `class_map_part_organs`** (24 organs + background, an nnU-Net v2 export), no longer "provenance unknown".
+1. **The mapping is measured to be an identity diagonal**: our#k → the k-th TotalSegmentator organ, matching one by one (this case's ground truth contains no prostate/kidney cyst, so labels 22/23 have no measured Dice; their identity is fixed by this mapping scheme). **This measures the label scheme = TotalSegmentator v2 `class_map_part_organs`** (24 organs + background, an nnU-Net v2 export), so the mapping is no longer "unknown". The mapping is what the code uses and what is measured; concluding that the weights themselves are that upstream release is an inference from it — strongly supported, not cryptographically proven.
 2. **Mean Dice ≈ 0.92 over the 21 organs present** (kidneys 0.98, lung lobes 0.96–0.99, small organs such as thyroid/gallbladder 0.79–0.82), consistent with TotalSegmentator's officially published level — **simultaneously validating that the GUI inference pipeline is correct**.
 3. **Corrected historical mislabels**: `5` = **liver** (an earlier inference wrongly took it as "heart"; the model has no heart/aorta output — both live in another TS part, labels 51/52, outside 0–24); lung lobes `10,11` = **left**, `12,13,14` = **right** (the earlier left/right swap was a radiological-convention mirror artefact). `models/organ_labels_candidate.json` has been rewritten accordingly into the confirmed mapping.
 
@@ -169,7 +170,7 @@ Extra dependency: `torch` (see `requirements-experiments.txt`). **The App does n
 ## Methods
 
 - **Data**: a *family* of random phantoms — random ellipses plus 0–3 small high-contrast "lesions" — generated in code with fixed seeds. A single fixed Shepp-Logan would simply be memorised by the network, so what you would then measure is recall, not reconstruction. **No patient data**.
-- **Reproducibility, stated exactly.** The phantom data is seeded and regenerates byte-identically. The *training* was not: until an audit caught it, `recon_dl.py` seeded only its `RandomState` phantom generation and never called `torch.manual_seed`, leaving weight initialisation and the `torch.randperm` shuffle free. `train_one` now takes `seed=0` and pins them, matching what `seg3d_train.py:223` had always done. Two things follow, and neither is softened here: **the committed `recon_dl_*` artefacts predate that line**, and **no run under the new seeding has been compared against them** — so whether the pinned code reproduces these published numbers is untested, not established. An earlier version of this file claimed "anyone re-running gets the same numbers", which was true of the phantom data and unverified for the model.
+- **Reproducibility, stated exactly.** The phantom data is seeded and regenerates byte-identically. The *training* was not: until an audit caught it, `recon_dl.py` seeded only its `RandomState` phantom generation and never called `torch.manual_seed`, leaving weight initialisation and the `torch.randperm` shuffle free. `train_one` now takes `seed=0` and pins them, matching what `seg3d_train.py:223` had always done. Two things follow, and neither is softened here: **the committed `recon_dl_*` artefacts predate that line**, and **no run under the new seeding has been compared against them** — so whether the pinned code reproduces the numbers committed here is untested, not established. An earlier version of this file claimed "anyone re-running gets the same numbers", which was true of the phantom data and unverified for the model.
 - **Split**: train / val / test / pairing draw from four **non-overlapping seed bands**, so no phantom instance appears in two sets. Checkpoints are selected on the **validation** set only; the test set never participates in any selection.
 - **Forward model**: `recon.compute_sinogram` → `recon.compute_fbp` — the same production functions the GUI calls.
 - **Network**: a self-implemented residual U-Net (1.9 M params, no MONAI/nnU-Net). It predicts the *artefact* and subtracts it, because sparse-view streaks are sparse and high-frequency — far easier to learn than re-synthesising anatomy, and much less prone to inventing structure. The output layer is zero-initialised, so training starts exactly at "pass the FBP through unchanged", giving a clean zero baseline for "how much did the network change?".
@@ -202,7 +203,7 @@ Extra dependency: `torch` (see `requirements-experiments.txt`). **The App does n
 | network at the true-lesion site | +0.3427 (**99% recovered**) |
 | false-structure rate (> 20% / 30% / 50% of a true lesion) | **1.7% / 0% / 0%** |
 
-The network's signal where nothing exists is the same order as FBP's own fluctuation. **It is not inventing structure.** This has to be measured with paired phantoms: the matrix's "background streak std" is a whole-background statistic, in which one isolated fake lesion is diluted by tens of thousands of pixels and cannot be seen at all.
+The network's signal where nothing exists is the same order as FBP's own fluctuation. **On these phantoms, at these thresholds, it did not invent structure** — which is a measured negative result on noise-free synthetic data, not a guarantee that it never will. This has to be measured with paired phantoms: the matrix's "background streak std" is a whole-background statistic, in which one isolated fake lesion is diluted by tens of thousands of pixels and cannot be seen at all.
 
 ### C — Out-of-distribution: is it generic de-streaking, or memorised shapes?
 
@@ -212,7 +213,24 @@ The network's signal where nothing exists is the same order as FBP's own fluctua
 | polygons (non-convex) | 0.0348 | 0.0044 | **87.2%** |
 | line gratings (high frequency) | 0.2093 | 0.1590 | **24.1%** |
 
-In-distribution reduction 79.7% → out-of-distribution mean 64.3%, **ratio 0.81**. Not one of these shapes appears in training, yet on both shape families the gain **matches or exceeds** the in-distribution figure. What the network learned is a shape-independent de-streaking operation; the mean is dragged down solely by the high-frequency gratings.
+In-distribution reduction 79.7% → out-of-distribution mean 64.3%, **ratio 0.81**. Not one of these shapes appears in training, yet on both shape families the gain **matches or exceeds** the in-distribution figure. Across the three families tested the gain does not depend on the training shapes, which is what a de-streaking operator rather than a memorised shape prior would predict; the mean is dragged down solely by the high-frequency gratings. Three synthetic families on noise-free projections bound this: it is evidence against shape memorisation, not a demonstration of shape independence in general.
+
+### C′ — Measuring the conditioning that C only asserted (`recon_cond.py`)
+`exp_c_conditioning.csv`
+
+`recon_cond.py` takes the SVD of the *same* system matrices C reconstructs from — it calls `recon.make_theta` and `recon.build_system_matrix` with C's arguments, so the matrices are identical and served from the on-disk cache.
+
+| views | cond₂(A) | numerical rank | retained by `lstsq` | noise gain 1/σ_k | discarded dirs | DMR RMSE |
+|---|---|---|---|---|---|---|
+| 30 | **1.48e17** | 1919 / 4096 | 1919 | 29.5 | 2177 | 0.151 |
+| 60 | 8.10e15 | 3839 / 4096 | 3707 | **34.6** | 389 | **0.611** |
+| 90 | 3.36e3 | 4096 / 4096 | 4081 | 19.3 | 15 | 0.090 |
+
+1. **The condition number is worst at 30 views, not 60.** The sentence C carried for three revisions is false as stated: at 1.48e17 vs 8.10e15 the sparse system is the more ill-conditioned one, because `A` is far more rank-deficient there.
+2. **What does peak at 60 views is the conditioning of the subspace `lstsq` inverts.** `compute_dmr` calls `np.linalg.lstsq(rcond=None)` on a float32 `A`, so singular values below `max(m,n)·ε_f32·σ_max` are truncated; the operative noise gain is `1/σ_k` over the *retained* spectrum, and that goes 29.5 → **34.6** → 19.3 exactly as the conditioning story predicts.
+3. **But it is too small to be the whole story.** 34.6 exceeds the other two by 1.17× and 1.79×, while the RMSE exceeds them by 4.1× and 6.8× — a factor of ~3.5 unaccounted for. The bigger difference is how much implicit truncated-SVD regularisation is in play: 2,177 discarded directions at 30 views, 389 at 60, 15 at 90. Near the square regime the minimum-norm projection has almost nothing left to discard *and* the retained spectrum is at its worst; the two align at 60. Reported as the direction the measurement points, not as a decomposition.
+
+Deterministic, no random component. Reproduce: `python experiments/recon_cond.py`.
 
 ### D — The resolution limit (bar patterns, `+CNN` vs `FBP-ramp`)
 
@@ -237,7 +255,7 @@ Judge by **|CTF − 1|**, not by "higher CTF is better": ramp overshoots at shar
 - **The 24.1% on gratings is a real weakness**, not a rounding artefact: at the sampling limit a post-processor cannot restore information the sparse projections never carried.
 
 ## Reconstruction-DL study — one-sentence summary
-A 1.9 M-parameter self-implemented post-processor cuts sparse-view RMSE by **3–6×** versus the best linear filter and lifts lesion-contrast retention from a view-count-independent **0.87 ceiling to 0.96–1.00** — and, measured rather than assumed, it does so **without inventing structure** (false-structure rate 1.7% at the loosest threshold, 0% beyond) and **without depending on the training shapes** (out-of-distribution gain ratio 0.81), with its only real limit at the sampling frequency itself — **all of it under noise-free projections, which is the condition least likely to induce hallucination.**
+A 1.9 M-parameter self-implemented post-processor cuts sparse-view RMSE by **3–6×** versus the best linear filter and lifts lesion-contrast retention from a view-count-independent **0.87 ceiling to 0.96–1.00** — and, measured rather than assumed, it did **not invent structure on the phantoms tested** (false-structure rate 1.7% at the loosest threshold, 0% beyond) and its gain did **not depend on the three out-of-distribution shape families tested** (gain ratio 0.81), with the sharpest limit it hit being the sampling frequency. Every one of those is a bound on what was measured, not a general property: **all of it under noise-free projections, which is the condition least likely to induce hallucination**, on synthetic phantoms only.
 
 ---
 
@@ -422,7 +440,7 @@ Switching inference from `zslab_infer` (full in-plane extent, z-blocked — chos
 
 > **That subgroup is post-hoc, and this is the only place it is defined.** No script produces it and no artefact records it; "lobes occupy a normal volume" was a description, not a rule. The five cases dropped are **`s0073`, `s0098`, `s0179`, `s0246`, `s0330`** — the five smallest by total lobe volume, with the cut falling in an empty stretch of the data between 70k and 127k voxels. A threshold placed after seeing the data is a weaker thing than a pre-registered one, and it matters here: four of those five are also among the seven worst cases by full-sample Dice (0.000, 0.005, 0.005, 0.156, 0.158), so dropping them removes most of the tail. It is not simply "drop the worst" — `s0218` (0.015) and `s0014` (0.120) score worse than two of the dropped cases and were kept — but the overlap is large enough that the subgroup figure should be read as illustrative. **The full-sample 0.4903 → 0.7457 above is the result**; both are recomputable from `seg3d_diag_ch8d3_33600s_{zslab,sliding}.csv`.
 
-Five independent controls, each removing a different competing explanation:
+Five targeted controls, each removing a different competing explanation. "Targeted" rather than "independent": they run on overlapping cases with the same weights, so they are not statistically independent tests — each is aimed at one rival account and removes it.
 
 | control | what it rules out | result |
 |---|---|---|

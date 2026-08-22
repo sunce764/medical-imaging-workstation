@@ -8,6 +8,11 @@
   - Google Chrome（无头模式打印 PDF；支持中文系统字体）
 
 用法：  python docs/build_manual_pdf.py
+
+⚠️ 软著登记在审期间不要运行本脚本：docs/manual_zh.pdf 是随登记提交的 V1.0 快照，
+   重建会覆盖已提交材料。本脚本与 manual_zh.md 此后仍继续维护（例如封面数据措辞
+   已由「非患者数据」更正为「公开、已去标识的人体 CT」），因此当前脚本的输出与
+   那份 PDF 有意不一致——差异说明见 manual_zh.md 开头的「版本对应关系」。
 """
 import os
 import re
@@ -73,7 +78,8 @@ COVER = """
   <div class="s">软件说明书</div>
   <div class="meta">软件版本：V1.0<br>著作权人：盛超、赖胜圣<br>编写日期：2026 年 7 月</div>
   <div class="note">本说明书文中截图均使用<b>公开数据集 TotalSegmentator-CT-Lite（CC-BY-4.0）</b>演示，
-  <b>非患者数据、不含个人隐私信息（PHI）</b>，患者信息栏已明确标注为公开数据。</div>
+  为<b>公开、已去标识的人体 CT</b>——影像来自真实患者，但不含任何可识别的个人隐私信息（PHI），
+  患者信息栏已明确标注为公开数据。</div>
 </div>
 """
 

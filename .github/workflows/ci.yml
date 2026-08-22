@@ -4,8 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
-  # 允许在 Actions 页面手动触发：仓库转公开后 badge 长期停在 no status，
-  # 而 push 触发要等下一次提交，手动口子让状态能立刻刷新。
+  # 手动触发口子。注意这不只是「图个方便」：上面的 push 触发在本仓库**实际不生效**
+  # ——多次向 main 推送均未产生 workflow run，至今每一次绿灯都来自手动
+  # `gh workflow run ci.yml --ref main`。原因未查明（分支名、路径过滤、workflow 文件
+  # 位置、Actions 权限均已排除）。后果是：**下一次提交后 badge 可能仍停在旧 SHA**，
+  # 除非手动触发一次。读到这里的人请勿据 badge 推断最新提交已被 CI 覆盖。
   workflow_dispatch:
 
 jobs:

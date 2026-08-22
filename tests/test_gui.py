@@ -3060,6 +3060,65 @@ def test_confidence_map():
         ai_engine._get_session = saved
 
 
+def test_model_checksums():
+    """models/CHECKSUMS.sha256 必须与实际文件一致，且与文档表格里引用的摘要一致。
+
+    由来：权重身份此前只有一句「TotalSegmentator v2」，第三方无法证明自己拿到的
+    119MB 权重就是产出本仓库全部 Dice 的那一份。补了 CHECKSUMS.sha256 之后，新的
+    腐烂方式是「换了权重却忘了改摘要」或「文档表格里的缩写摘要与清单对不上」——
+    这两种都能机械判定，故锁进回归套件而不是靠记得。
+
+    数据无关：两个 .onnx 图已入库；两个 .data 权重不入库，缺席时只跳过其文件哈希，
+    清单与文档的一致性仍然照查（CHECKSUMS.sha256 本身是入库的）。
+    """
+    import hashlib
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    manifest = os.path.join(root, "models", "CHECKSUMS.sha256")
+    check(os.path.exists(manifest), "models/CHECKSUMS.sha256 存在")
+
+    # 解析清单：注释行以 # 开头，其余为「<64位十六进制>␠␠<相对路径>」
+    entries = {}
+    for line in open(manifest, encoding="utf-8").read().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"^([0-9a-f]{64})\s+(\S+)$", line)
+        check(m is not None, f"清单行格式合法：{line[:60]}")
+        if m:
+            entries[m.group(2)] = m.group(1)
+
+    expected = {"models/organs.onnx", "models/organs.onnx.data",
+                "models/recon_dl_v20.onnx", "models/recon_dl_v20.onnx.data"}
+    check(set(entries) == expected,
+          f"清单恰好覆盖四个模型产物（多/缺：{set(entries) ^ expected or '无'}）")
+
+    # 存在的文件必须逐字节对得上；缺席的（.data 不入库）跳过
+    hashed = 0
+    for rel, digest in sorted(entries.items()):
+        path = os.path.join(root, rel)
+        if not os.path.exists(path):
+            continue
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        check(h.hexdigest() == digest, f"{rel} 实际 SHA-256 与清单一致")
+        hashed += 1
+    check(hashed >= 2, f"至少校验了两个入库的 .onnx 图（实际 {hashed}）")
+
+    # 文档表格里的缩写摘要（前8…后6）必须能在清单里找到对应项——
+    # 防「换了权重改了清单、却漏改文档表格」这一类单读一边看不出的矛盾。
+    arch = open(os.path.join(root, "docs", "ARCHITECTURE.md"), encoding="utf-8").read()
+    abbrevs = re.findall(r"`([0-9a-f]{8})[…\.]{1,3}([0-9a-f]{6})`", arch)
+    check(len(abbrevs) >= 4, f"ARCHITECTURE 表格里解析出 {len(abbrevs)} 条缩写摘要（<4 说明本测试的定位写错了）")
+    full = set(entries.values())
+    for head, tail in abbrevs:
+        hit = [d for d in full if d.startswith(head) and d.endswith(tail)]
+        check(len(hit) == 1, f"文档摘要 {head}…{tail} 在清单中恰好匹配一项（匹配 {len(hit)} 项）")
+
+
 def test_doc_code_consistency():
     """文档不得声称与代码相反的事实，也不得写下未被实验支持的等价性判断。
 
@@ -3534,6 +3593,7 @@ def main_run():
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
+        test_model_checksums()        # 权重摘要清单与文档一致：纯文本 + 已入库 .onnx
         test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
     else:
         v = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌"))
@@ -3603,6 +3663,7 @@ def main_run():
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
+        test_model_checksums()        # 权重摘要清单与文档一致：纯文本 + 已入库 .onnx
         test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0

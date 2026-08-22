@@ -2,9 +2,9 @@
 
 **English** · [简体中文](manual_zh.md)
 
-> This manual is written for software version V1.0. All screenshots are demonstrated using the **public dataset TotalSegmentator-CT-Lite (CC-BY-4.0)** — **not patient data, containing no personal health information (PHI)**; the patient-information panel is explicitly labelled as public data.
+> This manual is written for software version V1.0. All screenshots are demonstrated using the **public dataset TotalSegmentator-CT-Lite (CC-BY-4.0)** — **public, de-identified human CT**. These are images of real patients: what the dataset removes is *identifiability*, not the clinical origin, so no identifiable personal health information (PHI) is present, but "not patient data" would be the wrong claim. The patient-information panel is explicitly labelled as public data.
 
-> **Version correspondence.** The manual **PDF submitted for software-copyright registration is the V1.0 snapshot**; V1.0 is defined by that PDF, which this document does not retroactively amend. This Markdown source has continued to be maintained since V1.0 and now documents features that V1.0 did not yet contain (spacing resampling before inference, per-voxel confidence, the model card, the reconstruction lab's built-in phantom). The resulting differences reflect normal source evolution, not a correction to the registered version.
+> **Version correspondence.** The manual **PDF submitted for software-copyright registration is the V1.0 snapshot**; V1.0 is defined by that PDF, which this document does not retroactively amend. This Markdown source has continued to be maintained since V1.0 and now documents features that V1.0 did not yet contain (spacing resampling before inference, per-voxel confidence, the model card, the reconstruction lab's built-in phantom). The resulting differences reflect normal source evolution, not a correction to the submitted snapshot. **One difference is a wording correction rather than a feature**: the submitted PDF's cover still describes the screenshot data as "not patient data", which this Markdown has since corrected to "public, de-identified human CT". The PDF is deliberately left untouched while the filing is under examination.
 
 ---
 

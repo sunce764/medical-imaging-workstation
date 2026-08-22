@@ -161,7 +161,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
 
     def _load_organ_labels(self):
         """加载器官名表 organ_labels_candidate.json；缺失时回退到内置高置信名称。
-        映射已确证=TotalSegmentator class_map_part_organs（见该 JSON 的 _meta 与 experiments/）。"""
+        映射为实测所得=TotalSegmentator class_map_part_organs（见该 JSON 的 _meta 与 experiments/）。"""
         fallback = {5: ("肝", "Liver"),
                     10: ("左肺上叶", "Lung UL (L)"), 11: ("左肺下叶", "Lung LL (L)"),
                     12: ("右肺上叶", "Lung UL (R)"), 13: ("右肺中叶", "Lung ML (R)"),
