@@ -24,12 +24,23 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _RESULTS = os.path.join(_HERE, "experiments", "results")
 
 
-def _read_json(name):
+def _read_json(name, require=()):
+    """读产物 JSON；文件缺失/损坏，或缺少 require 里任一字段时返回 None。
+
+    【「能解析」不等于「能用」】此前只挡住了完全无法解析的情形（NUL 字节、非法 JSON），
+    合法 JSON 但字段名对不上时照样返回 dict，消费端 lobe['overall_mean'] 直接 KeyError
+    冲到界面——用户点一下「模型说明卡」就崩。而字段改名正是实验脚本演进时最常见的形态，
+    比文件损坏常见得多。require 让 `if lobe:` 这个既有守卫真正兜得住：字段不全就当作
+    「产物不在场」，走已经写好的降级文案，而不是半路炸掉。
+    """
     try:
         with open(os.path.join(_RESULTS, name), encoding='utf-8') as f:
-            return json.load(f)
+            d = json.load(f)
     except (OSError, ValueError, TypeError, csv.Error):
         return None
+    if not isinstance(d, dict) or any(k not in d for k in require):
+        return None
+    return d
 
 
 def _read_multi():
@@ -162,7 +173,8 @@ def build_model_card(is_english=False):
     """
     seg = _read_seg_dice()
     mo = _read_multi_organ()
-    lobe = _read_json("seg3d_teacher_summary.json")
+    lobe = _read_json("seg3d_teacher_summary.json",
+                      require=("overall_mean", "overall_ci", "n_cases"))
     en = is_english
     L = []
 
@@ -204,6 +216,9 @@ def build_model_card(is_english=False):
     else:
         L.append("Multi-organ validation results not found in experiments/results.<br>"
                  if en else "未在 experiments/results 找到多器官验证结果。<br>")
+    # overall_ci 必须是可下标的二元组：标量或 null 会让 ci[0] 抛 TypeError。
+    if lobe and not (isinstance(lobe['overall_ci'], (list, tuple)) and len(lobe['overall_ci']) >= 2):
+        lobe = None
     if lobe:
         m, ci, nc = lobe['overall_mean'], lobe['overall_ci'], lobe['n_cases']
         L.append(

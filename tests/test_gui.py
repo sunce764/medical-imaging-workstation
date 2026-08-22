@@ -1644,6 +1644,45 @@ def test_undo_restores_confidence():
           "两次撤销回到清空前的置信度")
 
 
+def test_model_card_bad_fields():
+    """产物「能解析但字段不对」时，说明卡必须降级而不是崩到界面。
+
+    既有的 test_model_card_fallback 只覆盖了完全无法解析的情形（NUL 字节、非法 JSON），
+    而实验脚本演进时最常见的形态是字段改名或类型变了——合法 JSON、读得进来，消费端
+    lobe['overall_mean'] 直接 KeyError，用户点一下「模型说明卡」就崩。纯文件操作，
+    不依赖 Qt 与真实数据。
+    """
+    print("[模型说明卡：字段不对时降级而非崩溃]")
+    import json as _json
+    import shutil
+    import tempfile
+
+    import model_card
+    saved = model_card._RESULTS
+    for tag, payload, expect_num in (
+            ("字段名换了", {"summary": "n=57", "mean": 0.87}, False),
+            ("ci 是标量", {"overall_mean": 0.87, "overall_ci": 0.05, "n_cases": 57}, False),
+            ("ci 元素不足", {"overall_mean": 0.87, "overall_ci": [0.85], "n_cases": 57}, False),
+            ("字段完整", {"overall_mean": 0.87, "overall_ci": [0.85, 0.89], "n_cases": 57}, True)):
+        tmp = tempfile.mkdtemp()
+        try:
+            model_card._RESULTS = tmp
+            with open(os.path.join(tmp, "seg3d_teacher_summary.json"), "w") as f:
+                _json.dump(payload, f)
+            ok, txt = True, ""
+            try:
+                txt = model_card.build_model_card(False)
+            except Exception as e:                    # noqa: BLE001 — 正是要断言它不发生
+                ok = False; txt = f"{type(e).__name__}: {e}"
+            check(ok, f"  {tag}：不抛异常（{'' if ok else txt}）")
+            if ok:
+                check(("0.870" in txt) == expect_num,
+                      f"  {tag}：{'印出' if expect_num else '不印出'}该 Dice")
+        finally:
+            model_card._RESULTS = saved
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_stale_ai_cannot_overwrite_restored_mask():
     """从磁盘恢复蒙版时，上一序列仍在跑的推理必须被作废且代次推进。
 
@@ -3487,6 +3526,7 @@ def main_run():
         test_projection()
         test_mesh3d()
         test_undo_restores_confidence()
+        test_model_card_bad_fields()
         test_stale_ai_cannot_overwrite_restored_mask()
         test_anisotropic_pixel_spacing(app)
         test_mpr_geometry()
@@ -3555,6 +3595,7 @@ def main_run():
         test_projection()
         test_mesh3d()
         test_undo_restores_confidence()
+        test_model_card_bad_fields()
         test_stale_ai_cannot_overwrite_restored_mask()
         test_anisotropic_pixel_spacing(app)
         test_mpr_geometry()

@@ -314,7 +314,16 @@ class AutoAIEngineThread:
         # 而「模型有多确信」的显示精度远用不到 float32
         conf = np.zeros((Z, H, W), dtype=np.uint8)
         DZ = 32
-        for z0 in range(0, Z, DZ):
+        # 【末块回移，别用空气把它填满】原先 z0 直接按 range(0, Z, DZ) 递增，末块只剩
+        # Z % 32 层真实数据，其余由 pad(mode='constant') 补 0——而 HU 归一化后 0 就是
+        # 空气(-1000)。实测 233 层 @1.25mm 重采样到 194 层时，末块只有 2 层真实数据、
+        # 30 层合成空气，等于让模型在一个几乎全空的 slab 里判断那 2 层。nnU-Net 的滑窗
+        # 做法是把末窗回移到 [Z-DZ, Z) 再融合；这里同样回移，重叠部分由后一块的 argmax
+        # 覆盖。代价为零，且只影响末块——其余块的 z0 不变。
+        # （块间仍无重叠、每 32 层有一道硬接缝，那是另一件事：改它要引入 logit 融合，
+        #   实测收益 +0.0133 Dice 但 +0.65GB 峰值，见 experiments 的 F 节，未采用。）
+        starts = [min(z0, max(0, Z - DZ)) for z0 in range(0, Z, DZ)]
+        for z0 in starts:
             if self._cancelled:
                 return None  # 已作废：停止推理，让 _run 放弃回调并释放内存
             z1 = min(z0 + DZ, Z)

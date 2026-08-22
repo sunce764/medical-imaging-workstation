@@ -127,12 +127,12 @@ Three-dimensional medical volumes make memory and I/O the binding constraint lon
 ## Engineering and testing
 
 - The original God-object is decomposed into **5 UI mixins + 9 Qt-free compute modules**.
-- The full suite is **538 checks**; CI runs the **447** that need no local research data. What stays out of CI is everything requiring the RIDER series or the 119 MB weights — *not* the interaction layer, which is covered in CI through synthesised DICOM and synthesised mouse/wheel events.
+- The full suite is **546 checks**; CI runs the **455** that need no local research data. What stays out of CI is everything requiring the RIDER series or the 119 MB weights — *not* the interaction layer, which is covered in CI through synthesised DICOM and synthesised mouse/wheel events.
 - Reconstruction tests assert numerical correctness, not merely finite output; DICOM loading is defensive against malformed metadata.
 
 ```bash
-python tests/test_gui.py                     # full suite: 538 checks; requires local RIDER data
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 447 data-independent checks used by CI
+python tests/test_gui.py                     # full suite: 546 checks; requires local RIDER data
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 455 data-independent checks used by CI
 ruff check .                                 # lint
 coverage run tests/test_gui.py && coverage report
 ```
