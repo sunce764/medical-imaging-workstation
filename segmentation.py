@@ -15,7 +15,7 @@ from constants import LUNG_FALLBACK_LABEL
 
 def segment_lungs_fallback(volume_hu: np.ndarray, air_hu: float = -300.0,
                            label: int = LUNG_FALLBACK_LABEL) -> np.ndarray:
-    """纯数学肺分割降级。返回 uint8 蒙版（label=肺，0=背景），异常时返回全零。
+    """纯数学肺分割降级。返回 uint8 蒙版（label=肺，0=背景）；失败时抛出，不吞。
 
     算法原理：肺部在 CT 中为低密度空气区域（HU < air_hu）。
       1. 阈值分割提取所有低密度区域（空气 + 肺）
@@ -23,41 +23,44 @@ def segment_lungs_fallback(volume_hu: np.ndarray, air_hu: float = -300.0,
       3. 找出与六个边界面相交的连通域 → 体外背景空气，剔除
       4. 剩余内部空气再次连通域标记，取体积最大者为主肺；
          若次大 ≥ 主肺体积 5% 则一并纳入（双肺）
+
+    【失败向上抛，不返回全零】此前这里 except Exception → 全零蒙版，理由是"保证调用方
+    （UI）不崩溃"。但调用方 ai_engine._run 的顶层守卫说得很清楚：失败时刻意**不** emit
+    finished(空 mask)——"那会让界面显示「检出 0 个器官」，把「失败了」谎报成「成功了但
+    没找到东西」"。在这一层把异常吞成全零，恰好制造出守卫想避免的那个后果，而且守卫
+    从此永不触发，因为异常根本到不了它那里。UI 不崩溃由那道守卫负责，它还能把失败
+    如实显示出来；这一层只需说实话。
     """
-    try:
-        # 步骤1：阈值分割，提取所有低密度区域（空气 + 肺部）
-        air_mask = (volume_hu < air_hu).astype(np.uint8)
+    # 步骤1：阈值分割，提取所有低密度区域（空气 + 肺部）
+    air_mask = (volume_hu < air_hu).astype(np.uint8)
 
-        # 步骤2：3D 连通域标记，把相互接触的空气体素归为同一组
-        labels, _ = ndimage.label(air_mask)
+    # 步骤2：3D 连通域标记，把相互接触的空气体素归为同一组
+    labels, _ = ndimage.label(air_mask)
 
-        # 步骤3：找出与六个边界面相交的连通域标签——这些是体外背景
-        border_labels = (set(labels[0, :, :].flatten()) | set(labels[-1, :, :].flatten())
-                         | set(labels[:, 0, :].flatten()) | set(labels[:, -1, :].flatten())
-                         | set(labels[:, :, 0].flatten()) | set(labels[:, :, -1].flatten()))
+    # 步骤3：找出与六个边界面相交的连通域标签——这些是体外背景
+    border_labels = (set(labels[0, :, :].flatten()) | set(labels[-1, :, :].flatten())
+                     | set(labels[:, 0, :].flatten()) | set(labels[:, -1, :].flatten())
+                     | set(labels[:, :, 0].flatten()) | set(labels[:, :, -1].flatten()))
 
-        # 步骤4：从空气掩码中剔除所有边界连通域，留下纯内部空气（即肺）
-        internal_air = np.copy(air_mask)
-        for bl in border_labels:
-            if bl != 0:
-                internal_air[labels == bl] = 0
+    # 步骤4：从空气掩码中剔除所有边界连通域，留下纯内部空气（即肺）
+    internal_air = np.copy(air_mask)
+    for bl in border_labels:
+        if bl != 0:
+            internal_air[labels == bl] = 0
 
-        # 步骤5：对内部空气再次连通域标记，分离左右肺
-        labels_int, _ = ndimage.label(internal_air)
-        counts = np.bincount(labels_int.flatten())
-        counts[0] = 0  # 标签0是背景，排除在外
+    # 步骤5：对内部空气再次连通域标记，分离左右肺
+    labels_int, _ = ndimage.label(internal_air)
+    counts = np.bincount(labels_int.flatten())
+    counts[0] = 0  # 标签0是背景，排除在外
 
-        # 步骤6：取体积最大的连通域为主肺叶，若第二大超过主肺的 5% 则一并纳入（双肺）
-        mask = np.zeros_like(internal_air)
-        if len(counts) > 1:
-            l1 = counts.argmax()
-            mask[labels_int == l1] = label
-            max_vol = counts[l1]
-            counts[l1] = 0
-            if counts.max() > max_vol * 0.05:
-                l2 = counts.argmax()
-                mask[labels_int == l2] = label
-        return mask
-    except Exception:
-        # 任何异常均返回全零掩码，保证调用方（UI）不崩溃
-        return np.zeros_like(volume_hu, dtype=np.uint8)
+    # 步骤6：取体积最大的连通域为主肺叶，若第二大超过主肺的 5% 则一并纳入（双肺）
+    mask = np.zeros_like(internal_air)
+    if len(counts) > 1:
+        l1 = counts.argmax()
+        mask[labels_int == l1] = label
+        max_vol = counts[l1]
+        counts[l1] = 0
+        if counts.max() > max_vol * 0.05:
+            l2 = counts.argmax()
+            mask[labels_int == l2] = label
+    return mask

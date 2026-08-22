@@ -208,23 +208,46 @@ class AnnotationMixin:
         self._update_organ_stats()
         self.update_display()
 
-    _VOL_UNDO = 'VOL'   # 整卷快照在撤销栈中的槽位标记（区别于逐切片的整数切片号）
+    _VOL_UNDO = 'VOL'         # 整卷快照的槽位标记（区别于逐切片的整数切片号）
+    _VOL_UNDO_CLEAR = 'VOLC'  # 「清空蒙版」专用槽位——与上者分开保留，理由见 _push_volume_undo
 
     def _push_mask_undo(self, z):
-        """把当前切片蒙版压入撤销栈（上限 20 步，含切片号以便精确回退）。"""
-        self._mask_undo.append((z, self.volume_mask[z].copy()))
+        """把当前切片蒙版压入撤销栈（上限 20 步，含切片号以便精确回退）。
+
+        置信度必须一起存：画笔与追踪会把改动体素的 conf 清成哨兵 0，而 quantify 用
+        conf==0 剔除非模型体素。只还原 mask 的话，撤销后那个器官的 conf_cover 会
+        永久 < 1——定量面板于是给一个 100% 来自模型的器官标上「模型判定 XX%」。
+        撤销的语义是回到原状态，显示出来的数字也在内。
+        """
+        cf = None if self.volume_conf is None else self.volume_conf[z].copy()
+        self._mask_undo.append((z, self.volume_mask[z].copy(), cf))
         if len(self._mask_undo) > 20:
             self._mask_undo.pop(0)
 
-    def _push_volume_undo(self):
+    def _push_volume_undo(self, slot=None, adopt=False):
         """整卷级操作（3D 追踪 / 清空蒙版）前存一份整卷快照。
-        与逐切片快照走同一个栈，但只保留最近一份：一份 (Z,H,W) uint8 在 233×512²
-        下约 61MB，若像切片那样堆 20 份会吃掉 1.2GB。故压栈前先剔除旧的整卷条目。
+
+        与逐切片快照走同一个栈，但同一槽位只保留最近一份：一份 (Z,H,W) uint8 在
+        233×512² 下约 61MB，若像切片那样堆 20 份会吃掉 1.2GB。
+
+        【清空单独占一个槽位】原先所有整卷操作共用一个槽位，于是「清空蒙版」存下的
+        那份会被之后任意一次 3D 追踪顶掉——而清空的确认框刚刚写着「可用 Ctrl+Z
+        还原蒙版」，被顶掉之后那 ~100 秒的推理产物就真的回不来了。清空是这里破坏性
+        最大的一步，它的快照不该被一次普通编辑挤走。
+
+        adopt=True 时直接接管传入的数组而不 copy：清空的调用方本来就要丢弃旧蒙版，
+        移交给撤销栈是零成本的，不必为「保留两份整卷快照」多付一份内存。
         """
         if self.volume_mask is None:
             return
-        self._mask_undo = [e for e in self._mask_undo if e[0] != self._VOL_UNDO]
-        self._mask_undo.append((self._VOL_UNDO, self.volume_mask.copy()))
+        slot = slot or self._VOL_UNDO
+        cf = self.volume_conf
+        if adopt:
+            mask_snap, conf_snap = self.volume_mask, cf
+        else:
+            mask_snap, conf_snap = self.volume_mask.copy(), (None if cf is None else cf.copy())
+        self._mask_undo = [e for e in self._mask_undo if e[0] != slot]
+        self._mask_undo.append((slot, mask_snap, conf_snap))
         if len(self._mask_undo) > 20:
             self._mask_undo.pop(0)
 
@@ -232,15 +255,24 @@ class AnnotationMixin:
         """撤销最近一次分割编辑：整卷快照整卷还原，切片快照只还原该切片。"""
         if not self._mask_undo or self.volume_mask is None:
             return
-        z, snap = self._mask_undo.pop()
-        if z == self._VOL_UNDO:
+        z, snap, conf_snap = self._mask_undo.pop()
+        if z in (self._VOL_UNDO, self._VOL_UNDO_CLEAR):
             # 换病例后旧快照的形状可能与当前体积不符，形状不合则丢弃不还原
             if snap.shape != self.volume_mask.shape:
                 return
             self.volume_mask = snap
+            # conf 与 mask 同源同快照：要么一起回退，要么都不动。形状不符时置 None
+            # 而不是留着旧的——留着会让 quantify 拿错网格的哨兵去剔体素。
+            if conf_snap is not None and conf_snap.shape == snap.shape:
+                self.volume_conf = conf_snap
+            elif conf_snap is None:
+                self.volume_conf = None
         # z 越界保护：换病例后旧切片号可能超出新蒙版层数
         elif z < self.volume_mask.shape[0] and snap.shape == self.volume_mask[z].shape:
             self.volume_mask[z] = snap
+            if (conf_snap is not None and self.volume_conf is not None
+                    and conf_snap.shape == self.volume_conf[z].shape):
+                self.volume_conf[z] = conf_snap
         else:
             return
         self._update_organ_stats()
@@ -367,8 +399,11 @@ class AnnotationMixin:
                                     QMessageBox.Yes | QMessageBox.No,
                                     QMessageBox.No) != QMessageBox.Yes:
                 return
-            self._push_volume_undo()
+            # 用专属槽位，免得之后一次 3D 追踪把它顶掉——确认框刚承诺过 Ctrl+Z 可还原。
+            # adopt=True：旧蒙版与旧 conf 本来就要被丢弃，移交给撤销栈是零成本的。
+            self._push_volume_undo(slot=self._VOL_UNDO_CLEAR, adopt=True)
             self.volume_mask = np.zeros(self.volume_hu.shape, dtype=np.uint8)
+            self.volume_conf = None
         if idx in self.global_annotations:
             self.global_annotations[idx] = []
         self._update_organ_stats()  # 蒙版已清，定量面板同步清空

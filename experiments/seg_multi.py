@@ -148,7 +148,20 @@ def plot():
     if not (os.path.exists(p) and os.path.exists(q)):
         print("  缺产物，先跑 seg_multi.py"); return 1
     with open(p, encoding='utf-8-sig') as f:
-        cases = [(r['case'], float(r['mean_dice'])) for r in csv.DictReader(f)]
+        # 【必须跳过空行与汇总行】seg_multi.csv 末尾有一个 ',,,,,'  分隔行和一行
+        # '# summary n=20,,0.9090,...'。直接 float(r['mean_dice']) 会在空行上抛
+        # ValueError——README 里文档化的 `seg_multi.py plot` 因此在已提交的产物上
+        # 直接崩掉。汇总行的 Dice 本身是合法浮点，靠 '#' 标记排除，否则它会被当成
+        # 第 21 个病例算进 CI。seg_spacing.py:257 一直是这么做的，这里漏了。
+        cases = []
+        for r in csv.DictReader(f):
+            cid = (r.get('case') or '').strip()
+            if not cid or cid.startswith('#'):
+                continue
+            try:
+                cases.append((cid, float(r['mean_dice'])))
+            except (TypeError, ValueError):
+                continue
     with open(q, encoding='utf-8-sig') as f:
         orgs = [(r['organ'], int(r['n_cases_present']), float(r['mean_dice']),
                  float(r['ci_lo']), float(r['ci_hi'])) for r in csv.DictReader(f)]

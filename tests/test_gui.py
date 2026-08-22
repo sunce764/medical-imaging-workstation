@@ -1573,6 +1573,67 @@ def test_lung_fallback():
     check(int(segmentation.segment_lungs_fallback(np.zeros((4, 8, 8), np.float32)).sum()) == 0,
           "无空气体积返回全零")
 
+    # 【降级失败必须冒泡到守卫】此前本函数 except Exception → 返回全零蒙版，于是
+    # ai_engine._run 的顶层守卫永远收不到异常：它 emit 的是 finished(全零)，界面显示
+    # 「检出 0 个器官」——正是那道守卫的 docstring 声称已杜绝的「把失败谎报成成功」。
+    # 这里直接断言纯函数会抛：吞异常一旦回归，此处立刻失败。
+    import scipy.ndimage as _ndi
+    _orig_label = _ndi.label
+    _ndi.label = lambda *a, **k: (_ for _ in ()).throw(MemoryError("注入：连通域 OOM"))
+    try:
+        raised = False
+        try:
+            segmentation.segment_lungs_fallback(vol)
+        except MemoryError:
+            raised = True
+        check(raised, "内部失败时向上抛异常（而非吞成全零蒙版交给 UI）")
+    finally:
+        _ndi.label = _orig_label
+
+
+def test_undo_restores_confidence():
+    """撤销必须把 volume_conf 一并还原，且「清空」的快照不被后续整卷编辑顶掉。
+
+    两条都来自实测：画笔/追踪会把改动体素的 conf 清成哨兵 0，而 quantify 用 conf==0
+    剔除非模型体素——只还原 mask 的话，撤销后该器官的 conf_cover 永久 < 1，定量面板
+    于是给一个 100% 来自模型的器官标上「模型判定 XX%」。另一条：整卷快照原先共用一个
+    槽位，「清空蒙版」存的那份会被之后任意一次 3D 追踪顶掉，而清空的确认框刚写着
+    「可用 Ctrl+Z 还原蒙版」——那 ~100 秒的推理产物就真的回不来了。
+
+    直接调 MedicalViewer 的未绑定方法，不建窗口、不触发 AI、不依赖真实数据。
+    """
+    print("[撤销：置信度一并还原 / 清空快照不被顶掉]")
+    import main as _m
+    v = _m.MedicalViewer.__new__(_m.MedicalViewer)
+    v.recon_mode_active = True                    # 让 _undo_mask_edit 跳过重绘
+    v._update_organ_stats = lambda *a, **k: None
+    v.volume_hu = np.zeros((6, 16, 16), np.float32)
+    v.volume_mask = np.zeros((6, 16, 16), np.uint8); v.volume_mask[2:4, 4:9, 4:9] = 5
+    v.volume_conf = np.full((6, 16, 16), 242, np.uint8)
+    v._mask_undo = []
+    om, oc = v.volume_mask.copy(), v.volume_conf.copy()
+
+    _m.MedicalViewer._push_mask_undo(v, 2)
+    v.volume_mask[2][6:8, 6:8] = 255
+    v.volume_conf[2][6:8, 6:8] = 0                # 画笔把 conf 清成哨兵
+    _m.MedicalViewer._undo_mask_edit(v)
+    check(np.array_equal(v.volume_mask, om), "切片撤销：蒙版还原")
+    check(np.array_equal(v.volume_conf, oc),
+          f"切片撤销：置信度一并还原（残留哨兵 {int((v.volume_conf == 0).sum())} 体素）")
+
+    v.volume_mask, v.volume_conf, v._mask_undo = om.copy(), oc.copy(), []
+    _m.MedicalViewer._push_volume_undo(v, slot=v._VOL_UNDO_CLEAR, adopt=True)
+    v.volume_mask = np.zeros_like(om); v.volume_conf = None      # 清空
+    _m.MedicalViewer._push_volume_undo(v)                        # 随后一次整卷编辑
+    v.volume_mask[1][2:4, 2:4] = 7
+    slots = [e[0] for e in v._mask_undo]
+    check(v._VOL_UNDO_CLEAR in slots and v._VOL_UNDO in slots,
+          f"清空快照与后续整卷编辑各占一槽（栈 {slots}）")
+    _m.MedicalViewer._undo_mask_edit(v); _m.MedicalViewer._undo_mask_edit(v)
+    check(np.array_equal(v.volume_mask, om), "两次撤销回到清空前的蒙版")
+    check(v.volume_conf is not None and np.array_equal(v.volume_conf, oc),
+          "两次撤销回到清空前的置信度")
+
 
 def test_mpr_geometry():
     """MPR 坐标几何纯函数直接单测——纯整数/数组运算，无 Qt / MedicalViewer。"""
@@ -3323,6 +3384,7 @@ def main_run():
         test_registration()
         test_projection()
         test_mesh3d()
+        test_undo_restores_confidence()
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
@@ -3388,6 +3450,7 @@ def main_run():
         test_registration()
         test_projection()
         test_mesh3d()
+        test_undo_restores_confidence()
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据

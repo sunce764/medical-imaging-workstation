@@ -127,12 +127,12 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 9 个无 Qt 计算模块**。
-- 全套 **524 项检查**；CI 跑其中**不需要本地研究数据**的 **433 项**。留在 CI 之外的是需要 RIDER 序列或 119MB 权重的那些，**并非交互层**——交互层通过合成 DICOM 与合成鼠标/滚轮事件，在 CI 内是被覆盖的。
+- 全套 **530 项检查**；CI 跑其中**不需要本地研究数据**的 **439 项**。留在 CI 之外的是需要 RIDER 序列或 119MB 权重的那些，**并非交互层**——交互层通过合成 DICOM 与合成鼠标/滚轮事件，在 CI 内是被覆盖的。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
-python tests/test_gui.py                     # 完整回归：524 项；需本地 RIDER 数据
-SKIP_REAL_DATA=1 python tests/test_gui.py    # CI 使用的 433 项数据无关检查
+python tests/test_gui.py                     # 完整回归：530 项；需本地 RIDER 数据
+SKIP_REAL_DATA=1 python tests/test_gui.py    # CI 使用的 439 项数据无关检查
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```
