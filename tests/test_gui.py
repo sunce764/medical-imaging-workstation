@@ -3162,6 +3162,72 @@ def test_zero_grade_guards(app, m):
           "横断面标注正常入库（守卫未误伤）")
 
 
+def test_withdrawn_claims_stay_withdrawn():
+    """已撤回的结论不得回潮，且文档引用的地板值必须与产物一致。
+
+    由来：研究一有两条结论被实测推翻——「ART 在所有剂量下最鲁棒」（实为 5:100 轮
+    的算力失衡所致，各自取最优时 SIRT 全胜）与「≈180 视角后收益递减 ⇒ 剂量够了」
+    （实为重建链路的离散化地板）。这两句在五个文件里出现过，改一处漏一处的风险很高，
+    而且「悄悄改回去」不会被任何现有断言拦住。故锁成断言。
+
+    纯文本 + 已入库 CSV，无 Qt / 无真实数据。
+    """
+    import csv as _csv
+    import json as _json
+    import re
+    print("[已撤回结论的回潮防护]")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    docs = ["README.md", "README.zh-CN.md", "docs/preprint_recon.md",
+            "docs/technical_report.md", "experiments/README.md"]
+    texts = {}
+    for rel in docs:
+        p = os.path.join(root, rel)
+        if os.path.exists(p):
+            texts[rel] = open(p, encoding="utf-8").read()
+    check(len(texts) == len(docs), f"五份文档齐备（实得 {len(texts)}）")
+
+    # ① 「ART 最鲁棒」的无限定断言不得出现。带 withdrawn/撤回 的行是记述历史，放行。
+    banned = [r"ART is the most robust", r"ART is best throughout",
+              r"ART 是已测方法中最鲁棒", r"ART 各剂量最鲁棒"]
+    hits = []
+    for rel, t in texts.items():
+        for line in t.splitlines():
+            if any(re.search(b, line) for b in banned) and not re.search(
+                    r"withdraw|Withdraw|撤回|~~", line):
+                hits.append(f"{rel}: {line.strip()[:60]}")
+    check(not hits, f"无未加撤回标注的「ART 最鲁棒」断言（违规 {len(hits)}：{hits[:2]}）")
+
+    # ② 地板值必须与 exp_a_metric_floor.csv 的实测最小值一致
+    fp = os.path.join(root, "experiments", "results", "exp_a_metric_floor.csv")
+    check(os.path.exists(fp), "exp_a_metric_floor.csv 存在")
+    if os.path.exists(fp):
+        with open(fp, encoding="utf-8-sig") as f:
+            vals = [float(r["rmse_in_circle"]) for r in _csv.DictReader(f)]
+        floor = min(vals)
+        check(len(vals) >= 4, f"地板扫描至少 4 个视角档（实得 {len(vals)}）")
+        # 判据不是「完全不变」（浮点与插值噪声在 1e-6 量级），而是两件事同时成立：
+        #   (a) 最高三档彼此相差 < 0.1%，(b) 不再单调下降（末档不低于前一档）。
+        # 后者是关键——仍在单调下降说明还没到底，那才是「剂量不足」。
+        top3 = vals[-3:]
+        spread = (max(top3) - min(top3)) / min(top3)
+        check(spread < 1e-3, f"最高三档相对离散度 {spread:.2e} < 0.1%（已触底）")
+        check(vals[-1] >= vals[-2] - 1e-9,
+              f"末档不再低于前一档（{vals[-2]:.6f} → {vals[-1]:.6f}），即已停止下降")
+        quoted = f"{floor:.5f}"
+        where = [r for r, t in texts.items() if quoted in t]
+        check(len(where) >= 2,
+              f"地板值 {quoted} 至少在两份文档中被引用（实得 {len(where)}：{where}）")
+
+    # ③ 聚类 CI 产物必须存在，且教师那档的簇数足够
+    cp = os.path.join(root, "experiments", "results", "cluster_ci.json")
+    check(os.path.exists(cp), "cluster_ci.json 存在（聚类口径的置信区间）")
+    if os.path.exists(cp):
+        cj = _json.load(open(cp, encoding="utf-8"))
+        t = cj.get("seg3d_teacher_dice.csv", {})
+        check(t.get("n_cases", 0) >= 10 and t.get("clustered_ci_reliable") is True,
+              f"教师档簇数足够、聚类区间可用（n_cases={t.get('n_cases')}）")
+
+
 def test_model_checksums():
     """models/CHECKSUMS.sha256 必须与实际文件一致，且与 ARCHITECTURE 表格逐行对应。
 
@@ -3730,6 +3796,7 @@ def main_run():
         test_recon_pipeline_helpers()
         test_sampling_density()       # 纯 recon.make_theta，无 Qt / 真实数据
         test_zero_grade_guards(app, m)  # 归零级守卫：合成数据，无真实数据依赖
+        test_withdrawn_claims_stay_withdrawn()  # 撤回结论防回潮：纯文本 + 已入库 CSV
         test_model_checksums()        # 权重摘要清单与文档一致：纯文本 + 已入库 .onnx
         test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
     else:
@@ -3801,6 +3868,7 @@ def main_run():
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
         test_zero_grade_guards(app, m)  # 归零级守卫：合成数据，无真实数据依赖
+        test_withdrawn_claims_stay_withdrawn()  # 撤回结论防回潮：纯文本 + 已入库 CSV
         test_model_checksums()        # 权重摘要清单与文档一致：纯文本 + 已入库 .onnx
         test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))

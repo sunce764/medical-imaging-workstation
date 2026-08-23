@@ -15,6 +15,9 @@ python experiments/recon_study.py           # Experiments A + B (fast, pure FBP)
 python experiments/recon_study.py c          # Experiment C (needs to build the system matrix; slow the first time, then served from disk cache)
 python experiments/recon_study.py a b c      # run all
 python experiments/recon_cond.py             # Experiment C′ (SVD of C's system matrices; reuses the same cache)
+python experiments/recon_stopping.py         # Experiment C″ (ART/SIRT iteration sweep; withdraws the "ART is best" ranking)
+python experiments/recon_floor.py            # Experiment A′ (metric floor: is the plateau dose or implementation?)
+python experiments/cluster_ci.py             # Case-level clustered bootstrap CIs (reads committed CSVs only)
 ```
 
 Outputs are written to `experiments/results/`: one PNG figure plus one CSV of raw data per experiment.
@@ -35,7 +38,7 @@ Outputs are written to `experiments/results/`: one PNG figure plus one CSV of ra
 `exp_a_dose_quality.png`
 
 RMSE falls monotonically from **0.222** at 15 views to **0.035** at 360 views; SSIM rises from **0.35** to **0.95**.
-**Beyond ≈180 views it enters a clear region of diminishing returns** — adding further dose gives only a marginal quality improvement. This provides a quantitative basis for "enough is enough" dose selection.
+**Beyond ≈180 views the curve flattens** — but see `recon_floor.py` / `exp_a_metric_floor.csv`: the plateau is the reconstruction chain's own discretisation floor (in-circle RMSE ≈0.03539; 720/1440/2880 views give 0.035394/0.035386/0.035388 — within 0.02% and no longer descending), not evidence that the dose is sufficient. Adding further dose gives only a marginal quality improvement. This provides a quantitative basis for "enough is enough" dose selection.
 
 ### B — The optimal filter choice inverts with dose (256×256)
 `exp_b_filters.png`
@@ -57,7 +60,15 @@ At low dose / sparse angles, apodisation filters (hann/hamming) that suppress hi
 | 60 | 0.089 | **0.611** | **0.053** | 0.076 |
 | 90 | 0.087 | 0.090 | **0.050** | 0.075 |
 
-1. **ART is best throughout** — the non-negativity constraint plus per-ray (Kaczmarz) updates act as implicit regularisation, making it the most robust under noise.
+1. **~~ART is best throughout~~ — withdrawn: this was an artefact of the stopping rule.** The table above fixes ART at 5 sweeps and SIRT at 100 iterations, hardcoded, with no convergence check. Under the standard equal-compute convention (one ART sweep ≈ one SIRT iteration, each costing about one forward- plus one back-projection) that is a **1:20 compute gap** — SIRT loses while being given twenty times the budget. Sweeping both (`recon_stopping.py` → `exp_c_stopping.csv`) reverses the result at every dose:
+
+   | views | ART best | SIRT best | SIRT better by |
+   |---|---|---|---|
+   | 30 | 0.04407 @ 100 | **0.03998** @ 3200 | 9.3% |
+   | 60 | 0.02711 @ 35 | **0.02312** @ 3200 | 14.7% |
+   | 90 | 0.02084 @ 20 | **0.01674** @ 3200 | 19.7% |
+
+   The defensible statement is **ART converges far faster; SIRT reaches a lower floor** — not that either is "most robust". Note both figures are bounded by the swept grid: SIRT is still improving at 3200 and ART's 30-view optimum sits at the grid edge, so neither optimum is bracketed. Semi-convergence (error falling then rising) does not appear anywhere in the swept range because the measured noise level is only **η ≈ 0.9%**; that is a consequence of the chosen `I0`, not evidence that these solvers lack the property.
 2. **Naive least-squares (DMR) is unstable under noise**, with RMSE spiking to **0.611** at 60 views: here 64 detectors × 60 views gives 3,840 equations for 4,096 unknowns, so the system is nearly square, while the 30-view case (under-determined, minimum-norm solution) and the 90-view case (over-determined, with an averaging effect) are more stable. This is the classic behaviour of an ill-posed inverse problem, not an implementation defect. **This bullet used to end "and its condition number is worst there"; that was never measured, and when it finally was, the claim turned out to be right in substance but wrong in instrument** — see C′ below.
 3. **SIRT is steady and conservative** (~0.075), far more robust than DMR; the price of its smoothing is that it trails ART slightly.
 

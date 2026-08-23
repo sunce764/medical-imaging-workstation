@@ -1,0 +1,66 @@
+{
+  "seg3d_teacher_dice.csv": {
+    "n_cases": 57,
+    "n_lobe_instances": 234,
+    "mean": 0.8867,
+    "ci_pooled_iid": [
+      0.8587,
+      0.9139
+    ],
+    "ci_case_clustered": [
+      0.855,
+      0.9139
+    ],
+    "width_ratio": 1.067,
+    "clustered_ci_reliable": true,
+    "note": ""
+  },
+  "seg3d_student_ch8.csv": {
+    "n_cases": 2,
+    "n_lobe_instances": 10,
+    "mean": 0.0308,
+    "ci_pooled_iid": [
+      0.0115,
+      0.0516
+    ],
+    "ci_case_clustered": [
+      0.0255,
+      0.0361
+    ],
+    "width_ratio": 0.265,
+    "clustered_ci_reliable": false,
+    "note": "仅 2 个簇，聚类自助法退化，该区间与比值不可用"
+  },
+  "seg3d_student_ch8d3_33600s_sliding.csv": {
+    "n_cases": 57,
+    "n_lobe_instances": 234,
+    "mean": 0.7667,
+    "ci_pooled_iid": [
+      0.7255,
+      0.8072
+    ],
+    "ci_case_clustered": [
+      0.7155,
+      0.8122
+    ],
+    "width_ratio": 1.183,
+    "clustered_ci_reliable": true,
+    "note": ""
+  },
+  "seg3d_student_ch8d3_33600s_zslab.csv": {
+    "n_cases": 57,
+    "n_lobe_instances": 234,
+    "mean": 0.4367,
+    "ci_pooled_iid": [
+      0.3972,
+      0.4756
+    ],
+    "ci_case_clustered": [
+      0.3732,
+      0.4992
+    ],
+    "width_ratio": 1.606,
+    "clustered_ci_reliable": true,
+    "note": ""
+  }
+}
