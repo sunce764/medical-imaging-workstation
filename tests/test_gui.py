@@ -3186,16 +3186,33 @@ def test_withdrawn_claims_stay_withdrawn():
             texts[rel] = open(p, encoding="utf-8").read()
     check(len(texts) == len(docs), f"五份文档齐备（实得 {len(texts)}）")
 
-    # ① 「ART 最鲁棒」的无限定断言不得出现。带 withdrawn/撤回 的行是记述历史，放行。
-    banned = [r"ART is the most robust", r"ART is best throughout",
-              r"ART 是已测方法中最鲁棒", r"ART 各剂量最鲁棒"]
+    # ① 两条已撤回结论不得以无限定的形式出现。
+    #    【为什么从精确短语改成语义类别】原黑名单是 r"ART is the most robust" 一类的
+    #    精确短语，而 technical_report.md 的实际措辞是 "(ART) is the most robust"
+    #    （中间隔着右括号）、"constrained iteration is the most robust"（主语根本不
+    #    出现 ART）、"achieves the lowest RMSE"。三种同义改写全部绕开黑名单，断言实
+    #    测命中 0 条、一路绿灯，而那五处撤回本体从未进过该文件。精确短语锁不住改写。
+    #    (a) ART 排名：可由就地限定语救活（说清是在固定迭代数下），故放行条件较宽。
+    banned_rank = [r"is (the )?most robust", r"是已测方法中最鲁棒", r"各剂量最鲁棒",
+                   r"achieves the lowest RMSE", r"best \(ART\)", r"ART is cleanest"]
+    excuse_rank = (r"withdraw|Withdraw|撤回|~~"
+                   r"|under the fixed iteration counts|at the fixed iteration counts")
+    #    (b) 「≈180 视角后收益递减 ⇒ 剂量够了」：这是结论本身被推翻，没有任何限定语
+    #    能救，只有明写撤回才放行。放行条件**不能**包含「地板/不足以证明剂量够」之类
+    #    的措辞——experiments/README.md 曾在同一行里先撤回再复述，若按那样放行，
+    #    最典型的自相矛盾行反而会被自己的前半句豁免。
+    banned_dose = [r"basis for [\"\u201c]?enough is enough",
+                   r"[\"\u201c]diminishing-returns[\"\u201d] operating point",
+                   r"[\"\u201c]enough is enough[\"\u201d] (dose|acquisition)"]
+    excuse_dose = r"withdraw|Withdraw|撤回|~~|earlier revisions read"
     hits = []
     for rel, t in texts.items():
-        for line in t.splitlines():
-            if any(re.search(b, line) for b in banned) and not re.search(
-                    r"withdraw|Withdraw|撤回|~~", line):
-                hits.append(f"{rel}: {line.strip()[:60]}")
-    check(not hits, f"无未加撤回标注的「ART 最鲁棒」断言（违规 {len(hits)}：{hits[:2]}）")
+        for i, line in enumerate(t.splitlines(), 1):
+            for pats, exc in ((banned_rank, excuse_rank), (banned_dose, excuse_dose)):
+                if any(re.search(b, line) for b in pats) and not re.search(exc, line):
+                    hits.append(f"{rel}:{i}")
+                    break
+    check(not hits, f"无未加撤回标注/限定的已撤回结论（违规 {len(hits)}：{hits[:5]}）")
 
     # ② 地板值必须与 exp_a_metric_floor.csv 的实测最小值一致
     fp = os.path.join(root, "experiments", "results", "exp_a_metric_floor.csv")

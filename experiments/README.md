@@ -38,7 +38,7 @@ Outputs are written to `experiments/results/`: one PNG figure plus one CSV of ra
 `exp_a_dose_quality.png`
 
 RMSE falls monotonically from **0.222** at 15 views to **0.035** at 360 views; SSIM rises from **0.35** to **0.95**.
-**Beyond ≈180 views the curve flattens** — but see `recon_floor.py` / `exp_a_metric_floor.csv`: the plateau is the reconstruction chain's own discretisation floor (in-circle RMSE ≈0.03539; 720/1440/2880 views give 0.035394/0.035386/0.035388 — within 0.02% and no longer descending), not evidence that the dose is sufficient. Adding further dose gives only a marginal quality improvement. This provides a quantitative basis for "enough is enough" dose selection.
+**Beyond ≈180 views the curve flattens** — but see `recon_floor.py` / `exp_a_metric_floor.csv`: the plateau is the reconstruction chain's own discretisation floor (in-circle RMSE ≈0.03539; 720/1440/2880 views give 0.035394/0.035386/0.035388 — within 0.02% and no longer descending), not evidence that the dose is sufficient. Adding further dose gives only a marginal quality improvement, which is what a floor predicts and is **not** a basis for declaring the dose sufficient.
 
 ### B — The optimal filter choice inverts with dose (256×256)
 `exp_b_filters.png`
@@ -541,7 +541,15 @@ inference path, paired over all 234 instances: **−0.4500** [−0.4877, −0.41
 
 **The 0.7667 is the student's own ceiling, not a comparison.** It is what the architecture reaches
 once the evaluation defect of line E is removed — but the teacher was never re-scored under a
-matched sliding window, so *no* row here licenses "the student approaches the teacher". Quoting
+matched sliding window **on the test split**, so *no* row here licenses "the student approaches the
+teacher". The one measurement that exists is 3 cases on the *validation* split
+(`results/seg3d_infer_bias_teacher.csv`, whose `xy128` column runs `_teacher_sliding` at
+`(32, 128, 128)` with overlap 0.25 — the student's exact `PATCH` and overlap), and it points the
+other way: the teacher gains **+0.0133** there (0.8594 → 0.8727) while the same three cases take
+the student from 0.5153 to 0.8707, **+0.3554**. Path brittleness is the student's own defect, not a
+handicap the two share — and it happens to fire on the path the product actually runs
+(`ai_engine.py:311-335`). That measurement is not licensed as a number either: it is 3 cases, on a
+different split, from a code path the box at line 341 flags as never cross-checked. Quoting
 0.7667 against 0.8867 would be exactly the mistake line E exists to prevent: comparing across two
 inference paths that differ by 0.33 Dice on identical weights.
 
