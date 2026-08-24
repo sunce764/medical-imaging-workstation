@@ -259,6 +259,58 @@ use rather than every possible phrasing, and it does not prove semantic agreemen
 full). The full list does currently contain every data-independent test, but it does not
 *inherit* them — a test added to one list silently skips the other until both are edited.
 
+## Withdrawal-propagation round, and the TV baseline (2026-08)
+
+**A withdrawal that only reached three of five files.** Commit `68abee8` withdrew two Study I
+conclusions — "ART is the most robust solver" and "error flattens beyond ≈180 views, so the dose
+is sufficient" — but `git show --stat 68abee8 -- docs/technical_report.md` is *2 insertions,
+1 deletion*: a reference and a test count. The withdrawal itself never entered that file, which
+kept asserting both conclusions in its abstract, a section heading, a table caption and a figure
+caption. One of those sentences — "ART achieves the lowest RMSE at every tested dose **and
+iteration count**" — was by then not merely stale but false, since `recon_stopping.py` sweeps
+iteration count and reverses the ranking. The preprint abstract carried the withdrawal marker for
+the ART claim and not for the dose claim; `experiments/README.md` withdrew the dose claim and
+restated it in the same sentence. The repository was public throughout.
+
+**The regression assertion that was supposed to prevent exactly this was empty.** Its blacklist
+matched exact phrases (`ART is the most robust`), while the surviving text read
+`(ART) is the most robust` (a closing parenthesis in between), `constrained iteration is the most
+robust` (the subject is not ART at all), and `achieves the lowest RMSE`. Measured: **0 hits, green**.
+Rewritten as semantic categories it went **red on 7 lines** before the fix and green after. Two more
+were then found *in the same round* by the same mechanism — `ART is **the** cleanest` (an article
+defeats `ART is cleanest`) and a one-sentence summary still recommending "choose a constrained
+iterative method (ART)". The exemption rule for the dose claim had to be tightened separately:
+allowing any line that mentions the metric floor would have exempted the self-contradicting
+sentence via its own first half.
+
+**A dangling cross-reference, and then the baseline it pointed at.** `recon_dl.py` stated "this
+study currently lacks a TV baseline, see the README limitations" — and no markdown file in the
+repository contained the words *total variation*, *全变差* or *TV baseline*. The reference resolved
+to nothing. Rather than write the missing limitation, the gap was closed: `recon.compute_asdpocs`
+implements ASD-POCS (Sidky & Pan 2008 §2.4.2) and `experiments/recon_tv.py` sweeps it against the
+same phantom, noise realisations and system matrices as `recon_stopping.py`, all solvers
+oracle-stopped.
+
+The result reverses the assumption that motivated the check. TV was expected to be worthless at
+this study's noise level (η≈0.9%); it halves the best solver's error there (+45.1% to +54.7% over
+SIRT's own optimum). The advantage is monotone in SNR and **inverts** by η≈9%, where SSIM also
+separates the two in the opposite direction (0.519 against 0.687). A TV-adversarial phantom was
+run to deflate the result and did not (+45.7% to +56.4%). Two limits are carried explicitly:
+`n_iter` does not transfer from this repository's other solvers — taken as 20 by analogy with
+ART=5 / SIRT=100, ASD-POCS is *worse than FBP* — and the inverse crime bears on a matrix method
+inverting the exact generating operator harder than on any other result here.
+
+**Two assertions in the new test were written before being measured, and both were wrong.**
+"ASD-POCS output has lower total variation than ART" and "total variation decreases monotonically
+with α" were asserted from the algorithm's description; measured, both fail — at 20 iterations on a
+12×12 system ASD-POCS has not converged and TV only adds error. A third, scale covariance at the
+public API, deviates by 24% because `_finite_clip` clips to the absolute range [0,1], which is not
+scale-covariant; the property was being tested at the wrong layer. What replaced them: `_tv_grad`
+against finite differences (4.19e-09), degree-0 homogeneity of `_tv_grad` (the property that makes
+α dimensionless and therefore portable), and — the strongest — that `a=0, beta_red=1` makes
+`compute_asdpocs` **bit-identical** to `compute_art`, which locks the POCS step, the α scaling of
+`dtvg`, and the fact that `f_res` is returned pre-TV rather than post-TV, in one assertion.
+
 ## Known limitations (recorded faithfully, unfixed)
 
 - **MPR anisotropy uncorrected**: coronal/sagittal planes are displayed 1:1 by pixel; when slice thickness ≠ in-plane pixel spacing, the geometric proportions are distorted. A fix would require reworking the "scene coordinate = voxel index" mapping that runs through hover/measurement/cross-hairs — a non-surgical change whose risk outweighs its benefit, so it is recorded as a limitation. Caliper measurements use real mm, so **the measured values are correct**; only the displayed proportions do not match anatomy.

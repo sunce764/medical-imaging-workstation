@@ -783,6 +783,97 @@ def test_recon_numerics():
     check(float(art20.min()) >= 0.0 and float(sirt20.min()) >= 0.0, "ART/SIRT 非负约束生效")
 
 
+def test_asdpocs_numerics():
+    """ASD-POCS（TV 正则化）纯函数单测——合成小系统，无 Qt / 真实数据。
+
+    由来：ASD-POCS 的三个易错点都不会让代码报错，只会让它安静地变成另一个算法：
+    dtvg 每轮重新初始化（永不退火）、TV 步不做 L2 归一化（α 绑死在 A/p 的尺度上）、
+    返回 TV 步之后的图而非 POCS 步之后的 f_res。故逐条锁死。
+    """
+    print("[ASD-POCS / TV 正则化重建]")
+    import numpy as np
+
+    import recon as R
+    n_s = 12
+    img = np.zeros((n_s, n_s), np.float32)
+    img[3:9, 3:9] = 1.0          # 分片常数方块：TV 先验的理想对象
+    theta = R.make_theta(180.0, 16)
+    sino = R.compute_sinogram(img, theta)
+    p_vec = sino.ravel().astype(np.float32)
+    A, _ = R.build_system_matrix(n_s, theta, None, None)
+
+    # ---- 1) TV 梯度必须与有限差分一致 ----
+    # 这是整个算法的承重细节：梯度错了，TV 步会朝错误方向走，而 RMSE 仍可能下降
+    # （因为 POCS 步本身就在收敛），缺陷会被掩盖成「TV 没什么用」。
+    rng = np.random.default_rng(1)
+    f = rng.random((9, 9))
+
+    def _tv_norm(g):
+        gp = np.pad(g, 1, mode="edge")
+        c = gp[1:-1, 1:-1]
+        return float(np.sum(np.sqrt((c - gp[0:-2, 1:-1]) ** 2
+                                    + (c - gp[1:-1, 0:-2]) ** 2 + 1e-8)))
+
+    ana = R._tv_grad(f)
+    h, worst = 1e-6, 0.0
+    for s_i in range(9):
+        for t_i in range(9):
+            fp = f.copy(); fp[s_i, t_i] += h
+            fm = f.copy(); fm[s_i, t_i] -= h
+            worst = max(worst, abs((_tv_norm(fp) - _tv_norm(fm)) / (2 * h) - ana[s_i, t_i]))
+    check(worst < 1e-6, f"_tv_grad 与有限差分一致（最大偏差 {worst:.2e}）")
+
+    # ---- 2) a=0 且 beta_red=1 时必须逐 bit 退化为 ART ----
+    # 这一条同时锁住两件事：POCS 步就是带松弛的 ART（beta=1 时即原式），以及
+    # 返回的是 f_res（POCS 之后、TV 之前）。若误返回 TV 步之后的图，即便 dtvg=0
+    # 也会因多一次 reshape/拷贝路径而暴露差异；若 dtvg 未按 a 归零则直接不等。
+    for k in (1, 3, 7):
+        art, _ = R.compute_art(A, p_vec, n_s, k)
+        asd, _ = R.compute_asdpocs(A, p_vec, n_s, k, a=0.0, beta_red=1.0)
+        check(np.array_equal(art, asd),
+              f"a=0、beta_red=1 时 ASD-POCS 逐 bit 等于 ART（{k} 轮，"
+              f"最大差 {float(np.abs(art - asd).max()):.1e}）")
+
+    # ---- 3) _tv_grad 必须是零次齐次（尺度不变）----
+    # 这是 α 能跨几何/离散化移植的根据：TV 梯度尺度不变 ⇒ ‖df‖ 尺度不变 ⇒
+    # 步长 dtvg/‖df‖·df 与 dtvg 同尺度，而 dtvg = a·d_p 随 d_p 走，于是 a 无量纲。
+    # 少了 L2 归一化这一步，a 就绑死在特定的 A 与 p 尺度上，文献值不再可搬。
+    # （注意不能在 compute_asdpocs 的出口测尺度协变：_finite_clip 截到绝对区间
+    #   [0,1]，那一步本就不是尺度协变的，实测偏差达 24%——测错了层。）
+    # 齐次性只是**近似**成立：sqrt 里的 eps=1e-8 在相邻像素几乎相等处会主导分母，
+    # 那些位置的比值对尺度敏感。实测最坏 4.75e-05（c=0.5），故阈值取 1e-3——
+    # 仍比"漏掉 L2 归一化"的后果小三个量级以上（那会给出 O(1) 或 O(c) 的偏差）。
+    for c in (0.5, 2.0, 7.0):
+        dev = float(np.abs(R._tv_grad(c * f) - ana).max())
+        check(dev < 1e-3, f"_tv_grad(c·f) ≈ _tv_grad(f)，c={c}（最大偏差 {dev:.2e}）")
+
+    # ---- 4) TV 步确实生效，且 a 越大偏离纯 ART 越远 ----
+    # 若 dtvg 被误写成每轮重新按 a·d_p 赋值，随 d_p 衰减 a 的影响会被冲淡；
+    # 只初始化一次时，a 的影响必须单调体现在与 a=0（纯 ART）的距离上。
+    base, _ = R.compute_asdpocs(A, p_vec, n_s, 15, a=0.0)
+    devs = [float(np.abs(R.compute_asdpocs(A, p_vec, n_s, 15, a=aa)[0] - base).max())
+            for aa in (0.05, 0.2, 0.8)]
+    check(devs[0] < devs[1] < devs[2],
+          f"与纯 ART 的偏离随 a 单调增大（{devs[0]:.3f} < {devs[1]:.3f} < {devs[2]:.3f}）")
+
+    # ---- 5) POCS 步保证数据残差随轮数下降 ----
+    resids = [float(np.linalg.norm(A @ R.compute_asdpocs(A, p_vec, n_s, k)[0].ravel()
+                                   - p_vec)) for k in (1, 5, 20)]
+    check(resids[0] > resids[1] > resids[2],
+          f"数据残差 ‖A·x−p‖ 随轮数单调下降（{resids[0]:.2f} > {resids[1]:.2f} > {resids[2]:.2f}）")
+
+    # ---- 6) 非负约束与接口约定 ----
+    asd20, _ = R.compute_asdpocs(A, p_vec, n_s, 20)
+    check(float(asd20.min()) >= 0.0, "ASD-POCS 非负约束生效")
+    stop = {"n": 0}
+    def _cancel(): stop["n"] += 1; return True
+    rec_c, _ = R.compute_asdpocs(A, p_vec, n_s, 100, cancel_check=_cancel)
+    check(stop["n"] == 1 and float(np.abs(rec_c).max()) == 0.0,
+          "ASD-POCS cancel_check 首轮即停，返回全零初值")
+    seen = []
+    R.compute_asdpocs(A, p_vec, n_s, 3, progress_cb=seen.append)
+    check(seen == [0, 1, 2], f"ASD-POCS progress_cb 每轮回调一次（得 {seen}）")
+
 def test_recon_pipeline_helpers():
     """重建预处理/上采样纯函数直接单测——合成数组，无 Qt / 真实数据 / 系统矩阵。"""
     print("[重建预处理/上采样纯函数]")
@@ -3194,7 +3285,12 @@ def test_withdrawn_claims_stay_withdrawn():
     #    测命中 0 条、一路绿灯，而那五处撤回本体从未进过该文件。精确短语锁不住改写。
     #    (a) ART 排名：可由就地限定语救活（说清是在固定迭代数下），故放行条件较宽。
     banned_rank = [r"is (the )?most robust", r"是已测方法中最鲁棒", r"各剂量最鲁棒",
-                   r"achieves the lowest RMSE", r"best \(ART\)", r"ART is cleanest"]
+                   r"achieves the lowest RMSE", r"best \(ART\)",
+                   # 「ART is cleanest」写成「ART is **the** cleanest」就绕开了——
+                   # 这一处正是在加固本断言的同一轮里第二次被同款改写漏掉的，故一律
+                   # 用可选冠词，并把「推荐选 ART」这类祈使句也纳入。
+                   r"ART is (the )?cleanest", r"choose a constrained iterative method \(ART\)",
+                   r"(prefer|choose|use|select) ART\b"]
     excuse_rank = (r"withdraw|Withdraw|撤回|~~"
                    r"|under the fixed iteration counts|at the fixed iteration counts")
     #    (b) 「≈180 视角后收益递减 ⇒ 剂量够了」：这是结论本身被推翻，没有任何限定语
@@ -3809,6 +3905,7 @@ def main_run():
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
+        test_asdpocs_numerics()        # ASD-POCS/TV 正则化：合成小系统，无 Qt / 真实数据
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
         test_sampling_density()       # 纯 recon.make_theta，无 Qt / 真实数据
@@ -3882,6 +3979,7 @@ def main_run():
         test_mpr_geometry()
         test_mask_cache_guard()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
+        test_asdpocs_numerics()        # ASD-POCS/TV 正则化：合成小系统，无 Qt / 真实数据
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
         test_zero_grade_guards(app, m)  # 归零级守卫：合成数据，无真实数据依赖

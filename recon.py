@@ -618,6 +618,109 @@ def compute_sirt(A: np.ndarray, p_vec: np.ndarray, n: int, n_iter: int,
     return img_recon, elapsed_ms
 
 
+def _tv_grad(f: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    """各向同性 TV 的梯度 ∂‖f‖_TV/∂f（前向差分 + eps 平滑）。
+
+    ‖f‖_TV = Σ_{s,t} sqrt((f[s,t]-f[s-1,t])² + (f[s,t]-f[s,t-1])² )
+
+    每个像素同时出现在三个相邻项的分母里（它自己、下方、右方），故梯度是三项之和。
+    eps 只为让 sqrt 在平坦区可导，取 1e-8 时对结果的影响远小于噪声。
+    边界用 mode='edge' 复制而非补零：补零会在图像边框上造出一圈虚假的强边缘，
+    TV 会去"抹平"这圈不存在的结构。
+    """
+    fp = np.pad(f, 1, mode='edge')
+    c = fp[1:-1, 1:-1]
+    up, left = fp[0:-2, 1:-1], fp[1:-1, 0:-2]
+    dn, right = fp[2:, 1:-1], fp[1:-1, 2:]
+    dnl, upr = fp[2:, 0:-2], fp[0:-2, 2:]
+
+    d_c = np.sqrt((c - up) ** 2 + (c - left) ** 2 + eps)          # 分母 @ (s,t)
+    d_dn = np.sqrt((dn - c) ** 2 + (dn - dnl) ** 2 + eps)         # 分母 @ (s+1,t)
+    d_r = np.sqrt((right - upr) ** 2 + (right - c) ** 2 + eps)    # 分母 @ (s,t+1)
+    return (2 * c - up - left) / d_c - (dn - c) / d_dn - (right - c) / d_r
+
+
+def compute_asdpocs(A: np.ndarray, p_vec: np.ndarray, n: int, n_iter: int = 300,
+                    a: float = 0.2, n_grad: int = 20,
+                    beta: float = 1.0, beta_red: float = 0.995,
+                    a_red: float = 0.95, r_max: float = 0.95,
+                    eps_data: float = 0.0,
+                    cancel_check: Callable[[], bool] | None = None,
+                    progress_cb: Callable[[int], None] | None = None
+                    ) -> tuple[np.ndarray, float]:
+    """ASD-POCS（TV 正则化的压缩感知重建），返回 (img_recon, elapsed_ms)。
+
+    实现严格照 Sidky & Pan, Phys Med Biol 53(17):4777-4807 (2008) §2.4.2 的伪码
+    第 1–24 行。每一轮外循环 = 一次带松弛的 ART 扫掠（POCS 步，投影到数据一致集与
+    非负集）+ n_grad 次 TV 最速下降。
+
+    参数（默认值取自该文，勿凭习惯改动）：
+      n_iter=300  外循环轮数。**这是最容易踩的坑**：按本仓库 ART=5 / SIRT=100 的
+                  习惯随手取 20，ASD-POCS 会比 FBP 还差（60 视角实测 0.106 vs
+                  0.088）。实测最优点落在 145–300+，30 视角在 300 处仍未触底。
+      a=0.2       TV 步长相对 POCS 步长的初始比例（文中 α）。
+      n_grad=20   每轮 TV 最速下降的内层次数（文中 N_grad）。
+      beta=1.0 / beta_red=0.995   ART 松弛因子及其逐轮衰减（伪码 L1、L22）。
+      a_red=0.95 / r_max=0.95     TV 步长的自适应缩减规则（伪码 L21）：
+                  若 TV 步的位移 d_g > r_max·d_p 且数据残差 d_d > eps_data，
+                  说明 TV 走得比 POCS 还远、开始压过数据项，则 dtvg *= a_red。
+      eps_data=0.0  数据残差容限（伪码 L21 的第二个条件）。
+
+    三个易错点（都已按文中写法处理，改动前请回读伪码）：
+      1. **dtvg 只在首轮初始化**（L13 `if {first iteration}`），此后只经 L21 单调
+         缩小，绝不每轮重新按 a·d_p 赋值——否则步长永远不退火，算法性质全变。
+      2. **TV 步长要对梯度做 L2 归一化**（L17-18 `f -= dtvg·df/‖df‖`）。这一步让
+         dtvg 成为图像空间里的 L2 距离，与 d_p 同量纲，α 才是无量纲的——也正因
+         如此，α 能跨几何/离散化移植（实测扫 100× 量程，RMSE 只从 0.0116 动到
+         0.0126）。省掉归一化，α 就绑死在特定的 A 与 p 尺度上。
+      3. **返回 POCS 步后、TV 步前的 f_res**（L9 捕获、L24 返回），不是 TV 之后的图。
+
+    不复用 compute_art 作为 POCS 步：后者把 beta 硬编码为 1 且不暴露松弛参数，
+    而本算法要求 beta 逐轮 ×0.995。
+    """
+    x = np.zeros(n * n, dtype=np.float32)
+    row_norms_sq = np.einsum('ij,ij->i', A, A)
+    valid_idx = np.flatnonzero(row_norms_sq > 1e-10)
+    dtvg = None
+    f_res = x
+
+    start_t = time.perf_counter()
+    # errstate 的理由同 compute_sirt：macOS Accelerate BLAS 在 matmul 后会误置浮点
+    # 异常标志，本循环每轮含一次 A @ x，300 轮会向终端刷上百条无意义警告。
+    # 真正的数值异常仍由末尾的 _finite_clip 兜住并可见。
+    with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+      for it in range(n_iter):
+          if cancel_check is not None and cancel_check():
+              break
+          f0 = x.copy()                                        # L6
+          for i in valid_idx:                                  # L7 带松弛的 ART 扫掠
+              x += (beta * (p_vec[i] - A[i] @ x) / row_norms_sq[i]) * A[i]
+          np.clip(x, 0.0, None, out=x)                         # L8 非负约束
+          f_res = x.copy()                                     # L9 ← 最终返回的就是它
+          d_d = float(np.linalg.norm(A @ x - p_vec))           # L11 数据残差
+          d_p = float(np.linalg.norm(x - f0))                  # L12 POCS 步位移
+          if dtvg is None:                                     # L13 仅首轮初始化
+              dtvg = a * d_p
+          f0 = x.copy()                                        # L14
+          img = x.reshape(n, n)
+          for _ in range(n_grad):                              # L15-19 TV 最速下降
+              df = _tv_grad(img)
+              nrm = float(np.linalg.norm(df))
+              if nrm > 1e-12:
+                  img -= (dtvg / nrm) * df                     # L17-18 步长按 L2 归一化
+          x = img.reshape(-1)
+          d_g = float(np.linalg.norm(x - f0))                  # L20 TV 步位移
+          if d_g > r_max * d_p and d_d > eps_data:             # L21 自适应缩步
+              dtvg *= a_red
+          beta *= beta_red                                     # L22
+          if progress_cb is not None:
+              progress_cb(it)
+    elapsed_ms = (time.perf_counter() - start_t) * 1000
+
+    img_recon = _finite_clip(f_res, n)
+    return img_recon, elapsed_ms
+
+
 # -------------------------------------------------------------------------
 # 学习式后处理重建（研究三产物，见 experiments/recon_dl.py）
 # -------------------------------------------------------------------------

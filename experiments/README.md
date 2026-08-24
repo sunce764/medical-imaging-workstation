@@ -17,6 +17,7 @@ python experiments/recon_study.py a b c      # run all
 python experiments/recon_cond.py             # Experiment C′ (SVD of C's system matrices; reuses the same cache)
 python experiments/recon_stopping.py         # Experiment C″ (ART/SIRT iteration sweep; withdraws the "ART is best" ranking)
 python experiments/recon_floor.py            # Experiment A′ (metric floor: is the plateau dose or implementation?)
+python experiments/recon_tv.py               # Experiment C‴ (ASD-POCS/TV baseline; its advantage is monotone in SNR and inverts by η≈9%)
 python experiments/cluster_ci.py             # Case-level clustered bootstrap CIs (reads committed CSVs only)
 ```
 
@@ -71,12 +72,28 @@ At low dose / sparse angles, apodisation filters (hann/hamming) that suppress hi
    The defensible statement is **ART converges far faster; SIRT reaches a lower floor** — not that either is "most robust". Note both figures are bounded by the swept grid: SIRT is still improving at 3200 and ART's 30-view optimum sits at the grid edge, so neither optimum is bracketed. Semi-convergence (error falling then rising) does not appear anywhere in the swept range because the measured noise level is only **η ≈ 0.9%**; that is a consequence of the chosen `I0`, not evidence that these solvers lack the property.
 2. **Naive least-squares (DMR) is unstable under noise**, with RMSE spiking to **0.611** at 60 views: here 64 detectors × 60 views gives 3,840 equations for 4,096 unknowns, so the system is nearly square, while the 30-view case (under-determined, minimum-norm solution) and the 90-view case (over-determined, with an averaging effect) are more stable. This is the classic behaviour of an ill-posed inverse problem, not an implementation defect. **This bullet used to end "and its condition number is worst there"; that was never measured, and when it finally was, the claim turned out to be right in substance but wrong in instrument** — see C′ below.
 3. **SIRT is steady and conservative** (~0.075), far more robust than DMR; the price of its smoothing is that it trails ART slightly.
+4. **A TV-regularised solver beats both, and the size of that win is a function of SNR — not a constant.** The method set above (FBP / DMR / ART / SIRT) omitted the standard sparse-view baseline, total-variation regularisation, which `recon_dl.py` had flagged as a gap. `recon_tv.py` adds ASD-POCS (Sidky & Pan 2008, implemented in `recon.compute_asdpocs`) and sweeps it against the same phantom, noise realisation and system matrices, all four solvers **oracle-stopped** (`exp_c_asdpocs.csv`):
 
-The visual comparison in `exp_c_gallery.png` fully matches the RMSE: DMR is covered in salt-and-pepper noise, FBP shows streak artefacts, ART is the cleanest, SIRT is the smoothest.
+   | η (measured) | 30 views | 60 views | 90 views | SSIM at 90 views |
+   |---|---|---|---|---|
+   | ≈0.9% | **+54.7%** | **+48.8%** | **+45.1%** | 0.948 → **0.979** |
+   | ≈2.9% | +33.3% | +31.2% | +21.8% | 0.864 → 0.827 |
+   | ≈9.1% | +6.4% | **−0.8%** | **−10.0%** | 0.687 → **0.519** |
+
+   (Gain in in-circle RMSE against SIRT's own optimum. At η≈0.9%, ASD-POCS reaches 0.0092–0.0181 where SIRT's floor is 0.0167–0.0400.)
+
+   Three things this table is *for*, none of which is "TV wins":
+   - **The advantage is monotone in SNR and inverts.** By η≈9% ASD-POCS loses at 60 and 90 views. Reporting only the headline −50% would state the low-dose case backwards.
+   - **RMSE alone would still mislead where they tie.** At η≈9%, 90 views the RMSE gap is 10% but SSIM is 0.519 against SIRT's 0.687 — TV staircasing. Both metrics are therefore reported at every point.
+   - **The win is not an artefact of Shepp-Logan being piecewise constant**, which is the ideal object for a TV prior. Re-running everything on a TV-adversarial phantom (Shepp-Logan plus a smoothed random field, which breaks piecewise constancy) leaves the picture intact: +56.4% / +56.4% / +45.7% at η≈0.9%, and the same reversal by η≈9%. This was run expecting it to deflate the result; it did not.
+
+   Two caveats carried in the code and repeated here. **`n_iter` does not transfer from this repo's other solvers**: taking 20 by analogy with ART=5 / SIRT=100 makes ASD-POCS *worse than FBP* (0.106 vs 0.088 at 60 views); the optima land at 50–300. And **2 of the 18 rows have their optimum at the grid edge (300)**, so those are lower bounds on the achievable gain, not bracketed optima — the same qualification already carried for SIRT@3200. **The inverse crime cuts against this result harder, not softer**: ASD-POCS is a matrix method inverting the exact operator that generated the data, while FBP is not.
+
+The visual comparison in `exp_c_gallery.png` fully matches the RMSE: DMR is covered in salt-and-pepper noise, FBP shows streak artefacts, ART is the cleanest and SIRT the smoothest **at the fixed iteration counts of that figure** — a ranking withdrawn in item 1 above.
 
 ## Reconstruction study — one-sentence summary
 
-In low-dose CT, **the answer to "which algorithm/filter" changes with dose**: in the sparse, low-dose regime choose a constrained iterative method (ART) or an apodisation filter; in the ample-dose regime the analytic method (FBP + Ram-Lak) is sufficient and faster.
+In low-dose CT, **the answer to "which algorithm/filter" changes with dose**: in the sparse, low-dose regime prefer a constrained iterative method or an apodisation filter over unregularised inversion; in the ample-dose regime the analytic method (FBP + Ram-Lak) is sufficient and faster. **Which** constrained iterative method is a stopping-rule question, not a property (item 1) — and a TV-regularised one (ASD-POCS, `recon_tv.py`) beats both ART and SIRT by 45–56% at this noise level, an advantage that shrinks monotonically with SNR and reverses by η ≈ 9%.
 
 ---
 
