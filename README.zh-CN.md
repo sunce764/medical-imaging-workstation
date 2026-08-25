@@ -130,7 +130,7 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 9 个无 Qt 计算模块**。
-- 作者机器上全套 **629 项检查**，`SKIP_REAL_DATA=1` 可达 **539 项**。**fresh local clone 实测为 520 项**；代码基线 `0a9bfca` 的最近一次远端 run 记录为 512 项。差值不是不稳定，而是那些需要「干净 clone 拿不到的产物」（未分发的 `.onnx.data` 权重与 `.pt` checkpoint）的检查在那里根本不会执行。该 clean-clone 方法历史上也与 CI 一致：提交 `7a09744` 处两者均为 **458**（[run 日志](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32590281440)）。远端状态最终仍以 run 日志为准。留在 CI 之外的是需要 RIDER 序列或那些权重的部分——**不是**交互层，交互层由合成 DICOM 与合成鼠标/滚轮事件覆盖。自定义 runner 现也会把 Qt signal/slot 的未捕获异常计为失败，不能再出现“打印 traceback 但 exit 0”的假绿。
+- 作者机器上全套 **629 项检查**，`SKIP_REAL_DATA=1` 可达 **539 项**。**fresh local clone 实测为 520 项**。最近的日期化远端验证为 **2026-08-25 verified baseline `5c555ef`**：[run `32831264615`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32831264615) 记录 **520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`。它与本地计数的差值不是不稳定，而是那些需要「干净 clone 拿不到的产物」（未分发的 `.onnx.data` 权重与 `.pt` checkpoint）的检查在那里根本不会执行。该 clean-clone 方法历史上也与 CI 一致：提交 `7a09744` 处两者均为 **458**（[run 日志](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32590281440)）。后续远端状态只在绑定 GitHub Actions run 及其精确 `headSha` 时才具有证据力。留在 CI 之外的是需要 RIDER 序列或那些权重的部分——**不是**交互层，交互层由合成 DICOM 与合成鼠标/滚轮事件覆盖。自定义 runner 现也会把 Qt signal/slot 的未捕获异常计为失败，不能再出现“打印 traceback 但 exit 0”的假绿。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
@@ -143,7 +143,7 @@ coverage run tests/test_gui.py && coverage report
 <details>
 <summary><strong>覆盖率详情</strong></summary>
 
-离屏 Qt 覆盖率 **90%**（3359 条语句）。九个无 Qt 模块（`recon` 86%、`quantify` 100%、`segmentation` 92%、`mpr_geometry` 96%、`followup` 90%、`projection` 95%、`mesh3d` 96%、`registration` 98%、`model_card` 87%）均有独立单测；合成鼠标 press/move/release 序列会断言信号载荷（`graphics_view` 91%）。此前无人走过的几层提升明显：重建实验室 UI 调度 `recon_lab` 44% → **89%**，标注/分割编辑 `annotation_lab` 74% → **83%**，鼠标交互调度 `interaction.py` 64% → **98%**、随访对比 `compare_lab` 82% → **95%**。写这些断言的过程挖出三个只读代码发现不了的缺陷：光标移出体积后探针仍显示上一次的读数、模型说明卡遇到截断的 CSV 会崩、数字 id 的标注永远渲染不出也删不掉。因此，CI 全绿只代表数据无关子集通过，不等于所有本地数据交互测试均已运行。
+离屏 Qt 覆盖率 **90%**（3438 条语句）。九个无 Qt 模块（`recon` 88%、`quantify` 100%、`segmentation` 92%、`mpr_geometry` 96%、`followup` 90%、`projection` 95%、`mesh3d` 96%、`registration` 98%、`model_card` 87%）均有独立单测；合成鼠标 press/move/release 序列会断言信号载荷（`graphics_view` 91%）。此前无人走过的几层提升明显：重建实验室 UI 调度 `recon_lab` 44% → **89%**，标注/分割编辑 `annotation_lab` 74% → **83%**，鼠标交互调度 `interaction.py` 64% → **98%**、随访对比 `compare_lab` 82% → **95%**。写这些断言的过程挖出三个只读代码发现不了的缺陷：光标移出体积后探针仍显示上一次的读数、模型说明卡遇到截断的 CSV 会崩、数字 id 的标注永远渲染不出也删不掉。因此，CI 全绿只代表数据无关子集通过，不等于所有本地数据交互测试均已运行。
 
 </details>
 

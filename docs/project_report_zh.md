@@ -4,7 +4,7 @@
 **报告日期：** 2026-08-25<br>
 **报告用途：** 研究生申请与算法作品集审阅、项目阶段复盘、后续研究决策<br>
 **软件定位：** 教学 / 科研工具，非医疗器械，不得用于临床诊断<br>
-**审计基线：** Git `0a9bfca3a4452feca22f646c063bf9364068a966`，加上本次审阅后的 5 份文档真实性修正与中英文报告入口：`CHANGELOG.md`、`README.md`、`README.zh-CN.md`、`docs/preprint_recon.md`、`experiments/README.md`；这 5 份文件相对该基线的 unified diff SHA-256 为 `82d484051934490da487463d896d5a7f4cb5c0eed3a1149d98b2ade7fb9d46b1`
+**审计基线：** Git `0a9bfca3a4452feca22f646c063bf9364068a966`，加上本次审阅后的 5 份文档真实性修正与中英文报告入口：`CHANGELOG.md`、`README.md`、`README.zh-CN.md`、`docs/preprint_recon.md`、`experiments/README.md`；这 5 份文件相对该基线的 unified diff SHA-256 为 `1f2caf8cd69f54778049b60dc33449cb32e4b9aa6f3af3945b7de33caaaea698`
 
 > 本报告刻意区分四类信息：**本次实测**、**可由仓库产物复算**、**历史实测但未归档**、**推断或未测项**。数值不因叙事需要而跨越这些边界。
 
@@ -23,7 +23,7 @@
 3. 研究不仅保留正结果，也保留被大样本推翻的试跑结果和被后续测量撤回的结论；
 4. 数据、模型、许可、软著快照和当前代码之间的边界均被显式记录。
 
-截至本报告日期，项目已经具备较强的**作品集展示价值和工程可信度**：本机全套回归实测 **629 PASS / 0 FAIL / 0 traceback**，数据无关子集 **539 PASS / 0 FAIL / 0 traceback**，fresh local clone 子集 **520 PASS / 0 FAIL / 0 traceback**，Ruff 通过，产品代码覆盖率 **90%（3,438 statements，336 missed）**；远端 CI [run 32824575985](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32824575985) 已覆盖代码基线 `0a9bfca`，clean subset 512 项全部通过。后续本地 commits 因项目禁区未 push，不能用该 run 冒充其远端证明。项目仍然不是临床产品，也还不是一项已完成的临床研究：分割验证来自单一公开数据源，教师模型很可能见过该数据；学习式重建使用无噪声合成投影；部分历史性能数字没有归档原始日志；`push` trigger 仍未自动产生 run。
+截至本报告日期，项目已经具备较强的**作品集展示价值和工程可信度**：本机全套回归实测 **629 PASS / 0 FAIL / 0 traceback**，数据无关子集 **539 PASS / 0 FAIL / 0 traceback**，fresh local clone 子集 **520 PASS / 0 FAIL / 0 traceback**，Ruff 通过，产品代码覆盖率 **90%（3,438 statements，336 missed）**。**2026-08-25 已验证 baseline 为 `5c555ef`**：远端 [run 32831264615](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32831264615) 记录 **520 PASS / 0 FAIL**、coverage 81%、Ruff PASS，`event=workflow_dispatch`；后续远端状态以 GitHub Actions run 及其精确 `headSha` 为准。项目仍然不是临床产品，也还不是一项已完成的临床研究：分割验证来自单一公开数据源，教师模型很可能见过该数据；学习式重建使用无噪声合成投影；部分历史性能数字没有归档原始日志。自动 `push` trigger 仍是已知异常，但已接受以 manual exact-SHA CI 作为非阻塞性闭环，不再将根因深挖作为 P0。
 
 综合判断：这是一个“**产品实现 + 算法研究 + 证据治理**”结合得较完整的医学影像算法作品集。其可信度主要来自对错误结论的主动撤回、对推理路径的同口径比较，以及对不可复现部分的明确承认，而不是来自单个最高 Dice 或功能数量。
 
@@ -332,8 +332,8 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 | Fresh local clone subset | **520 PASS / 0 FAIL / 0 traceback** | 不含未分发 weights / checkpoints；验证 README clean-run 计数 |
 | Ruff | **PASS** | `ruff check .` |
 | Full-suite coverage | **90%** | 3,438 statements，336 missed |
-| Local Git | `0a9bfca` 之后的本地文档审计、验证链与公开口径修订 commits | 均未 push；远端 run 仍只能证明 `0a9bfca` |
-| Remote CI | [run 32824575985](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32824575985) 覆盖 `0a9bfca`，lint / test 均通过 | clean subset **512 项全部通过**，coverage 81%；事件仍是手动 `workflow_dispatch` |
+| Dated verified baseline | **2026-08-25 baseline `5c555ef`** | 这是日期化证据基线，不声称它永久等于后续 HEAD；新远端状态必须另绑定 run / `headSha` |
+| Remote CI | [run 32831264615](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32831264615) 覆盖已验证 baseline `5c555ef`，lint / test 均通过 | clean subset **520 PASS / 0 FAIL**，coverage 81%，Ruff PASS；`event=workflow_dispatch` |
 
 审计基线的 coverage run 曾发出一条 `signature_bootstrap.py` 无源 warning。后续诊断确认它是 PySide6 / shiboken 注入的虚拟模块：`__file__` 只有相对名，coverage 因而误解析为仓库根文件。配置现已精确 omit 该虚拟 basename，并移除 `ignore_errors=true`；修复前后实际产品 totals 不变，复跑为 **0 ghost warning**，未来未知无源条目也不会被静默吞掉。同次复跑发现一处 synthetic fixture 使 Qt slot 抛 `IndexError`却仍 exit 0；fixture 已修正，runner 已把未捕获 Qt slot exception 统一转为 FAIL，并用已知坏 probe 自检。
 
@@ -459,7 +459,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 |---|---|
 | 作品集展示 | **强**：功能、代码、结果、失败案例与审计链完整 |
 | 教学科研工具 | **可用**：关键流程可运行，边界写明 |
-| 工程可信度 | **较强但非发布级**：最新文档 patch 已本地验证，代码基线 `0a9bfca` 有手动 CI；自动 `push` trigger / packaging 仍需收口 |
+| 工程可信度 | **较强，本轮具备冻结条件**：2026-08-25 已验证 baseline `5c555ef` 有手动 CI；最终文档 commit 以 manual exact-SHA CI 为交付门。自动 `push` trigger 异常已作为非阻塞性运维约束接受；本项目按 source tree 交付，binary packaging 不是当前待收口事项 |
 | 学术发表准备 | **探索阶段**：已有可写结果，但 venue、研究问题与外部验证尚未锁定 |
 | 临床转化 | **不具备**：缺监管、独立临床验证、数据治理与部署体系 |
 
@@ -470,7 +470,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 | 优先级 | 风险 / 局限 | 当前处理 | 剩余动作 |
 |---|---|---|---|
 | 高 | 分割证据来自单一 dataset，teacher 可能见过 test cases | 明确披露，不宣称外部泛化 | 如进入论文阶段，需独立 dataset；属新实验，须另行批准 |
-| 高 | GitHub Actions `push` trigger 异常 | 手动 run 32824575985 已覆盖代码基线 `0a9bfca`；新文档 commit 仅本地验证、尚未 push；分支、路径、workflow 状态、Actions 权限均已排除 | 下一次授权 push 使用来源明确的普通 PAT / SSH，观察是否产生 `push` run；若仍失败再向 GitHub Support 提交事件时间与 SHA |
+| 低 | GitHub Actions `push` trigger 未自动产生 run | 2026-08-25 已验证 baseline 由 manual `workflow_dispatch` 覆盖；项目收口以 manual exact-SHA CI 作为固定门 | 冻结后不继续深挖根因；仅在出现 material defect 或新的明确授权时重开 |
 | 中 | Product no-overlap path 存在小幅 seam loss | 已量化收益和成本，未冒充已修复 | 仅在明确接受 +memory / +time 后决定是否采用 |
 | 中 | Study III 为 noise-free synthetic | limitation 已显式写入 | 若投稿，需 realistic noise 与 external baseline |
 | 中 | Historical model provenance 不完整 | 当前 hashes 与未记录项均披露 | 新模型建立 export manifest 与 result-time hash |
@@ -481,12 +481,12 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 
 ## 10. 建议的下一阶段
 
-### P0：先收口证据，不新增研究变量
+### 工程冻结与外部等待
 
-1. 保留代码基线 `0a9bfca` 的手动 GitHub Actions 证据：run 32824575985、clean subset 512 项；
-2. 下一次真实 push 时记录认证路径并观察 trigger，避免 badge 再次长期指向旧 SHA；
-3. 后续 performance run 使用已接入的 JSON provenance 合约；首个真实产物仍须检查 machine、config、wall time、process peak 与完整 model hashes 后再引用；
-4. 继续冻结项目方提交记录所指向的 `docs/*.pdf` 与签章材料；申请状态变化只更新非冻结说明，不重建 V1.0 快照。
+1. 工程收尾只使用一个最终门：公开文档 commit push 后，对该 exact SHA 手动触发 CI；最终 SHA 和 run URL 记在交付断点，不再回写报告制造自引用循环。
+2. 自动 `push` trigger 根因不再是 P0，不阻塞项目冻结，也不在冻结后主动深挖。
+3. 只有获得新的明确授权才可重开 performance run；届时必须使用已接入的 JSON provenance 合约，并核对 machine、configuration、wall time、process peak 与完整 model hashes。
+4. 继续冻结项目方提交记录所指向的 `docs/*.pdf` 与签章材料；等待 CPCC 期间不重建 V1.0 snapshot，状态变化只更新非冻结 Markdown。
 
 ### P1：面向作品集的表达
 
