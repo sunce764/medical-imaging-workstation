@@ -37,6 +37,15 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.dirname(HERE))
+from performance_artifact import (
+    artifact_timestamp_slug,
+    build_performance_artifact,
+    process_peak_memory_gib,  # noqa: E402
+    write_performance_artifact,
+)
+
+from constants import MODEL_PATH  # noqa: E402
+
 RESULTS = os.path.join(HERE, "results")
 
 CKPT = os.path.join(RESULTS, "seg3d_w8d3.pt")
@@ -506,8 +515,7 @@ def bench():
     a = ap.parse_args()
     if not a.yes:
         print("  这会重跑 ONNX 推理（数小时）。确认请加 --yes"); return 1
-
-    import resource
+    run_started = time.perf_counter()
 
     from seg3d_data import split as make_split
     from seg3d_teacher import make_session
@@ -531,11 +539,15 @@ def bench():
     sess = make_session()
     print(f"  配置 {a.config}  {a.split} 集 {len(cases)} 例，待跑 {len(todo)}\n")
 
+    completed = []
+    missing = []
     for i, c in enumerate(todo, 1):
         ip = os.path.join(CACHE, f"{c}_img.nii.gz")
         mp = os.path.join(CACHE, f"{c}_msk.nii.gz")
         if not (os.path.exists(ip) and os.path.exists(mp)):
-            print(f"  [{i}/{len(todo)}] {c}: 缺文件，跳过"); continue
+            print(f"  [{i}/{len(todo)}] {c}: 缺文件，跳过")
+            missing.append(c)
+            continue
         hu = load_zhw(ip).astype(np.float32)
         gt = load_zhw(mp).astype(np.int32)
         norm = ((np.clip(hu, *HU_CLIP) - HU_CLIP[0]) / (HU_CLIP[1] - HU_CLIP[0])
@@ -558,12 +570,12 @@ def bench():
             ds.append(d)
         with open(out_p, 'a', newline='', encoding='utf-8-sig') as f:
             csv.writer(f).writerows(rows)
+        completed.append(c)
         del gt, pred
         print(f"  [{i}/{len(todo)}] {c}  {len(ds)} 器官  均值 {np.mean(ds):.4f}  {dt:.0f}s")
         sys.stdout.flush()
 
-    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    pk = rss / (1024 ** 3) if sys.platform == 'darwin' else rss / (1024 ** 2)
+    pk, peak_method = process_peak_memory_gib()
     print(f"\n  配置 {a.config} 完成。本进程峰值内存 {pk:.2f} GB")
     # 【峰值必须落盘】此前它只 print 到终端，于是 README 里的 8.44 / 9.09 GB
     # 无法由任何已提交产物核验，第三方要验证只能重跑 59 例 × 2 配置。写成
@@ -577,7 +589,40 @@ def bench():
         if new_file:
             w.writerow(['config', 'split', 'n_cases', 'peak_gb'])
         w.writerow([a.config, a.split, len(cases), f"{pk:.2f}"])
-    print(f"    → {os.path.basename(out_p)}  /  {os.path.basename(peak_p)}")
+
+    model_files = [MODEL_PATH]
+    if os.path.isfile(MODEL_PATH + ".data"):
+        model_files.append(MODEL_PATH + ".data")
+    artifact = build_performance_artifact(
+        script="experiments/seg3d_infer_bias.py",
+        mode="bench",
+        project_root=os.path.dirname(HERE),
+        model_files=model_files,
+        configuration={
+            "config": a.config,
+            "split": a.split,
+            "limit": a.limit,
+            "selected_case_count": len(cases),
+            "already_present_case_count": len(done),
+            "scheduled_case_count": len(todo),
+            "one_configuration_per_process": True,
+            "hu_clip": list(HU_CLIP),
+        },
+        wall_time_seconds=time.perf_counter() - run_started,
+        peak_memory_gib=pk,
+        peak_memory_method=peak_method,
+        dependency_packages=("nibabel", "numpy", "onnxruntime"),
+        extra_measurements={
+            "completed_cases_this_run": completed,
+            "missing_cases_this_run": missing,
+            "per_organ_csv": os.path.basename(out_p),
+            "legacy_peak_csv": os.path.basename(peak_p),
+        },
+    )
+    artifact_name = (f"seg3d_infer_bias_bench_{a.config}_"
+                     f"{artifact_timestamp_slug(artifact)}.json")
+    write_performance_artifact(os.path.join(RESULTS, artifact_name), artifact)
+    print(f"    → {os.path.basename(out_p)}  /  {os.path.basename(peak_p)}  /  {artifact_name}")
     return 0
 
 

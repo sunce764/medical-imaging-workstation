@@ -19,7 +19,7 @@
 # 用法：
 #   python experiments/seg3d_bench.py                    # 教师模型（organs.onnx）
 #   python experiments/seg3d_bench.py --model <x.onnx>   # 换模型（学生模型同样适用）
-# 产出：results/seg3d_bench.csv
+# 产出：results/seg3d_bench.csv + timestamped machine-readable provenance JSON
 # =============================================================================
 
 import argparse
@@ -32,6 +32,13 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
+from performance_artifact import (
+    artifact_timestamp_slug,
+    build_performance_artifact,
+    process_peak_memory_gib,  # noqa: E402
+    write_performance_artifact,
+)
+
 from constants import MODEL_PATH  # noqa: E402
 
 RESULTS = os.path.join(HERE, "results")
@@ -128,6 +135,7 @@ def bench_sizes(model, sizes=((32, 160, 160), (32, 224, 224), (32, 320, 320), (3
 
 
 def main():
+    run_started = time.perf_counter()
     ap = argparse.ArgumentParser()
     ap.add_argument('--model', default=MODEL_PATH)
     a = ap.parse_args()
@@ -139,10 +147,13 @@ def main():
     print(f"  模型 {os.path.basename(a.model)}：{len(m.graph.node)} 算子，"
           f"权重元素 {npar/1e6:.1f}M\n")
 
+    provider_hw = (320, 320)
+    sizes = ((32, 160, 160), (32, 224, 224), (32, 320, 320), (32, 384, 384))
+    n_rep = 3
     print("  === Provider 对比（单块 32×320×320）===")
-    prov_rows = bench_providers(a.model)
+    prov_rows = bench_providers(a.model, hw=provider_hw, n_rep=n_rep)
     print("\n  === 推理时间 vs 输入体素数 ===")
-    size_rows, k, resid = bench_sizes(a.model)
+    size_rows, k, resid = bench_sizes(a.model, sizes=sizes, n_rep=n_rep)
 
     os.makedirs(RESULTS, exist_ok=True)
     with open(os.path.join(RESULTS, "seg3d_bench.csv"), 'w', newline='',
@@ -156,12 +167,52 @@ def main():
         for r in prov_rows:
             w.writerow(["provider", r['provider'], r['sec_mean'], "s/block"])
             w.writerow(["provider", r['provider'] + "_std", r['sec_std'], "s/block"])
-            w.writerow(["provider", r['provider'] + "_n_rep", 3, "count"])
+            w.writerow(["provider", r['provider'] + "_n_rep", n_rep, "count"])
         for r in size_rows:
             w.writerow(["size", r['shape'], r['sec_mean'], "s/block"])
         w.writerow(["fit", "us_per_voxel", round(k * 1e6, 4), "us"])
         w.writerow(["fit", "max_rel_residual", round(resid, 4), "ratio"])
-    print("    → results/seg3d_bench.csv")
+
+    peak_gib, peak_method = process_peak_memory_gib()
+    # `--model` may point at a custom ONNX whose external-data blob is not named
+    # `<graph>.data`; bind every location declared by the graph, not a filename guess.
+    external_locations = {
+        entry.value
+        for tensor in m.graph.initializer
+        for entry in tensor.external_data
+        if entry.key == "location"
+    }
+    model_files = [a.model] + [
+        os.path.join(os.path.dirname(a.model), location)
+        for location in sorted(external_locations)
+    ]
+    artifact = build_performance_artifact(
+        script="experiments/seg3d_bench.py",
+        mode="provider-and-input-size-benchmark",
+        project_root=os.path.dirname(HERE),
+        model_files=model_files,
+        configuration={
+            "provider_input_shape": [1, 1, DZ, *provider_hw],
+            "size_inputs": [list(shape) for shape in sizes],
+            "n_rep": n_rep,
+            "warmup_runs_per_configuration": 1,
+            "random_seed": 0,
+            "cpu_mem_arena_enabled": False,
+        },
+        wall_time_seconds=time.perf_counter() - run_started,
+        peak_memory_gib=peak_gib,
+        peak_memory_method=peak_method,
+        dependency_packages=("numpy", "onnx", "onnxruntime"),
+        extra_measurements={
+            "provider_results": prov_rows,
+            "size_results": size_rows,
+            "fit_us_per_voxel": k * 1e6,
+            "fit_max_relative_residual": resid,
+        },
+    )
+    artifact_name = f"seg3d_bench_{artifact_timestamp_slug(artifact)}.json"
+    write_performance_artifact(os.path.join(RESULTS, artifact_name), artifact)
+    print(f"    → results/seg3d_bench.csv / results/{artifact_name}")
     return 0
 
 

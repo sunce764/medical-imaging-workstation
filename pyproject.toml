@@ -67,11 +67,15 @@ ignore = ["E501", "E701", "E702", "E741", "E731", "UP031"]
 
 [tool.coverage.run]
 source = ["."]
-# 排除测试/实验，以及 PySide6/shiboken 注入进程、伪装成 CWD 下路径的虚拟模块
-omit = ["tests/*", "experiments/*", "*/site-packages/*", "pyscript", "shibokensupport/*"]
+# 排除测试/实验，以及 PySide6/shiboken 注入、伪装成 CWD 下路径的虚拟模块。
+# `signature_bootstrap` 的 __file__ 只有相对名；coverage 会误解析成仓库根文件。
+omit = [
+    "tests/*", "experiments/*", "*/site-packages/*",
+    "pyscript", "shibokensupport/*", "signature_bootstrap.py",
+]
 
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-# 忽略多进程 spawn 子进程等留下的、无法定位源文件的幽灵条目（如 recon 的矩阵并行 worker）
-ignore_errors = true
+# 已知虚拟模块在 [tool.coverage.run].omit 中逐项排除；未知无源条目保持报错，
+# 避免用 ignore_errors 把新的验证链问题一并吞掉。

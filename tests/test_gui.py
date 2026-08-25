@@ -14,6 +14,7 @@
 import os
 import sys
 import time
+import traceback
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -39,6 +40,15 @@ QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.No)
 _FAILS = []
 
 
+def _record_uncaught_exception(exc_type, exc_value, exc_tb):
+    """把 Qt signal/slot 吞掉的 Python exception 计为测试失败。"""
+    _FAILS.append(f"uncaught {exc_type.__name__}: {exc_value}")
+    traceback.print_exception(exc_type, exc_value, exc_tb)
+
+
+sys.excepthook = _record_uncaught_exception
+
+
 def check(cond, label):
     print(("  PASS " if cond else "  FAIL ") + label)
     if not cond:
@@ -50,6 +60,31 @@ def drain(engine, app, extra=40):
         app.processEvents()
     for _ in range(extra):
         app.processEvents()
+
+
+def test_runner_catches_qt_slot_exceptions():
+    """PySide 会吞掉 slot exception；自定义 runner 必须把它转成 FAIL / exit 1。"""
+    from contextlib import redirect_stderr
+    from io import StringIO
+
+    from PySide6.QtCore import QObject, Signal
+
+    class _Probe(QObject):
+        fired = Signal()
+
+    def explode():
+        raise RuntimeError("intentional Qt-slot probe")
+
+    probe = _Probe()
+    probe.fired.connect(explode)
+    before = len(_FAILS)
+    # 这是已知坏输入的自检；隐藏预期 traceback，再移除它刻意注入的 FAIL。
+    with redirect_stderr(StringIO()):
+        probe.fired.emit()
+    captured = _FAILS[before:]
+    del _FAILS[before:]
+    check(captured == ["uncaught RuntimeError: intentional Qt-slot probe"],
+          "Qt slot 未捕获异常会进入 FAIL 列表（不再出现 traceback + exit 0 假绿）")
 
 
 def test_ai_engine(app):
@@ -3234,7 +3269,9 @@ def test_zero_grade_guards(app, m):
           "混入一层 NaN 即整列判为不可按解剖 z 排序（防逐切片混排）")
 
     # ④ 非 Axial 平面的标注必须被拒绝，而不是按 axial 层号错存。
-    v.dicom_datasets = []
+    # 保持 synthetic volume / DICOM 列表长度一致；旧 fixture 留空列表，使下面合法的
+    # Axial 标注在 update_display 中抛 IndexError，却被 Qt signal/slot 静默吞掉。
+    v.dicom_datasets = [None] * 3
     v.volume_hu = np.zeros((3, 4, 4), np.float32)
     v.current_3d_pos = [1, 0, 0]
     v.global_annotations = {}
@@ -3431,6 +3468,68 @@ def test_model_checksums():
             want = entries[rel]
             check(want.startswith(head) and want.endswith(tail),
                   f"表格中 {rel} 对应的摘要 {head}…{tail} 与清单一致（交换单元格会在此失败）")
+
+
+def test_performance_artifact_contract():
+    """Performance run 必须留下机器、配置、耗时、峰值内存和完整模型 hash。"""
+    print("[Performance provenance artifact]")
+    import copy
+    import hashlib
+    import json
+    import tempfile
+
+    from experiments.performance_artifact import (
+        build_performance_artifact,
+        validate_performance_artifact,
+        write_performance_artifact,
+    )
+
+    with tempfile.TemporaryDirectory() as td:
+        graph = os.path.join(td, "fake.onnx")
+        weights = graph + ".data"
+        with open(graph, "wb") as f:
+            f.write(b"graph")
+        with open(weights, "wb") as f:
+            f.write(b"external weights")
+
+        artifact = build_performance_artifact(
+            script="experiments/fake_bench.py",
+            mode="contract-test",
+            project_root=_ROOT,
+            model_files=[graph, weights],
+            configuration={"provider": "CPUExecutionProvider", "n_rep": 3},
+            wall_time_seconds=12.5,
+            peak_memory_gib=1.25,
+            peak_memory_method="test fixture",
+        )
+        check(validate_performance_artifact(artifact) is artifact,
+              "完整 performance artifact 通过 schema 校验")
+        check(set(artifact) >= {"machine", "configuration", "measurements", "model"},
+              "artifact 含 machine / configuration / measurements / model")
+        check(artifact["measurements"]["wall_time_seconds"] == 12.5
+              and artifact["measurements"]["peak_memory_gib"] == 1.25,
+              "wall time 与 peak memory 使用机器可读数值")
+        hashes = {x["name"]: x["sha256"] for x in artifact["model"]["files"]}
+        check(hashes == {
+            "fake.onnx": hashlib.sha256(b"graph").hexdigest(),
+            "fake.onnx.data": hashlib.sha256(b"external weights").hexdigest(),
+        }, "ONNX graph 与 external data 分别绑定 SHA-256")
+        check(len(artifact["model"]["combined_sha256"]) == 64,
+              "模型组合摘要存在（不会把 graph hash 冒充完整权重身份）")
+
+        out = os.path.join(td, "run.json")
+        write_performance_artifact(out, artifact)
+        loaded = json.load(open(out, encoding="utf-8"))
+        check(loaded == artifact, "artifact 原子写入后可无损读取")
+
+        bad = copy.deepcopy(artifact)
+        del bad["machine"]
+        try:
+            validate_performance_artifact(bad)
+            rejected = False
+        except ValueError:
+            rejected = True
+        check(rejected, "已知坏 artifact（缺 machine）会被拒绝")
 
 
 def test_doc_code_consistency():
@@ -3869,6 +3968,7 @@ def test_hu_conversion(app):
 
 def main_run():
     app = QApplication([])
+    test_runner_catches_qt_slot_exceptions()
     # 有真实数据（本地开发）跑全套；无数据或 CI（SKIP_REAL_DATA=1）只跑数据无关的自包含测试。
     has_data = (os.path.isdir(os.path.join(_ROOT, "肺癌"))
                 and not os.environ.get("SKIP_REAL_DATA"))
@@ -3912,6 +4012,7 @@ def main_run():
         test_zero_grade_guards(app, m)  # 归零级守卫：合成数据，无真实数据依赖
         test_withdrawn_claims_stay_withdrawn()  # 撤回结论防回潮：纯文本 + 已入库 CSV
         test_model_checksums()        # 权重摘要清单与文档一致：纯文本 + 已入库 .onnx
+        test_performance_artifact_contract()  # 性能产物 provenance 合约：纯 stdlib + 临时文件
         test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
     else:
         v = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌"))
@@ -3985,6 +4086,7 @@ def main_run():
         test_zero_grade_guards(app, m)  # 归零级守卫：合成数据，无真实数据依赖
         test_withdrawn_claims_stay_withdrawn()  # 撤回结论防回潮：纯文本 + 已入库 CSV
         test_model_checksums()        # 权重摘要清单与文档一致：纯文本 + 已入库 .onnx
+        test_performance_artifact_contract()  # 性能产物 provenance 合约：纯 stdlib + 临时文件
         test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
     print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
     return 1 if _FAILS else 0

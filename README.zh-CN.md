@@ -130,12 +130,12 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 9 个无 Qt 计算模块**。
-- 作者机器上全套 **621 项检查**，`SKIP_REAL_DATA=1` 可达 **531 项**。**干净的 CI runner 会更少——当前为 512 项**。差值不是不稳定，而是那些需要「干净 clone 拿不到的产物」（未分发的 `.onnx.data` 权重与 `.pt` checkpoint）的检查在那里根本不会执行。512 这个数是**方法已被校准的预测**而非估计：在一份全新 clone 里跑 `SKIP_REAL_DATA=1` 能精确复现 CI 计数——在提交 `7a09744` 处该 clone 给出 **458**，正是 [CI 当时实际记录的数字](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32590281440)。最终仍以 run 日志为准，此处给的是该方法对下一次 run 的预测。留在 CI 之外的是需要 RIDER 序列或那些权重的部分——**不是**交互层，交互层由合成 DICOM 与合成鼠标/滚轮事件在 CI 中覆盖。
+- 作者机器上全套 **629 项检查**，`SKIP_REAL_DATA=1` 可达 **539 项**。**fresh local clone 实测为 520 项**；代码基线 `0a9bfca` 的最近一次远端 run 记录为 512 项。差值不是不稳定，而是那些需要「干净 clone 拿不到的产物」（未分发的 `.onnx.data` 权重与 `.pt` checkpoint）的检查在那里根本不会执行。该 clean-clone 方法历史上也与 CI 一致：提交 `7a09744` 处两者均为 **458**（[run 日志](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32590281440)）。远端状态最终仍以 run 日志为准。留在 CI 之外的是需要 RIDER 序列或那些权重的部分——**不是**交互层，交互层由合成 DICOM 与合成鼠标/滚轮事件覆盖。自定义 runner 现也会把 Qt signal/slot 的未捕获异常计为失败，不能再出现“打印 traceback 但 exit 0”的假绿。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
-python tests/test_gui.py                     # 完整回归：本地 621 项；需本地 RIDER 数据
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 本地 531 项；干净 CI runner 512 项（见上）
+python tests/test_gui.py                     # 完整回归：本地 629 项；需本地 RIDER 数据
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 本地 539 项；fresh local clone 实测 520 项
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```

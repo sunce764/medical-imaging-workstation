@@ -4,7 +4,7 @@
 **报告日期：** 2026-08-25<br>
 **报告用途：** 研究生申请与算法作品集审阅、项目阶段复盘、后续研究决策<br>
 **软件定位：** 教学 / 科研工具，非医疗器械，不得用于临床诊断<br>
-**审计基线：** Git `0a9bfca3a4452feca22f646c063bf9364068a966`，加上本次审阅后的 5 份文档真实性修正与中英文报告入口：`CHANGELOG.md`、`README.md`、`README.zh-CN.md`、`docs/preprint_recon.md`、`experiments/README.md`；这 5 份文件相对该基线的 unified diff SHA-256 为 `38ced6d09ecd5a9c7951c75798abfcfa7b73d589517b00f26163d96cfa550357`
+**审计基线：** Git `0a9bfca3a4452feca22f646c063bf9364068a966`，加上本次审阅后的 5 份文档真实性修正与中英文报告入口：`CHANGELOG.md`、`README.md`、`README.zh-CN.md`、`docs/preprint_recon.md`、`experiments/README.md`；这 5 份文件相对该基线的 unified diff SHA-256 为 `a722eb2b86dd0c865b84e38c40cd480bfd8c6e0e72e30c15846cd9cb4317dcad`
 
 > 本报告刻意区分四类信息：**本次实测**、**可由仓库产物复算**、**历史实测但未归档**、**推断或未测项**。数值不因叙事需要而跨越这些边界。
 
@@ -23,7 +23,7 @@
 3. 研究不仅保留正结果，也保留被大样本推翻的试跑结果和被后续测量撤回的结论；
 4. 数据、模型、许可、软著快照和当前代码之间的边界均被显式记录。
 
-截至本报告日期，项目已经具备较强的**作品集展示价值和工程可信度**：本机全套回归实测 **621 PASS / 0 FAIL**，本次文档 patch 上的数据无关子集 **531 PASS / 0 FAIL**，Ruff 通过，产品代码覆盖率 **90%（3,438 statements，336 missed）**；远端 CI [run 32824575985](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32824575985) 已覆盖代码基线 `0a9bfca`，clean subset 512 项全部通过。新文档 commit 因项目禁区未 push，不能用该 run 冒充其远端证明。项目仍然不是临床产品，也还不是一项已完成的临床研究：分割验证来自单一公开数据源，教师模型很可能见过该数据；学习式重建使用无噪声合成投影；部分性能数字没有归档原始日志；`push` trigger 仍未自动产生 run。
+截至本报告日期，项目已经具备较强的**作品集展示价值和工程可信度**：本机全套回归实测 **629 PASS / 0 FAIL / 0 traceback**，数据无关子集 **539 PASS / 0 FAIL / 0 traceback**，fresh local clone 子集 **520 PASS / 0 FAIL / 0 traceback**，Ruff 通过，产品代码覆盖率 **90%（3,438 statements，336 missed）**；远端 CI [run 32824575985](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32824575985) 已覆盖代码基线 `0a9bfca`，clean subset 512 项全部通过。后续本地 commits 因项目禁区未 push，不能用该 run 冒充其远端证明。项目仍然不是临床产品，也还不是一项已完成的临床研究：分割验证来自单一公开数据源，教师模型很可能见过该数据；学习式重建使用无噪声合成投影；部分历史性能数字没有归档原始日志；`push` trigger 仍未自动产生 run。
 
 综合判断：这是一个“**产品实现 + 算法研究 + 证据治理**”结合得较完整的医学影像算法作品集。其可信度主要来自对错误结论的主动撤回、对推理路径的同口径比较，以及对不可复现部分的明确承认，而不是来自单个最高 Dice 或功能数量。
 
@@ -315,7 +315,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 | Student path 0.4903→0.7457 | 同一 weights、24 validation cases；两条 inference path | B，需外部 data / weight | [`seg3d_diag_ch8d3_33600s_zslab.json`](../experiments/results/seg3d_diag_ch8d3_33600s_zslab.json)、[`seg3d_diag_ch8d3_33600s_sliding.json`](../experiments/results/seg3d_diag_ch8d3_33600s_sliding.json) · [`seg3d_diag.py`](../experiments/seg3d_diag.py) |
 | Product overlap +0.0133 / 1.18× | 59 paired all-organ case means；time 由同一批 per-case `sec` 重算 | B，需外部 data / weight | [`seg3d_infer_bias_bench_A.csv`](../experiments/results/seg3d_infer_bias_bench_A.csv)、[`seg3d_infer_bias_bench_B.csv`](../experiments/results/seg3d_infer_bias_bench_B.csv) · [`seg3d_infer_bias.py`](../experiments/seg3d_infer_bias.py) `bench` |
 | Teacher–student `zslab` −0.4500 | 234 matched `(case, lobe)` rows；正文 CI 是 instance bootstrap | B，需外部 data / weight | [`seg3d_teacher_dice.csv`](../experiments/results/seg3d_teacher_dice.csv)、[`seg3d_student_ch8d3_33600s_zslab.csv`](../experiments/results/seg3d_student_ch8d3_33600s_zslab.csv) · [`seg3d_report.py`](../experiments/seg3d_report.py) |
-| 621 / 531、Ruff、coverage 90% | 本报告日当前 worktree；commands 见 §11 | A | Terminal exit code、PASS/FAIL count、`coverage report`；未写入 research results |
+| 629 / 539 / clean 520、Ruff、coverage 90% | 本报告日当前 worktree；commands 见 §11 | A | Terminal exit code、PASS/FAIL/traceback count、fresh-clone run、`coverage report`；未写入 research results |
 | 100s/8.8GB→37s/3.0GB；8.44→9.09GB | 各为历史单机 run | C | 文档中的 terminal record；没有可独立复核 artifact |
 | Exact upstream checkpoint、noisy-CT hallucination、cross-scanner generalisation | 未形成直接 measurement | D | 明确保持 unresolved，不由 checksum 或现有 Dice 推断 |
 
@@ -327,14 +327,15 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 
 | 检查 | 结果 | 解释 |
 |---|---:|---|
-| Full regression with local RIDER | **621 PASS / 0 FAIL** | 真实 DICOM 在场；启动后取消 background AI，不重跑整卷分割 |
-| `SKIP_REAL_DATA=1` local subset | **531 PASS / 0 FAIL** | 合成 DICOM、synthetic event、pure compute 与本地模型 artifact guard |
+| Full regression with local RIDER | **629 PASS / 0 FAIL / 0 traceback** | 真实 DICOM 在场；启动后取消 background AI，不重跑整卷分割 |
+| `SKIP_REAL_DATA=1` local subset | **539 PASS / 0 FAIL / 0 traceback** | 合成 DICOM、synthetic event、pure compute 与本地模型 artifact guard |
+| Fresh local clone subset | **520 PASS / 0 FAIL / 0 traceback** | 不含未分发 weights / checkpoints；验证 README clean-run 计数 |
 | Ruff | **PASS** | `ruff check .` |
 | Full-suite coverage | **90%** | 3,438 statements，336 missed |
-| Git worktree | 5 个预存文档修改 + 本报告 | 本报告没有覆盖或回滚用户已有修改 |
+| Local Git | 文档审计 commit `3a4ab27` + 本次验证链收尾 | 均未 push；远端 run 仍只能证明 `0a9bfca` |
 | Remote CI | [run 32824575985](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32824575985) 覆盖 `0a9bfca`，lint / test 均通过 | clean subset **512 项全部通过**，coverage 81%；事件仍是手动 `workflow_dispatch` |
 
-Coverage run 还发出一条 `signature_bootstrap.py` 无源 warning；coverage 配置选择 `ignore_errors=true`，最终表格仍覆盖实际产品模块。该 warning 不改变 90% 统计，但说明 coverage 环境仍可进一步清理。
+审计基线的 coverage run 曾发出一条 `signature_bootstrap.py` 无源 warning。后续诊断确认它是 PySide6 / shiboken 注入的虚拟模块：`__file__` 只有相对名，coverage 因而误解析为仓库根文件。配置现已精确 omit 该虚拟 basename，并移除 `ignore_errors=true`；修复前后实际产品 totals 不变，复跑为 **0 ghost warning**，未来未知无源条目也不会被静默吞掉。同次复跑发现一处 synthetic fixture 使 Qt slot 抛 `IndexError`却仍 exit 0；fixture 已修正，runner 已把未捕获 Qt slot exception 统一转为 FAIL，并用已知坏 probe 自检。
 
 ### 5.2 覆盖面
 
@@ -374,7 +375,7 @@ Coverage run 还发出一条 `signature_bootstrap.py` 无源 warning；coverage 
 - 仓库不是可直接安装的完整 package，资源按 source-tree relative path 定位；
 - 完整测试依赖本地 RIDER data，clean CI 只能执行 data-independent subset；
 - ONNX external weights 和部分 PyTorch checkpoints 不由普通 clone 获取；
-- 少量 historical performance 数字只有终端记录，没有 machine-readable artifact。
+- 少量 historical performance 数字只有终端记录，没有 machine-readable artifact。现有两个 benchmark 入口已建立 timestamped JSON provenance 合约（machine、config、wall time、process peak、Git / dependency / 完整 ONNX graph + external-data hashes），但尚未重跑，不能把代码能力冒充历史产物。
 
 ---
 
@@ -474,7 +475,7 @@ Coverage run 还发出一条 `signature_bootstrap.py` 无源 warning；coverage 
 | 中 | Product no-overlap path 存在小幅 seam loss | 已量化收益和成本，未冒充已修复 | 仅在明确接受 +memory / +time 后决定是否采用 |
 | 中 | Study III 为 noise-free synthetic | limitation 已显式写入 | 若投稿，需 realistic noise 与 external baseline |
 | 中 | Historical model provenance 不完整 | 当前 hashes 与未记录项均披露 | 新模型建立 export manifest 与 result-time hash |
-| 中 | Test runner 非 pytest、coverage 有 ghost-source warning | 自定义 runner 可工作 | 可渐进迁移，不应大规模重构 |
+| 低 | Test runner 非 pytest | 自定义 runner 现已捕获 Qt slot 异常；coverage ghost-source 已按根因精确排除，且不再全局 `ignore_errors` | 可渐进迁移，不应大规模重构 |
 | 低 | Frozen PDF 有“非患者数据”措辞错误 | Markdown 勘误公开 | 在审期间不改 PDF；后续版本修正 |
 
 ---
@@ -485,7 +486,7 @@ Coverage run 还发出一条 `signature_bootstrap.py` 无源 warning；coverage 
 
 1. 保留代码基线 `0a9bfca` 的手动 GitHub Actions 证据：run 32824575985、clean subset 512 项；
 2. 下一次真实 push 时记录认证路径并观察 trigger，避免 badge 再次长期指向旧 SHA；
-3. 后续所有 performance run 把 machine、config、wall time、peak memory、artifact hash 写入 machine-readable result；
+3. 后续 performance run 使用已接入的 JSON provenance 合约；首个真实产物仍须检查 machine、config、wall time、process peak 与完整 model hashes 后再引用；
 4. 等待 CPCC 回复，期间继续冻结 `docs/*.pdf` 与签章材料。
 
 ### P1：面向作品集的表达
