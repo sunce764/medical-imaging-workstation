@@ -153,7 +153,7 @@ coverage run tests/test_gui.py && coverage report
 |---|---|---|
 | [架构说明](docs/ARCHITECTURE.md) | 英文 | 模块图、God-object 分解、分割模型出处和 AI 管线契约 |
 | [一个未被满足的推理契约](docs/spacing_contract.md) | 中文 | 一次完整的工程判断：发现产品违背模型前提、量化代价、修复、多例验证、声明未测边界 |
-| [软件说明书](docs/manual_zh.md) · [English](docs/manual_en.md) · [PDF](docs/manual_zh.pdf) | 中文 · EN | 按界面截图讲解全部用户功能。**打开 PDF 前请先看这条勘误：** 该文件是随软著登记提交的 V1.0 冻结快照，登记在审期间有意不作改动，因此封面仍把截图数据写作「非患者数据」。这是错的——TotalSegmentator-CT-Lite 是公开、已去标识的**人体** CT，影像来自真实患者，只是不含可识别 PHI。两个 Markdown 版本已是更正后的措辞。 |
+| [软件说明书](docs/manual_zh.md) · [English](docs/manual_en.md) · [PDF](docs/manual_zh.pdf) | 中文 · EN | 按界面截图讲解全部用户功能。**打开 PDF 前请先看这条勘误：** 据项目方提交记录，该文件是用于软著登记申请的 V1.0 冻结快照；项目方尚未收到正式受理通知，因此有意不作改动。其封面仍把截图数据写作「非患者数据」，这是错的——TotalSegmentator-CT-Lite 是公开、已去标识的**人体** CT，影像来自真实患者，只是不含可识别 PHI。两个 Markdown 版本已是更正后的措辞。 |
 | [技术报告](docs/technical_report.md) | 英文 | 研究 I–III 的方法、图表与结果 |
 | [预印本稿 —— 研究 I](docs/preprint_recon.md) | 英文 | 学术格式的稀疏视角 / 低剂量重建研究 |
 | [实验](experiments/README.md) | 英文 | 实验脚本、图表、已入库产物，以及逐研究各不相同的可复现限度 |
@@ -172,11 +172,11 @@ coverage run tests/test_gui.py && coverage report
 
 © 2026 **盛超（Sheng Chao）、赖胜圣（Lai Shengsheng）**。保留所有权利。
 
-本软件由上述两位著作权人共同享有权利，已向中国版权保护中心提交列明双方的计算机软件著作权登记申请，目前待受理。
+本软件由上述两位著作权人共同享有权利。据项目方提交记录，截至 **2026-08-25**，已向中国版权保护中心提交列明双方的计算机软件著作权登记申请；两位著作权人尚未收到正式受理通知，软件亦未完成登记。
 
-**该申请覆盖的范围，精确到文件。** 提交的材料是 **2026-07-08** 的快照，包含 [`docs/build_source_pdf.py`](docs/build_source_pdf.py) 所列的十三个产品模块：`main.py`、`ui_builder.py`、`interaction.py`、`recon_lab.py`、`compare_lab.py`、`annotation_lab.py`、`ai_engine.py`、`graphics_view.py`、`recon.py`、`quantify.py`、`segmentation.py`、`mpr_geometry.py`、`constants.py`。两点与其让人猜，不如写明：
+**项目方提交记录列明的源码文件。** 据该记录，提交的源码快照日期为 **2026-07-08**，包含 [`docs/build_source_pdf.py`](docs/build_source_pdf.py) 所列的十三个产品模块：`main.py`、`ui_builder.py`、`interaction.py`、`recon_lab.py`、`compare_lab.py`、`annotation_lab.py`、`ai_engine.py`、`graphics_view.py`、`recon.py`、`quantify.py`、`segmentation.py`、`mpr_geometry.py`、`constants.py`。两点与其让人猜，不如写明：
 
-- **当前代码已领先于该快照**，且是有意为之——登记以提交的材料为准，故快照冻结、产品继续演进。此处不主张当前代码**就是**提交的那份快照——也不主张该申请已获登记；目前的状态是已提交、待受理。
-- **`experiments/` 不在登记范围内。** 这些研究是用来度量产品的代码，从未纳入申请，其结论也不在登记覆盖之列。
+- **当前代码已领先于该快照**，且是有意为之——项目继续冻结提交记录所指向的材料，同时让产品演进。此处不主张当前代码**就是**提交快照，也不主张两位著作权人已收到正式受理通知或完成登记。
+- **`experiments/` 目录及其结果未包含在此次提交的源码或说明书材料中。** 这些研究是用来度量产品的代码，仍位于该冻结提交快照之外。
 
-本仓库仅供教学、科研与作品集审阅，**未授予任何复制、修改或再分发许可**；如需使用，请联系著作权人。集成的第三方组件依其各自许可，详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+本仓库通过 GitHub 公开，供个人、教育与作品集审阅。除 GitHub 服务条款为查看和站内 fork PUBLIC 仓库所允许的有限权利，以及第三方组件各自许可证授予的权利外，**项目方自有代码未另行授予复制、修改、分发或其他使用许可**；如需使用，请联系著作权人。第三方组件许可详见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。

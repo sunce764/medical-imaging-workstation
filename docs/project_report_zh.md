@@ -4,7 +4,7 @@
 **报告日期：** 2026-08-25<br>
 **报告用途：** 研究生申请与算法作品集审阅、项目阶段复盘、后续研究决策<br>
 **软件定位：** 教学 / 科研工具，非医疗器械，不得用于临床诊断<br>
-**审计基线：** Git `0a9bfca3a4452feca22f646c063bf9364068a966`，加上本次审阅后的 5 份文档真实性修正与中英文报告入口：`CHANGELOG.md`、`README.md`、`README.zh-CN.md`、`docs/preprint_recon.md`、`experiments/README.md`；这 5 份文件相对该基线的 unified diff SHA-256 为 `a722eb2b86dd0c865b84e38c40cd480bfd8c6e0e72e30c15846cd9cb4317dcad`
+**审计基线：** Git `0a9bfca3a4452feca22f646c063bf9364068a966`，加上本次审阅后的 5 份文档真实性修正与中英文报告入口：`CHANGELOG.md`、`README.md`、`README.zh-CN.md`、`docs/preprint_recon.md`、`experiments/README.md`；这 5 份文件相对该基线的 unified diff SHA-256 为 `82d484051934490da487463d896d5a7f4cb5c0eed3a1149d98b2ade7fb9d46b1`
 
 > 本报告刻意区分四类信息：**本次实测**、**可由仓库产物复算**、**历史实测但未归档**、**推断或未测项**。数值不因叙事需要而跨越这些边界。
 
@@ -54,8 +54,8 @@
 |---|---|---|
 | 产品代码 | 持续演进，版本标记 `1.1.0.dev0` | [`pyproject.toml`](../pyproject.toml) |
 | GitHub 仓库 | **PUBLIC** | 本报告日通过 GitHub CLI 实查；[repository](https://github.com/sunce764/medical-imaging-workstation) 为 review-only proprietary license |
-| 软著登记 | 已提交，待中国版权保护中心受理；不是“登记成功” | [`LICENSE`](../LICENSE) 是项目方状态声明，不是 CPCC 官方受理证明 |
-| 软著 V1.0 快照 | 2026-07-08 提交，覆盖 13 个产品模块 | 当前代码已自然领先；`experiments/` 不在登记范围内 |
+| 软著登记 | 据项目方提交记录，截至 2026-08-25 已提交，两位著作权人尚未收到正式受理通知；不是“登记成功” | [`LICENSE`](../LICENSE) 是项目方状态声明，不是 CPCC 官方受理证明 |
+| 软著 V1.0 快照 | 仓库可验证快照形成于 2026-07-08，source builder 列出 13 个产品模块 | 据项目方记录，该快照用于登记提交；`experiments/` 未包含在提交的源码或说明书材料中 |
 | 当前产品模块 | 18 个顶层 Python 模块，约 6,737 行 | 本报告日 `wc -l`；不含 tests 与 experiments |
 | 量化研究 | 4 条研究主线、69 个已提交结果文件 | [`experiments/README.md`](../experiments/README.md) |
 | 正式论文 / venue | 尚未确定 | `docs/preprint_recon.md` 是稿件，不等于已投稿或已发表 |
@@ -332,7 +332,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 | Fresh local clone subset | **520 PASS / 0 FAIL / 0 traceback** | 不含未分发 weights / checkpoints；验证 README clean-run 计数 |
 | Ruff | **PASS** | `ruff check .` |
 | Full-suite coverage | **90%** | 3,438 statements，336 missed |
-| Local Git | 文档审计 commit `3a4ab27` + 本次验证链收尾 | 均未 push；远端 run 仍只能证明 `0a9bfca` |
+| Local Git | `0a9bfca` 之后的本地文档审计、验证链与公开口径修订 commits | 均未 push；远端 run 仍只能证明 `0a9bfca` |
 | Remote CI | [run 32824575985](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32824575985) 覆盖 `0a9bfca`，lint / test 均通过 | clean subset **512 项全部通过**，coverage 81%；事件仍是手动 `workflow_dispatch` |
 
 审计基线的 coverage run 曾发出一条 `signature_bootstrap.py` 无源 warning。后续诊断确认它是 PySide6 / shiboken 注入的虚拟模块：`__file__` 只有相对名，coverage 因而误解析为仓库根文件。配置现已精确 omit 该虚拟 basename，并移除 `ignore_errors=true`；修复前后实际产品 totals 不变，复跑为 **0 ghost warning**，未来未知无源条目也不会被静默吞掉。同次复跑发现一处 synthetic fixture 使 Qt slot 抛 `IndexError`却仍 exit 0；fixture 已修正，runner 已把未捕获 Qt slot exception 统一转为 FAIL，并用已知坏 probe 自检。
@@ -389,7 +389,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 | TotalSegmentator-CT-Lite | screenshots、multi-organ / lung-lobe validation、student training | 否 | CC-BY-4.0；manifest 固定 commit 与每文件 hash |
 | Analytic / random synthetic phantom | reconstruction studies | 由代码生成 | 可固定 seed；不含 patient data |
 
-“公开去标识人体 CT”不能被写成“非患者数据”。已提交软著 PDF 是冻结快照，其中相关措辞有已知勘误；Markdown manual 已更正。冻结 PDF 在审期间不应重建或修改。
+“公开去标识人体 CT”不能被写成“非患者数据”。据项目方提交记录，软著 PDF 是用于登记申请的冻结快照，其中相关措辞有已知勘误；Markdown manual 已更正。在项目方尚未收到正式受理通知期间，不应重建或修改该 PDF。
 
 ### 6.2 模型 artifact
 
@@ -423,13 +423,13 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 
 ### 7.3 License
 
-项目本身采用 all-rights-reserved、personal / educational / portfolio review-only 的 proprietary terms，不授权任意复制、修改、分发或其他使用。第三方组件各自保留 upstream license；TotalSegmentator / nnU-Net 的使用和 attribution、Apache-2.0 text、PySide6 LGPL 边界集中记录在 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)。
+项目本身采用 all-rights-reserved、personal / educational / portfolio review-only 的 proprietary terms。除 GitHub 服务条款为查看和站内 fork PUBLIC 仓库所允许的有限权利，以及第三方组件各自许可证授予的权利外，项目方自有代码未另行授予复制、修改、分发或其他使用许可。TotalSegmentator / nnU-Net 的使用和 attribution、Apache-2.0 text、PySide6 LGPL 边界集中记录在 [`THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md)。
 
 当前仓库发布的是 Python source，不包含 Qt binaries 或 bundled executable。若未来制作 PyInstaller / py2app binary bundle，需要重新审查 LGPL distribution obligations 和当前 proprietary terms 的兼容方式。
 
 ### 7.4 软件著作权
 
-盛超（Sheng Chao）与赖胜圣（Lai Shengsheng）为项目列明的共同著作权人。登记申请已提交，状态为**待受理**，不是已正式受理或登记完成；本报告只能引用项目方记录，未取得可公开核验的 CPCC official acceptance record。提交的 V1.0 source / manual PDF 是冻结 snapshot；当前代码继续演进属于正常版本发展，但不能宣称当前 HEAD 就是提交版本。AI-assisted development 与申请材料声明口径仍需以 CPCC 的正式回复为准，报告不替代官方或法律意见。
+盛超（Sheng Chao）与赖胜圣（Lai Shengsheng）共同享有本软件著作权，双方已同意公开该权属信息。据项目方提交记录，截至 **2026-08-25**，列明双方的登记申请已提交，但两位著作权人尚未收到正式受理通知，登记亦未完成；本报告未取得可公开核验的 CPCC 正式受理记录。项目方记录标记为提交版本的 V1.0 source / manual PDF 是冻结 snapshot；当前代码继续演进属于正常版本发展，但不能宣称当前 HEAD 就是提交版本。本段报告项目方状态，不替代官方证明或法律意见。
 
 ---
 
@@ -470,13 +470,12 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 | 优先级 | 风险 / 局限 | 当前处理 | 剩余动作 |
 |---|---|---|---|
 | 高 | 分割证据来自单一 dataset，teacher 可能见过 test cases | 明确披露，不宣称外部泛化 | 如进入论文阶段，需独立 dataset；属新实验，须另行批准 |
-| 高 | 软著 AI-assisted declaration 口径未决 | 冻结提交材料，等待 CPCC | 以官方书面回复为准 |
 | 高 | GitHub Actions `push` trigger 异常 | 手动 run 32824575985 已覆盖代码基线 `0a9bfca`；新文档 commit 仅本地验证、尚未 push；分支、路径、workflow 状态、Actions 权限均已排除 | 下一次授权 push 使用来源明确的普通 PAT / SSH，观察是否产生 `push` run；若仍失败再向 GitHub Support 提交事件时间与 SHA |
 | 中 | Product no-overlap path 存在小幅 seam loss | 已量化收益和成本，未冒充已修复 | 仅在明确接受 +memory / +time 后决定是否采用 |
 | 中 | Study III 为 noise-free synthetic | limitation 已显式写入 | 若投稿，需 realistic noise 与 external baseline |
 | 中 | Historical model provenance 不完整 | 当前 hashes 与未记录项均披露 | 新模型建立 export manifest 与 result-time hash |
 | 低 | Test runner 非 pytest | 自定义 runner 现已捕获 Qt slot 异常；coverage ghost-source 已按根因精确排除，且不再全局 `ignore_errors` | 可渐进迁移，不应大规模重构 |
-| 低 | Frozen PDF 有“非患者数据”措辞错误 | Markdown 勘误公开 | 在审期间不改 PDF；后续版本修正 |
+| 低 | Frozen PDF 有“非患者数据”措辞错误 | Markdown 勘误公开 | 在项目方尚未收到正式受理通知期间不改 PDF；后续版本修正 |
 
 ---
 
@@ -487,7 +486,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 1. 保留代码基线 `0a9bfca` 的手动 GitHub Actions 证据：run 32824575985、clean subset 512 项；
 2. 下一次真实 push 时记录认证路径并观察 trigger，避免 badge 再次长期指向旧 SHA；
 3. 后续 performance run 使用已接入的 JSON provenance 合约；首个真实产物仍须检查 machine、config、wall time、process peak 与完整 model hashes 后再引用；
-4. 等待 CPCC 回复，期间继续冻结 `docs/*.pdf` 与签章材料。
+4. 继续冻结项目方提交记录所指向的 `docs/*.pdf` 与签章材料；申请状态变化只更新非冻结说明，不重建 V1.0 快照。
 
 ### P1：面向作品集的表达
 

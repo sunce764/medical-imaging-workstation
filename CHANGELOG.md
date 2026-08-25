@@ -111,7 +111,7 @@ Before tidying the repository into a presentable state, a round of **fidelity ca
 In addition:
 
 - **Packaging converged to honesty**: under the flat module layout, the wheel does not include resources such as `style.qss`/the model, so `pip install` yields a degraded, resource-less application; therefore the over-promise of `[project.scripts]` was removed, making clear that `pyproject.toml` serves project metadata/dependencies/tool config and that the application runs via `python main.py`.
-- **Authorship claim de-solo'd**: the README's "written solely by me" → "designed, led in development, and validated by me". The code is AI-assisted development; the commit history faithfully retains the `Co-Authored-By` attribution and makes no "independent/solo authorship" claim.
+- **Authorship wording corrected**: the README no longer uses a solo-authorship formulation; it now describes the individual project role without conflating that role with the jointly owned copyright status.
 - Added `LICENSE` (all rights reserved, consistent with the software-copyright position) + bilingual EN/中文 navigation in the README; third-party component attributions verified one by one.
 
 Principle: **better to understate than to distort.** This project's strongest asset is "verifiable honesty", and any padding backfires on it.

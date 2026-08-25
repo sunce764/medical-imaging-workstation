@@ -1,15 +1,19 @@
 Copyright © 2026 盛超 (Sheng Chao) and 赖胜圣 (Lai Shengsheng). All rights reserved.
 
-This software is jointly owned by the two copyright holders named above. A joint
-software-copyright registration application (软件著作权登记) naming both holders has
-been submitted to the Copyright Protection Centre of China and is awaiting acceptance;
-it is not yet a completed registration. Copyright itself arises on completion of the
-work and does not depend on that filing.
+This software is jointly owned by the two copyright holders named above. According
+to the project filing records, as of 2026-08-25, a joint software-copyright
+registration application (软件著作权登记) naming both holders has been submitted to the
+Copyright Protection Center of China. The copyright holders have not received a
+formal acceptance notice, and the software has not been registered. These statements
+report the project's records; they are not an official CPCC status certificate.
+Copyright itself arises on completion of the work and does not depend on that filing.
 
-This repository is made available for personal, educational, and portfolio
-review purposes only. No license is granted to copy, modify, distribute, or use
-the source code, in whole or in part, for any other purpose without the prior
-written permission of the copyright holders.
+This repository is made available on GitHub for personal, educational, and portfolio
+review. Except for the limited rights necessary to view and fork the public repository
+through GitHub under GitHub's Terms of Service, and rights separately granted by
+third-party licenses, no additional license is granted to copy, modify, distribute,
+or otherwise use the project-owned source code, in whole or in part, without the
+prior written permission of the copyright holders.
 
 Third-party components integrated by this project (e.g., the TotalSegmentator /
 nnU-Net segmentation model graph, PySide6/Qt, pydicom, NumPy, SciPy,
