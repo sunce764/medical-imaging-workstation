@@ -141,7 +141,7 @@ Three defects surfaced only because a test asked "what happens when this fails?"
 - **A confidence-interval overlap test was replacing a paired one.** Teacher and student run on the same cases, so the comparison is paired; judging by whether two bootstrap CIs overlap is a classic false negative. Replaced with a paired bootstrap CI plus Wilcoxon signed-rank. A constructed scenario reproduces the failure: two overlapping CIs whose paired difference interval lies entirely below zero at *p* = 1.6×10⁻¹¹.
 - **The 21-organ Dice was still n = 1.** Now measured over 20 cases: patient-level mean **0.909, 95% CI [0.889, 0.927]**, the original single case at 0.922 sitting inside the interval on the optimistic side. Per-organ reliability spans 0.43 — liver 0.982 against prostate 0.554 — which the aggregate hides entirely. The right upper lung lobe at 0.773 is independently corroborated by a separate study measuring 0.727 on a different draw of cases.
 - **Single cases mislead in both directions.** Three instances now: lung lobes 0.956–0.991 → 0.887 over 57 cases (optimistic), the spacing fix +0.064 → +0.155 over 20 cases (pessimistic by 2.4×), the 21-organ figure 0.922 → 0.909 (mildly optimistic). The lesson recorded in the technical report is not that single cases flatter, but that the direction of the bias cannot be known in advance.
-- **Study III's noise-free condition was undeclared.** The learned-reconstruction study reports a 1.7% false-structure rate, measured on noise-free projections — the condition *least* likely to induce hallucination, since photon starvation is its main driver. The figure was correct for what was measured; what was missing was the boundary. Now stated in the README, the technical report and the experiment's own "Limitations" section, which had previously been titled "stated, not buried" while omitting exactly this.
+- **Study III's noise-free condition was undeclared.** The learned-reconstruction study reports a 1.7% false-structure rate, measured on noise-free projections — a favourable condition that omits photon starvation. The figure was correct for what was measured; what was missing was the boundary. It is now labelled a favourable-condition estimate, **not** a lower bound: the direction and magnitude of the change under photon noise remain unmeasured. This boundary is stated in the README, the technical report and the experiment's own "Limitations" section, which had previously been titled "stated, not buried" while omitting exactly this.
 - **The 25-class palette contradicted the measured label map.** Fifteen of sixteen colour comments named the wrong organ, the lung lobes were coloured left-for-right, and seven classes had no colour at all — rendered as one shared grey despite right kidney 0.985 and left kidney 0.977 being among the best-segmented structures. All 24 classes now have distinguishable colours (minimum pairwise distance 12 → 43).
 
 ### Testing
@@ -293,7 +293,9 @@ oracle-stopped.
 
 The result reverses the assumption that motivated the check. TV was expected to be worthless at
 this study's noise level (η≈0.9%); it halves the best solver's error there (+45.1% to +54.7% over
-SIRT's own optimum). The advantage is monotone in SNR and **inverts** by η≈9%, where SSIM also
+SIRT's own optimum). The advantage is monotone in SNR and by η≈9% it has **turned negative at 60 and 90 views**
+(−0.8%, −10.0%) while still leading at 30 (+6.4%) — an earlier revision of the two READMEs said
+flatly "loses by η≈9%", which the CSV does not support. SSIM also
 separates the two in the opposite direction (0.519 against 0.687). A TV-adversarial phantom was
 run to deflate the result and did not (+45.7% to +56.4%). Two limits are carried explicitly:
 `n_iter` does not transfer from this repository's other solvers — taken as 20 by analogy with

@@ -5,7 +5,7 @@ This directory upgrades the main application's two major AI/algorithm capabiliti
 - **Study I (reconstruction)** — uses the standard Shepp-Logan phantom to measure how `recon.py` reconstruction quality varies with dose / filter / algorithm.
 - **Study II (AI segmentation)** — uses a ground-truth-labelled public CT (TotalSegmentator-CT-Lite) to measure the Dice of `organs.onnx`, and to *recover by measurement* its 25-class label mapping.
 
-> The object under test is the production code itself — the reconstruction experiment directly `import recon`s and calls the same reconstruction functions the GUI uses; the segmentation experiment replicates `ai_engine`'s identical (step-by-step numerically equivalent) preprocessing and sliding-window inference, running the very same `organs.onnx` the GUI uses.
+> The reconstruction experiments directly `import recon`, the workstation's numerical module. All studied solvers except ASD-POCS are exposed through the GUI; ASD-POCS is implemented in `recon.py` but is currently called only by its experiment and tests. The segmentation experiment replicates `ai_engine`'s identical (step-by-step numerically equivalent) preprocessing and sliding-window inference, running the very same `organs.onnx` the GUI uses.
 
 ## Running
 
@@ -17,7 +17,7 @@ python experiments/recon_study.py a b c      # run all
 python experiments/recon_cond.py             # Experiment C′ (SVD of C's system matrices; reuses the same cache)
 python experiments/recon_stopping.py         # Experiment C″ (ART/SIRT iteration sweep; withdraws the "ART is best" ranking)
 python experiments/recon_floor.py            # Experiment A′ (metric floor: is the plateau dose or implementation?)
-python experiments/recon_tv.py               # Experiment C‴ (ASD-POCS/TV baseline; its advantage is monotone in SNR and inverts by η≈9%)
+python experiments/recon_tv.py               # Experiment C‴ (ASD-POCS/TV baseline; its advantage is monotone in SNR, and by η≈9% it trails at 60/90 views)
 python experiments/cluster_ci.py             # Case-level clustered bootstrap CIs (reads committed CSVs only)
 ```
 
@@ -93,7 +93,7 @@ The visual comparison in `exp_c_gallery.png` fully matches the RMSE: DMR is cove
 
 ## Reconstruction study — one-sentence summary
 
-In low-dose CT, **the answer to "which algorithm/filter" changes with dose**: in the sparse, low-dose regime prefer a constrained iterative method or an apodisation filter over unregularised inversion; in the ample-dose regime the analytic method (FBP + Ram-Lak) is sufficient and faster. **Which** constrained iterative method is a stopping-rule question, not a property (item 1) — and a TV-regularised one (ASD-POCS, `recon_tv.py`) beats both ART and SIRT by 45–56% at this noise level, an advantage that shrinks monotonically with SNR and reverses by η ≈ 9%.
+In low-dose CT, **the answer to "which algorithm/filter" changes with dose**: in the sparse, low-dose regime prefer a constrained iterative method or an apodisation filter over unregularised inversion; in the ample-dose regime the analytic method (FBP + Ram-Lak) is sufficient and faster. **Which** constrained iterative method is a stopping-rule question, not a property (item 1) — and a TV-regularised one (ASD-POCS, `recon_tv.py`) beats both ART and SIRT by 45.1–54.7% at this noise level, an advantage that shrinks monotonically with SNR and turns negative at 60 and 90 views by η ≈ 9% (30 views still gains 6.4%).
 
 ---
 
@@ -279,7 +279,7 @@ Judge by **|CTF − 1|**, not by "higher CTF is better": ramp overshoots at shar
 
 ## Limitations (stated, not buried)
 
-- **Everything here is noise-free — and that is exactly where hallucination is least likely.** `forward_fbp` runs `make_theta → compute_sinogram → compute_fbp` with no photon-noise model at all, while Study I's `recon_study.py` does have `add_poisson_noise`. Sparse views and low dose are two faces of the same clinical problem, and the main driver of hallucination in learned reconstruction is the low SNR of photon starvation. **The 1.7% false-structure rate is therefore a lower bound measured under the most favourable condition**, not a figure that transfers to low-dose acquisition. Note also that where this study says "dose" it means *view count only*; the mAs axis is untouched.
+- **Everything here is noise-free — and that is exactly where hallucination is least likely.** `forward_fbp` runs `make_theta → compute_sinogram → compute_fbp` with no photon-noise model at all, while Study I's `recon_study.py` does have `add_poisson_noise`. Sparse views and low dose are two faces of the same clinical problem, and the low SNR of photon starvation is a material untested condition. **The 1.7% false-structure rate is a favourable-condition estimate, not a mathematical lower bound**: neither the direction nor the magnitude of the change under photon noise was measured. Note also that where this study says "dose" it means *view count only*; the mAs axis is untouched.
 - **ART/SIRT are not in the matrix.** They need an explicit system matrix, and `lstsq` cost caps the usable size at about 64² — not comparable with this study's 128². Putting them in the same table would manufacture a false equivalence.
 - **Phantoms, not anatomy.** The phantom family is richer than a single Shepp-Logan and the OOD sets probe shapes never trained on, but none of this is real CT. The transfer to clinical images is untested here.
 - **One network size, one loss.** 1.9 M parameters trained with plain MSE. Whether a different capacity or a perceptual/adversarial loss would move the hallucination rate is not measured.
