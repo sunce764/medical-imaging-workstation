@@ -229,7 +229,7 @@ The "Image reconstruction algorithms" area provides:
 
 ### 9.3 Matrix / Iterative Reconstruction
 
-In the "Matrix Recon & Iterative" area, select the **image size (16/32/64)**, **iterative method (ART / SIRT)**, and **iteration count**; it provides:
+In the "Matrix Recon & Iterative" area, select the **image size (16/32/64)**, **iterative method (ART / SIRT / ASD-POCS)**, and **iteration count**; it provides:
 
 - **Direct matrix reconstruction (DMR)**: solves the projection system of equations by least squares;
 - **ART / SIRT / ASD-POCS iterative reconstruction**: algebraic and TV-regularised iterative reconstruction, with an error map and RMSE.

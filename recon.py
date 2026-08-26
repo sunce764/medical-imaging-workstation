@@ -227,7 +227,7 @@ def compute_dfr(sinogram: np.ndarray, theta: np.ndarray) -> tuple[np.ndarray, np
     # ifftshift 将数据中心移到 FFT 起点（左端），fft 计算，再 fftshift 将零频移回中心
     # 这样 proj_fft[num_detectors//2, :] 对应零频（直流分量）
     # 入口先中和非有限值：FFT 遇 NaN/±Inf 会把污染扩散到全部频率分量，
-    # 后面第 227 行的 nan_to_num 已来不及救（那时整幅频域都成了 NaN）。
+    # 后面 griddata 之后、ifft2 之前的那次 nan_to_num 已来不及救（那时整幅频域都成了 NaN）。
     sino = np.nan_to_num(sinogram, nan=0.0, posinf=0.0, neginf=0.0)
     proj_fft = np.fft.fftshift(
         np.fft.fft(np.fft.ifftshift(sino, axes=0), axis=0),

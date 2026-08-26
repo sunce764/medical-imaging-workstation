@@ -157,7 +157,7 @@ def plot():
         # '# summary n=20,,0.9090,...'。直接 float(r['mean_dice']) 会在空行上抛
         # ValueError——README 里文档化的 `seg_multi.py plot` 因此在已提交的产物上
         # 直接崩掉。汇总行的 Dice 本身是合法浮点，靠 '#' 标记排除，否则它会被当成
-        # 第 21 个病例算进 CI。seg_spacing.py:257 一直是这么做的，这里漏了。
+        # 第 21 个病例算进 CI。seg_spacing.py 的同名读取一直是这么做的，这里漏了。
         cases = []
         for r in csv.DictReader(f):
             cid = (r.get('case') or '').strip()

@@ -164,6 +164,9 @@ s0221:  0.0986  →  0.6552
 
 ## 复现
 
+前置：`s0029` 必须已在 `experiments/.seg3d_cache/`（`seg_spacing.py` 只从该目录读取），
+获取方式见 [`experiments/README.md`](../experiments/README.md) 的 Study II 一节。
+
 ```bash
 python experiments/seg_spacing.py 1.75 2.0 2.5 3.0   # 消融曲线
 python experiments/seg_spacing.py engine 3.0         # 单例：直通 vs 产品引擎

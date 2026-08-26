@@ -12,7 +12,8 @@
 #   · 同样的峰值内存测法与平台换算
 #   · 同样只统计真值中在场的肺叶
 #
-# 用法：python experiments/seg3d_eval.py --ckpt results/seg3d_w8.pt
+# 用法：python experiments/seg3d_eval.py --ckpt experiments/results/seg3d_w8.pt
+#       （--ckpt 由 torch.load 直接读取，不做路径归一；上面这条按仓库根目录为 CWD 书写）
 # 产出：results/seg3d_student_ch{ch}[d{depth}].csv + 汇总 JSON
 #       （depth≠2 时文件名带 d{depth}，与 seg3d_train 的权重命名一一对应；
 #        否则不同深度的评估结果会写到同一个文件互相覆盖）

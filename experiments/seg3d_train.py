@@ -24,7 +24,7 @@
 # 用法：
 #   python experiments/seg3d_train.py --ch 8            # 一个容量配置
 #   python experiments/seg3d_train.py --ch 8 --epochs 30 --steps 120
-# 产出：results/seg3d_w{ch}.pt（权重，已 gitignore）+ 训练日志
+# 产出：experiments/results/seg3d_w{ch}.pt（权重，已 gitignore）+ 训练日志
 # =============================================================================
 
 import argparse
@@ -306,7 +306,7 @@ def main():
             torch.save({'ep': ep, 'model': net.state_dict(), 'opt': opt.state_dict(),
                         'sch': sch.state_dict(), 'best': best,
                         'ch': a.ch, 'depth': a.depth, 'seed': a.seed}, ckpt_path)
-            print(f"       ↳ 断点 ep{ep} → results/seg3d_w{tag}_ckpt.pt"); sys.stdout.flush()
+            print(f"       ↳ 断点 ep{ep} → experiments/results/seg3d_w{tag}_ckpt.pt"); sys.stdout.flush()
 
     out = os.path.join(RESULTS, f"seg3d_w{tag}.pt")
     # 训练量必须随权重一起存：同一 (ch, depth) 可以训练量不同，下游若只按结构命名
@@ -318,7 +318,7 @@ def main():
                 'epochs': a.epochs, 'steps': a.steps,
                 'total_steps': a.epochs * a.steps}, out)
     print(f"\n  最佳 ep{best['ep']}  val patch-Dice={best['dice']:.4f}")
-    print(f"  权重 → results/seg3d_w{tag}.pt   总耗时 {(time.perf_counter()-t0)/60:.1f} 分钟")
+    print(f"  权重 → experiments/results/seg3d_w{tag}.pt   总耗时 {(time.perf_counter()-t0)/60:.1f} 分钟")
     return 0
 
 

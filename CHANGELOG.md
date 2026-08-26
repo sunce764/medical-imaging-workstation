@@ -371,12 +371,17 @@ against finite differences (4.19e-09), degree-0 homogeneity of `_tv_grad` (the p
 `compute_asdpocs` **bit-identical** to `compute_art`, which locks the POCS step, the α scaling of
 `dtvg`, and the fact that `f_res` is returned pre-TV rather than post-TV, in one assertion.
 
-## Known limitations (recorded faithfully, unfixed)
+## Known limitations
 
-- **MPR anisotropy uncorrected**: coronal/sagittal planes are displayed 1:1 by pixel; when slice thickness ≠ in-plane pixel spacing, the geometric proportions are distorted. A fix would require reworking the "scene coordinate = voxel index" mapping that runs through hover/measurement/cross-hairs — a non-surgical change whose risk outweighs its benefit, so it is recorded as a limitation. Caliper measurements use real mm, so **the measured values are correct**; only the displayed proportions do not match anatomy.
-- **AI mask overlay is axial-only**: coronal/sagittal planes do not display the organ-segmentation overlay.
+Both entries that stood here — "MPR anisotropy uncorrected" and "AI mask overlay is axial-only" —
+have since been fixed, and are removed rather than left standing as false self-criticism.
+Anisotropic planes are rescaled by `graphics_view._apply_aniso_fit` (a View transform only, so scene
+coordinates still equal voxel indices and the hover/measurement/crosshair paths were never touched —
+the rework this entry once called too risky turned out not to be needed). The AI organ overlay
+renders in all three planes. Manual **annotation** overlay is still axial-only; that is a different
+thing and is not claimed otherwise anywhere.
 
-See "Limitations" in `README.md` for details.
+See **"Safety and known limits"** in `README.md` for the limitations that do still stand.
 
 ---
 

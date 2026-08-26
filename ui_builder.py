@@ -67,7 +67,8 @@ class UiBuilderMixin:
         l.addWidget(self.right_panel)
 
     def _build_left_toolbar(self):
-        """左侧 70px 宽工具按钮列：指针/卡尺/画笔/矩形/套索/3D 追踪，互斥选中。"""
+        """左侧 70px 宽工具按钮列，共九个、互斥选中：指针/卡尺/画笔/矩形截取/套索/3D 追踪/
+        分割画笔/分割橡皮/ROI 密度（与 constants.py 的 range(9) 一一对应）。"""
         self.left_toolbar = QFrame()
         self.left_toolbar.setObjectName("LeftToolbar")
         self.left_toolbar.setFixedWidth(70)

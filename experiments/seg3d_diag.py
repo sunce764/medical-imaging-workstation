@@ -15,7 +15,8 @@
 #
 # 【为什么用 val 而不是 test】test 集留给最终评估，诊断阶段反复看它会污染独立性。
 #
-# 用法：python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt
+# 用法：python experiments/seg3d_diag.py --ckpt experiments/results/seg3d_w8d3.pt
+#       （--ckpt 由 torch.load 直接读取，不做路径归一；上面这条按仓库根目录为 CWD 书写）
 #       python experiments/seg3d_diag.py plot ch8d3      由已有 CSV 重绘，不重跑推理
 #       python experiments/seg3d_diag.py rf              实测各 depth 的有效感受野
 #       python experiments/seg3d_diag.py extent          实测真值里各肺叶的 z 跨度

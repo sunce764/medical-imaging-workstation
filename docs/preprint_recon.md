@@ -99,7 +99,7 @@ Table 3 and Figure 3 compare the four reconstructors under Poisson photon noise.
 ![Figure 3](../experiments/results/exp_c_analytic_vs_iterative.png)
 
 ![Figure 3b](../experiments/results/exp_c_gallery.png)
-*Figure 3. Top: RMSE by method and dose under photon noise. Bottom: reconstructions at 30 views — DMR shows salt-and-pepper noise amplification, FBP shows streak artefacts, ART is cleanest and SIRT is smoothest **at the fixed iteration counts of Table 1** — a ranking withdrawn in §4.5; visual quality tracks the RMSE measured at those same counts.*
+*Figure 3. Top: RMSE by method and dose under photon noise. Bottom: reconstructions at 30 views — DMR shows salt-and-pepper noise amplification, FBP shows streak artefacts, ART is cleanest and SIRT is smoothest **at the fixed iteration counts of Table 3** — a ranking withdrawn in §4.5; visual quality tracks the RMSE measured at those same counts.*
 
 ### 4.4 Measuring the conditioning that §4.3 only asserted
 
@@ -158,7 +158,7 @@ parameters as published: α=0.2, N_grad=20, β=1.0, β_red=0.995, α_red=0.95, r
 and sweeps it against the same phantom, noise realisations and system matrices used in
 §4.5, with all solvers oracle-stopped (`results/exp_c_asdpocs.csv`).
 
-*Table 5. In-circle RMSE gain of ASD-POCS over SIRT's own optimum, Shepp-Logan.*
+*Table 6. In-circle RMSE gain of ASD-POCS over SIRT's own optimum, Shepp-Logan.*
 
 | η (measured) | 30 views | 60 views | 90 views | SSIM @ 90 views |
 |---|---|---|---|---|

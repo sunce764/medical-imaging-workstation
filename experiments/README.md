@@ -143,14 +143,18 @@ The 25-class label→organ mapping of `organs.onnx` was long only **inferred** (
 A single case of **TotalSegmentator-CT-Lite** (CC-BY-4.0, 1.5 mm isotropic, thorax–abdomen–pelvis coverage), extracting **only one case** (≈42 MB) from a 22 GB archive using HTTP Range requests:
 
 ```python
+# 写入 experiments/.seg3d_cache/：seg_spacing.py 与 seg_multi.py 只从该目录读取
+# （CACHE = os.path.join(_HERE, ".seg3d_cache")），落到别处它们会报「缺 s0029 数据」。
+import os
 from remotezip import RemoteZip
+cache = os.path.join("experiments", ".seg3d_cache"); os.makedirs(cache, exist_ok=True)
 base = "https://huggingface.co/datasets/YongchengYAO/TotalSegmentator-CT-Lite/resolve/main"
-open("s0029_img.nii.gz","wb").write(RemoteZip(base+"/Images.zip").read("Images/s0029.nii.gz"))
-open("s0029_msk.nii.gz","wb").write(RemoteZip(base+"/Masks.zip").read("Masks/s0029.nii.gz"))
+open(os.path.join(cache,"s0029_img.nii.gz"),"wb").write(RemoteZip(base+"/Images.zip").read("Images/s0029.nii.gz"))
+open(os.path.join(cache,"s0029_msk.nii.gz"),"wb").write(RemoteZip(base+"/Masks.zip").read("Masks/s0029.nii.gz"))
 ```
 
 ```bash
-python experiments/seg_validate.py s0029_img.nii.gz s0029_msk.nii.gz
+python experiments/seg_validate.py experiments/.seg3d_cache/s0029_img.nii.gz experiments/.seg3d_cache/s0029_msk.nii.gz
 python experiments/seg_spacing.py                # spacing ablation (defaults to 2.0 2.5 3.0 mm)
 python experiments/seg_spacing.py 1.75 2.0 2.5 3.0   # the curve reported below
 python experiments/seg_spacing.py engine 3.0        # direct vs ai_engine (isolates the resampling step)
@@ -166,7 +170,7 @@ The image is normalised to RAS and then converted to the GUI's (Z,H,W) axis orde
 ## Findings
 `exp` outputs: `seg_confusion.png` (confusion heatmap) · `seg_dice.csv` · `seg_mapping.md`
 
-1. **The mapping is measured to be an identity diagonal**: our#k → the k-th TotalSegmentator organ, matching one by one (this case's ground truth contains no prostate/kidney cyst, so labels 22/23 have no measured Dice; their identity is fixed by this mapping scheme). **This measures the label scheme = TotalSegmentator v2 `class_map_part_organs`** (24 organs + background, an nnU-Net v2 export), so the mapping is no longer "unknown". The mapping is what the code uses and what is measured; concluding that the weights themselves are that upstream release is an inference from it — strongly supported, not cryptographically proven.
+1. **The mapping is measured to be an identity diagonal**: our#k → the k-th TotalSegmentator organ, matching one by one (this case exercises labels 1–23 only — label 24, right kidney cyst, was never predicted and produces no row; and this case's ground truth contains no prostate/kidney cyst, so labels 22/23 have no measured Dice either. Identity for all three of labels 22–24 is fixed by this mapping scheme, not by a measured overlap). **This measures the label scheme = TotalSegmentator v2 `class_map_part_organs`** (24 organs + background, an nnU-Net v2 export), so the mapping is no longer "unknown". The mapping is what the code uses and what is measured; concluding that the weights themselves are that upstream release is an inference from it — strongly supported, not cryptographically proven.
 2. **Mean Dice ≈ 0.92 over the 21 organs present** (kidneys 0.98, lung lobes 0.96–0.99, small organs such as thyroid/gallbladder 0.79–0.82), consistent with TotalSegmentator's officially published level — **simultaneously validating that the GUI inference pipeline is correct**.
 3. **Corrected historical mislabels**: `5` = **liver** (an earlier inference wrongly took it as "heart"; the model has no heart/aorta output — both live in another TS part, labels 51/52, outside 0–24); lung lobes `10,11` = **left**, `12,13,14` = **right** (the earlier left/right swap was a radiological-convention mirror artefact). `models/organ_labels_candidate.json` has been rewritten accordingly into the confirmed mapping.
 
@@ -236,7 +240,7 @@ Extra dependency: `torch` (see `requirements-experiments.txt`). **The App does n
 ## Methods
 
 - **Data**: a *family* of random phantoms — random ellipses plus 0–3 small high-contrast "lesions" — generated in code with fixed seeds. A single fixed Shepp-Logan would simply be memorised by the network, so what you would then measure is recall, not reconstruction. **No patient data**.
-- **Reproducibility, stated exactly.** The phantom data is seeded and regenerates byte-identically. The *training* was not: until an audit caught it, `recon_dl.py` seeded only its `RandomState` phantom generation and never called `torch.manual_seed`, leaving weight initialisation and the `torch.randperm` shuffle free. `train_one` now takes `seed=0` and pins them, matching what `seg3d_train.py:223` had always done. Two things follow, and neither is softened here: **the committed `recon_dl_*` artefacts predate that line**, and **no run under the new seeding has been compared against them** — so whether the pinned code reproduces the numbers committed here is untested, not established. An earlier version of this file claimed "anyone re-running gets the same numbers", which was true of the phantom data and unverified for the model.
+- **Reproducibility, stated exactly.** The phantom data is seeded and regenerates byte-identically. The *training* was not: until an audit caught it, `recon_dl.py` seeded only its `RandomState` phantom generation and never called `torch.manual_seed`, leaving weight initialisation and the `torch.randperm` shuffle free. `train_one` now takes `seed=0` and pins them, matching what `seg3d_train.py` had always done. Two things follow, and neither is softened here: **the committed `recon_dl_*` artefacts predate that line**, and **no run under the new seeding has been compared against them** — so whether the pinned code reproduces the numbers committed here is untested, not established. An earlier version of this file claimed "anyone re-running gets the same numbers", which was true of the phantom data and unverified for the model.
 - **Split**: train / val / test / pairing draw from four **non-overlapping seed bands**, so no phantom instance appears in two sets. Checkpoints are selected on the **validation** set only; the test set never participates in any selection.
 - **Forward model**: `recon.compute_sinogram` → `recon.compute_fbp` — the same production functions the GUI calls.
 - **Network**: a self-implemented residual U-Net (1.9 M params, no MONAI/nnU-Net). It predicts the *artefact* and subtracts it, because sparse-view streaks are sparse and high-frequency — far easier to learn than re-synthesising anatomy. **That is the design rationale, not a result**: no direct-prediction baseline was trained, so "the residual formulation invents less structure" is untested here and the earlier claim to that effect is withdrawn. The output layer is zero-initialised, so training starts exactly at "pass the FBP through unchanged", giving a clean zero baseline for "how much did the network change?".
@@ -354,7 +358,7 @@ student trained in this repository and cannot bind a model that came before it. 
 is independence: `organs.onnx` was trained on the full TotalSegmentator dataset, of which this Lite subset is a
 part, so **overlap with these cases is likely and cannot be ruled out case by case** (the upstream release
 publishes no per-case training manifest). Read the teacher's numbers as performance on data it has probably
-seen, not as a hold-out result — the same qualification the Limitations section states. `seg_multi.py:67` draws its 20 cases with `rng.permutation(...)[:n]` over all 297,
+seen, not as a hold-out result — the same qualification the Limitations section states. `seg_multi.py` draws its 20 cases with `rng.permutation(...)[:n]` over all 297,
 seeded, and it was written before the split existed.
 
 What it does mean is a comparison that must never be made: **the 0.909 from those 20 cases cannot be put
@@ -371,8 +375,8 @@ python experiments/seg3d_teacher.py         # teacher baseline on the test split
 python experiments/seg3d_bench.py           # inference cost + provider comparison
 python experiments/seg3d_train.py --ch 8 --depth 3 --epochs 10 --steps 120    # line C, ~20 min
 python experiments/seg3d_train.py --ch 8 --depth 3 --epochs 280 --steps 120  # line D, ~8.4 h
-python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt              # line C, failure mode
-python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt --infer zslab  # full-plane path under study
+python experiments/seg3d_diag.py --ckpt experiments/results/seg3d_w8d3.pt   # line C, failure mode
+python experiments/seg3d_diag.py --ckpt experiments/results/seg3d_w8d3.pt --infer zslab  # full-plane path under study
 
 python experiments/seg3d_infer_bias.py all                     # line E, five controls, ~25 min
 python experiments/seg3d_infer_bias.py grid --yes               # 2x2 pilot, 3 cases (exploratory)
@@ -381,9 +385,9 @@ python experiments/seg3d_infer_bias.py bench --config A --yes  # line F, shipped
 python experiments/seg3d_infer_bias.py bench --config B --yes  # line F, +z overlap,  ~40 min
 
 # student on the held-out test split, both inference paths — see the note below on why both
-python experiments/seg3d_eval.py --ckpt results/seg3d_w8d3.pt --split test \
+python experiments/seg3d_eval.py --ckpt experiments/results/seg3d_w8d3.pt --split test \
        --infer sliding --tag ch8d3_33600s_sliding
-python experiments/seg3d_eval.py --ckpt results/seg3d_w8d3.pt --split test \
+python experiments/seg3d_eval.py --ckpt experiments/results/seg3d_w8d3.pt --split test \
        --infer zslab   --tag ch8d3_33600s_zslab
 ```
 
@@ -605,7 +609,7 @@ and the student `zslab` and `sliding` paths. The table covers all 57 test cases 
 **Compared like for like, the gap is large and unambiguous.** Teacher and student on the same
 inference path, paired over all 234 instances: **−0.4500** [−0.4877, −0.4118], Wilcoxon
 *p* = 3.7×10⁻³⁹. A 0.35 M student does not approach a 31.2 M teacher on this task, and the
-89:1 parameter ratio buys a 2.20× speed-up while costing 1.79× peak memory — but that memory ratio **divides a max by a mean** and should not be read as a like-for-like figure. The student artefact carries `peak_gb_max` (8.75) while `seg3d_teacher_summary.json` carries only `peak_gb_mean` (4.89), and `seg3d_report.py` silently fell back to the mean for the teacher. Compared mean-to-mean the ratio is **1.55×** (7.60 / 4.89). Both numbers are `ru_maxrss`, whose caveats are in the box at line 341; the speed-up carries the in-loop-session caveat from the same box. The silent fallback is now an explicit warning in the code, but the committed `seg3d_tradeoff.csv` predates that and still mixes the two statistics in one `peak_gb` column.
+89:1 parameter ratio buys a 2.20× speed-up while costing 1.79× peak memory — but that memory ratio **divides a max by a mean** and should not be read as a like-for-like figure. The student artefact carries `peak_gb_max` (8.75) while `seg3d_teacher_summary.json` carries only `peak_gb_mean` (4.89), and `seg3d_report.py` silently fell back to the mean for the teacher. Compared mean-to-mean the ratio is **1.55×** (7.60 / 4.89). Both numbers are `ru_maxrss`, whose caveats are in the two boxes on `C_xy_block_only`/`D_both` and on `ru_maxrss` later in this section; the speed-up carries the in-loop-session caveat from the same box. The silent fallback is now an explicit warning in the code, but the committed `seg3d_tradeoff.csv` predates that and still mixes the two statistics in one `peak_gb` column.
 
 **The 0.7667 is the student's own sliding-path result, not a comparison.** It is what the same weights reach
 when evaluated at the training patch size — but the teacher was never re-scored under a
@@ -617,7 +621,7 @@ other way: the teacher gains **+0.0133** there (0.8594 → 0.8727) while the sam
 the student from 0.5153 to 0.8707, **+0.3554**. Path brittleness is observed in the student, not a
 handicap the two share — and it happens to fire on the path the product actually runs
 (`ai_engine.py:311-335`). That measurement is not licensed as a number either: it is 3 cases, on a
-different split, from a code path the box at line 341 flags as never cross-checked. Quoting
+different split, from a code path flagged earlier in this section as never cross-checked. Quoting
 0.7667 against 0.8867 would be exactly the mistake line E exists to prevent: comparing across two
 inference paths that differ by 0.33 Dice on identical weights.
 
@@ -634,7 +638,7 @@ be read as an improvement.)*
 - **Two of line C's three controls are retracted, and one of them is now unmeasurable.** Both ran at 1,200 steps *and* through the tensor-extent-sensitive path, so neither "widening does not help" nor "deepening does not help" measured what it was designed to. The `depth=2` arm has not been rerun, so "does capacity matter" has **no valid measurement** rather than a negative one. Worse, the 1,200-step weights were deleted before line E was found, so that budget can never be re-scored on the sliding path; the budget-versus-path decomposition of the original 0.062 is permanently unrecoverable.
 - **The student's own numbers are still 13.4 % of the standard budget and not converged.** 33,600 steps against nnU-Net's 250,000; best epoch 216 of 280, with the curve still rising.
 - **The student has no data augmentation at all.** No scaling, no rotation, no intensity jitter. Line E measures severe sensitivity to an input-size shift under this training/inference combination; it does not isolate the causal contribution of augmentation. Any comparison against nnU-Net-trained weights is partly a comparison of augmentation pipelines, not of architectures.
-- **Accuracy and cost come from different inference paths.** Student accuracy is now sliding-window; student cost (1.62 µs/voxel, line B) is `zslab`. Sliding costs 2.54× more. The two must not be read as one operating point.
+- **Accuracy and cost come from different inference paths.** Student accuracy is now sliding-window, while the student cost figures are `zslab`: **1.089 µs/voxel** `zslab` vs **2.733** sliding (line G table above). Sliding costs 2.54× more wall-clock on the same 24 validation cases. The two must not be read as one operating point. (The **1.62 µs/voxel** quoted elsewhere is the **teacher's** — `seg3d_bench.csv` benchmarks `organs.onnx`, the 31.19 M-parameter model; the student is a `.pt` and never runs through that ONNX path.)
 - **Line F changes one factor, not the strategy space.** B was chosen because it is the minimal change to the shipped path. A configuration that also blocks the plane (256² with overlap) scored higher on 3 cases but was not run over the full split — its 5–6 h cost was not judged worth a likely sub-0.03 gain, and that judgement is an assumption, not a measurement.
 - **The teacher very likely trained on these test cases.** `organs.onnx` was trained on the full TotalSegmentator dataset, of which this Lite subset is a part. The teacher is scored on data it has probably seen; the student on a genuine hold-out. Any teacher-student gap is inflated by this and cannot be attributed to capacity.
 - **Teacher and student do not solve the same task.** 25 classes versus 5, and full TotalSegmentator versus 207 cases. Three factors — capacity, task breadth, training-set size — move together, so no single number here isolates "the cost of compression".
