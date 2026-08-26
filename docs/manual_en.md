@@ -15,7 +15,7 @@
 **Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
 **Verified environment**: local macOS with Python 3.10; the data-independent suite had also passed historically on a GitHub Actions Ubuntu runner as of the snapshot below. Windows was not verified in that snapshot and no platform-compatibility claim is made for it. Dependencies include PySide6, pydicom, NumPy, SciPy, scikit-image, and ONNX Runtime.
 **Development language**: Python.
-**Software scale**: application code is split across UI mixins and Qt-free compute modules. A local run on 2026-08-26 recorded 788 full-suite checks and 696 `SKIP_REAL_DATA=1` checks; these are local results, not fresh-clone, coverage, or remote-CI evidence.
+**Software scale**: application code is split across UI mixins and Qt-free compute modules. A local run on 2026-08-26 recorded 854 full-suite checks and 762 `SKIP_REAL_DATA=1` checks; these are local results, not fresh-clone, coverage, or remote-CI evidence.
 **Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
 
 ---
@@ -42,7 +42,7 @@ After the software starts, it enters the main interface. By default it **loads n
 The main interface is divided into three columns:
 
 1. **Left toolbar**: nine measurement / annotation tool buttons arranged top to bottom (probe & pan, distance caliper, freehand pen, rectangle capture, lasso, 3D tracking, segmentation brush, segmentation eraser, ROI densitometry). After a tool is selected with a click, mouse actions on the image correspond to that tool's function.
-2. **Central image view area**: composed of 1–4 image views, supporting single-, dual-, and quad-view layouts. Each view has, along its top, dropdown / checkbox controls for plane selection (axial / coronal / sagittal), window-level presets, overlay display, locking, etc.
+2. **Central image view area**: composed of 1–4 image views, supporting single-, dual-, and quad-view layouts. Each view has, along its top, dropdown / checkbox controls for plane selection (axial / coronal / sagittal), window-level presets and overlay display.
 3. **Right control panel**: at the top are the "Load DICOM directory" and "Save annotation project" buttons; below them are two tabs, "Clinical reading / Reconstruction lab," which carry the clinical-reading controls and the reconstruction-lab controls respectively.
 
 The top tabs switch between the two working modes, **Clinical reading** and **Reconstruction lab**.

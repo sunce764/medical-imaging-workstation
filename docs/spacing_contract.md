@@ -77,7 +77,7 @@ liver / kidney / lung lobes                        ← 全程 > 0.85
 
 **放大后会超内存时不做。** 对**粗** spacing 重采样是放大，5 mm 层厚的序列 z 方向可涨 3 倍以上。此时宁可维持失配，也不能把应用跑崩——但必须打印出来，让人知道这次跳过了。
 
-还有一处**不该照搬 DICOM 标签**的地方：层间距不能取 `SliceThickness`。那是探测器准直厚度，而重采样需要的是层与层的实际间隔；重叠重建下二者可差一倍。改为由相邻层的 `ImagePositionPatient` 实测中位数，其次 `SpacingBetweenSlices`，最后才回退到 `SliceThickness`。
+还有一处**不该照搬 DICOM 标签**的地方：层间距不能取 `SliceThickness`。那是探测器准直厚度，而重采样需要的是层与层的实际间隔；重叠重建下二者可差一倍。改为由相邻层的 `ImagePositionPatient` 实测。**当时保留了 `SpacingBetweenSlices` / `SliceThickness` 两级回退，现已取消**：`dicom_geometry.analyze_series` 要求投影位置本身有限、唯一且等距，否则该序列判为几何不可用（fail closed），不再用标签值补一个可能错一倍的间距。本节记述的是引入实测间距那一次改动，回退分支属其后被移除的历史实现。
 
 > 随附数据恰好两者都是 1.25 mm。**这个错误在本机永远暴露不了**——顺着查下去发现器官体积、三维网格 z 尺度、MPR 冠矢状面宽高比全都继承了同一个错误，一并统一。
 

@@ -17,7 +17,7 @@ their **upstream-declared licenses**, and gives verifiable primary-source URLs. 
 This repository git-tracks and distributes `models/organs.onnx` (45 KB, **computation graph only, no weights**).
 The 119 MB weights `models/organs.onnx.data` are **not** distributed with this repository (see
 [`docs/ARCHITECTURE.md` → Getting the weights](docs/ARCHITECTURE.md#getting-the-weights) for how to obtain them,
-and `models/CHECKSUMS.sha256` for the digest of the exact blob every model-derived number here came from).
+and `models/CHECKSUMS.sha256` for digests of the bytes currently present; that file states its own scope narrowly — the digests were taken when it was written, not when the results were produced, so they identify the current blob rather than proving which blob produced any past number).
 
 | Item | License declared upstream | Primary source |
 |---|---|---|

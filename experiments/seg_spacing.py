@@ -8,6 +8,13 @@
 #         · 默认模式：量化**不做**重采样的代价——它是那次改动的立论证据，需可复现；
 #         · engine / multi 模式：对比直通与产品引擎，量化**做了**之后的净收益。
 #
+# 【已提交结果的时点：末窗回移（2a50e37）之前】direct 与 engine **两臂**的已提交结果都
+#       生成于该修复之前。direct 臂用的是从 seg_validate 导入的 run_onnx（见本文件 import；回移前写法），engine 臂
+#       实时调用 ai_engine。修复只落在 ai_engine 一侧，于是**今天重跑不再是一次只隔
+#       spacing 的对照**——它会变成「回移前的 run_onnx」对「回移后的 engine」，末窗
+#       处理与 spacing 两个变量同时在动，差值不能再单独归因于 spacing。
+#       本轮未重跑（需 ONNX 推理）。要恢复单变量对照，须把两臂放到同一末窗写法上。
+#
 # 方法：取带真值的公开 CT（TotalSegmentator-CT-Lite，原生 1.5mm iso = 训练 spacing），
 #       重采样到偏离 spacing 后跑推理，再把预测**最近邻映射回原网格**，与**未经改动的
 #       原始真值**算 Dice。真值不参与任何插值，故 Dice 之差只能归因于 spacing 处理本身。

@@ -11,7 +11,11 @@ Exported_Lesions/
 models/organs.onnx.data
 organs.onnx.data
 # 学习式重建模型的外部权重（7.7MB）。与 organs.onnx 同一套约定：仓库只提交 .onnx 图，
-# 权重由 `python experiments/recon_dl.py matrix && ... export` 以固定种子重建。
+# 权重可由 `python experiments/recon_dl.py matrix && ... export` 按固定配置重新训练导出。
+# 【不是 byte-identical 重建】研究三的历史权重产出于 train_one 固定 PyTorch RNG **之前**。
+# 重训会产生新权重；byte-level 与 functional equivalence 均未验证。
+# （「功能等价」曾被写在这里，但本项目从未做过等价性测量——没有对新旧权重跑过同一
+#   评测集的对照。没测过的事不写成结论。）
 # 注意 ONNX 按【相对 .onnx 的路径】解析 .data，两者必须同目录。
 models/recon_dl_v*.onnx.data
 # 通配兜底：上面两条只匹配当下存在的确切文件名。新增/改名任何模型，其外部
@@ -32,7 +36,7 @@ htmlcov/
 .ruff_cache/
 
 # ============================================================
-# 私人法律文件（含个人姓名/身份信息）—— 绝不入库（仓库将来会公开）
+# 私人法律文件（含个人姓名/身份信息）—— 绝不入库（仓库已公开）
 # ============================================================
 coop_agreement*
 docs/coop_agreement*
@@ -71,9 +75,11 @@ docs/coop_agreement*
 CLAUDE.md
 
 # 研究三的训练权重（每个约 7.6MB，5 档共约 38MB）。产物目录只提交图表与 CSV；
-# 权重可由 `python experiments/recon_dl.py matrix` 以固定种子完整重建，无需入库。
+# 权重可按固定配置重新训练，无需入库；但同上，历史产物早于 RNG 固定：重训会产生新权重，
+# byte-level 与 functional equivalence 均未验证。
 experiments/results/recon_dl_w*.pt
-# 研究四的 3D 分割权重，同理不入库（可由固定种子与固定 commit 的数据重建）
+# 研究四的 3D 分割权重，同理不入库（可按固定种子与固定 commit 的数据**重新训练**；
+# 训练本身已固定 RNG，但仍不对 byte-identical checkpoint 作保证）
 experiments/results/seg3d_w*.pt
 # 同理兜底：训练权重写到别的目录或别的文件名一样不该入库。
 *.pt

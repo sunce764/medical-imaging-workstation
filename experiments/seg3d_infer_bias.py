@@ -285,6 +285,15 @@ def _teacher_xy_noov(sess, norm, xy, dz=32):
         norm = np.pad(norm, ((0, 0), (0, ph), (0, pw)), mode='constant')
     Hp, Wp = norm.shape[1], norm.shape[2]
     seg = np.zeros((Z, Hp, Wp), np.uint8)
+    # 【时点限定，只管本臂】本函数（C = 块 xy + z 无重叠）沿用产品末窗回移
+    # （2a50e37）之前的写法，z 补到 32 的倍数，故回移不改 block count 与 tensor
+    # shape：本臂精度类指标属回移前证据，成本类不受该回移影响。
+    # 【别把这句话推广到本文件的其它臂】同文件里 B（_teacher_full_zov）、D
+    # （_teacher_sliding）与 bench 的 _zstream 都是 boundary-anchored（末起点显式
+    # 贴到 Z - dz），本就不以相同方式受该修复影响。
+    # 与本臂同侧的是：A、dice_fullplane，**以及 ab / train / dose 三组里调 zslab_infer
+    # 的那些列**——后者还更重一层：zslab_infer 的 z 只补到 8 的倍数，故它们的 cost
+    # 也属旧 path，不像本臂那样只有精度受影响。
     for z0 in range(0, Z, dz):
         z1 = min(z0 + dz, Z)
         for y0 in range(0, Hp, xy):
@@ -303,7 +312,8 @@ def _teacher_xy_noov(sess, norm, xy, dz=32):
 def grid():
     """2×2 正交：把 xy 尺寸与 z 分块两个因素分开。
 
-    A 整幅+z无重叠（产品现状） / B 整幅+z重叠 / C 块256+z无重叠 / D 块256+z重叠
+    A 整幅+z无重叠（**回移前**的产品路径，非当前 shipped） / B 整幅+z重叠
+    / C 块256+z无重叠 / D 块256+z重叠
     B−A 是 z 独自的贡献，C−A 是 xy 独自的贡献，D 是两者合力。
     """
     if '--yes' not in sys.argv:
@@ -349,7 +359,7 @@ def grid():
 
 
 def teacher():
-    """G1：教师（同款 nnU-Net + InstanceNorm，产品同一推理策略）是否也被压低。
+    """G1：教师（同款 nnU-Net + InstanceNorm，与**回移前**的产品推理策略相同）是否也被压低。
 
     若是，则「0.35M 学生逼近 31.2M 教师」是错的——涨的是两边；而且产品
     ai_engine.py 现在的分割质量本身就被这个策略压着，且产品跑 512² 临床 DICOM，
@@ -395,7 +405,8 @@ def teacher():
 
 
 # ===== 产品线：57 例 test 集、三配置、全器官 ==================================
-# A = 产品现状（整幅 xy、z 每 32 层无重叠、逐块独立 argmax）
+# A = **回移前**的产品路径（整幅 xy、z 每 32 层无重叠、补零末块、逐块独立 argmax）。
+# 【别写成「产品现状」】ai_engine 自 2a50e37 起末窗回移到 [Z-DZ, Z)，A 已不是当前 shipped path。
 # B = 只改 z：整幅 xy、z 25% 重叠、累加 logits 后 argmax
 # D = 两者都改：块 256 + z 25% 重叠、累加
 # C（块 xy 无重叠）已在 grid 中证明有害（s0218 −0.166），不是候选，不再跑。
@@ -437,7 +448,7 @@ def _zstream(block_fn, Z, Hp, Wp, dz=32, step=24):
 
 
 def _infer(sess, norm, mode, xy=256, dz=32):
-    """mode: 'A' 产品现状 / 'B' 仅 z 重叠 / 'D' 块 xy + z 重叠。"""
+    """mode: 'A' 回移前的产品路径（非当前 shipped） / 'B' 仅 z 重叠 / 'D' 块 xy + z 重叠。"""
     iname = sess.get_inputs()[0].name
     Z, H, W = norm.shape
     pad_to = 32 if mode != 'D' else xy

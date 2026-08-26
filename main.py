@@ -268,10 +268,10 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             (self.lbl_disclaimer,
              "⚠ AI results & organ labels are auto-inferred — for reference only, not for diagnosis.",
              "⚠ AI 结果与器官标签为自动推断，仅供参考，非诊断依据。"),
-            (self.btn_model_card, "Model Card: Provenance & Limits", "模型说明卡：出处与适用边界"),
+            (self.btn_model_card, "Model Card: Provenance && Limits", "模型说明卡：出处与适用边界"),
             (self.btn_phantom, "Load Shepp-Logan Phantom", "载入 Shepp-Logan 模体"),
             # 英文原作 "Clear Mask" 漏了标注这一半，与中文不对等；此按钮两者都清，补齐
-            (self.btn_clear_anno, "Clear Mask & Annotations", "清空蒙版与标注"),
+            (self.btn_clear_anno, "Clear Mask && Annotations", "清空蒙版与标注"),
             (self.btn_reset, "Reset Workspace", "重置工作区"),
             (self.lbl_ww_hint, "Right-drag on image to adjust WW/WL", "在图像上右键拖拽可快速调节窗宽/窗位"),
             (self.chk_overlay, "Overlay", "信息叠加"),
@@ -531,9 +531,9 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.current_sinogram = None; self.current_theta = None
         self._last_recon_img = None
         for b in [self.btn_dfr, self.btn_bp, self.btn_fbp, self.btn_dl]: b.setEnabled(False)
-        # DMR/ART 只要有 DICOM 数据就可以运行（不依赖弦图）
-        has_data = self.volume_hu is not None
-        for b in [self.btn_dmr, self.btn_art]: b.setEnabled(has_data)
+        # DMR/迭代重建不依赖弦图；判据统一由 _sync_matrix_buttons 给出
+        # （模体也是合法源图，见该方法的说明）
+        self._sync_matrix_buttons()
         for v in self.views.values():
             v['cb_plane'].setCurrentIndex(AXIAL)
             v['preset'].setCurrentIndex(0)
@@ -604,8 +604,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # 无需等待下一次 mouse move：用新序列中心体素和新 capability 立即重建 HUD；
         # probe 则保持空白，直到用户在新序列上真实探测。
         self._update_hud(*self.current_3d_pos)
-        for b in [self.btn_dmr, self.btn_art]:
-            b.setEnabled(True)
+        self._sync_matrix_buttons()
         for vd in self.views.values():
             vd['view']._user_zoomed = False   # 新病例回到适配状态
         # 延迟 100ms 做 fitInView，确保 Qt 已完成首次绘制布局再计算缩放

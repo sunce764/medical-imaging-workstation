@@ -218,8 +218,8 @@ A third round, triggered by a number that did not add up rather than by a suspec
 
 ### Found by re-running at scale
 
-- **A three-case pilot overstated a separate product z-seam finding by an order of magnitude.** This A/B does not reproduce the student's input-size collapse: it compares the shipped teacher's z-block/per-block-`argmax` path against 25% z-overlap with logit accumulation. On three cases the gain appeared as high as **+0.205** Dice; over the full test split — 24 organs, paired, 59 of 61 cases carrying at least one in-scope organ — it is **+0.0133** [+0.0072, +0.0194], improving 54 of 59, for 1.18× wall-clock and +0.65 GB. On lung lobes alone the interval crosses zero. Both figures remain because the full-split run exists precisely to stop the outlier from becoming the headline.
-- **The re-implementation was checked against the published baseline before being trusted.** The reproduction of the shipped path scores 0.8867 over 234 lobe instances — identical to the previously published teacher baseline to four decimals (−0.0000).
+- **A three-case pilot overstated a separate product z-seam finding by an order of magnitude.** This A/B does not reproduce the student's input-size collapse: it compares the **then-shipped** teacher z-block/per-block-`argmax` path (pre-`2a50e37`) against 25% z-overlap with logit accumulation. On three cases the gain appeared as high as **+0.205** Dice; over the full test split — 24 organs, paired, 59 of 61 cases carrying at least one in-scope organ — it is **+0.0133** [+0.0072, +0.0194], improving 54 of 59, for 1.18× wall-clock and +0.65 GB (that memory figure measured but never archived). On lung lobes alone the interval crosses zero. Both figures remain because the full-split run exists precisely to stop the outlier from becoming the headline.
+- **The re-implementation was checked against the published baseline before being trusted.** The reproduction of the then-shipped path scores 0.8867 over 234 lobe instances — identical to the previously published teacher baseline to four decimals (−0.0000).
 
 ### Mistakes made in this round
 
@@ -244,7 +244,8 @@ Every headline figure was recomputed from the committed per-case CSVs by code wr
 fresh for the audit, rather than by re-running the project's own scripts — so an error
 inside those scripts could still surface. All of them held: teacher 0.8867, student
 0.4367 / 0.7667, paired −0.4500 over n=234 (Wilcoxon 3.7e-39), right-upper-lobe
-0.727 / 0.5459, z-overlap +0.0133 [+0.0072, +0.0194] with 54 of 59 improving at 1.184×,
+0.727 / 0.5459, the A/B gain +0.0133 [+0.0072, +0.0194] with 54 of 59 improving at 1.184×
+(A and B differ in both final-window handling and overlap, so this is not overlap alone),
 21-organ 0.9090 [0.889, 0.927] over 20 cases, spacing 0.6845 → 0.8399 with 20/20
 improving at p=1.91e-06, and the zero-padding control's 225,374 → 1,529 foreground
 voxels. Parameter counts were recomputed from the ONNX graphs: 31,194,809 and 1,927,841,

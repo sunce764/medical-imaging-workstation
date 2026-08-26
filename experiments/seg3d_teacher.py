@@ -11,7 +11,13 @@
 #   重测很可能得到低于 0.92 的数字，那才是真实值。
 #
 # 推理复刻自 ai_engine._run_onnx_multiorgan（与 seg_validate.py 同一套：
-# clip[-1000,400] 归一化 + 沿 z 的 DZ=32 滑窗 + 输出取 argmax），故测的是产品行为。
+# clip[-1000,400] 归一化 + 沿 z 的 DZ=32 滑窗 + 输出取 argmax）。
+# 【时点限定】产品自 2a50e37 起末窗回移到 [Z-DZ, Z)，本脚本仍是回移前的写法，
+# 故 Dice 属**修复前**路径的证据，不是当前 shipped path；差异只落在末块。
+# 【成本数字只能算 indicative，不能当作当前路径的实测】仅就这条 32 深度路径而言
+# （DZ=32、z 补到 32 的倍数），回移在构造上不改变 block count 与 tensor shape，
+# 故这里记录的 wall time / peak RSS 有理由推测在当前路径上相近——但**本项目没有
+# 在当前路径上复测过**。它对其记录的那次配置有效，不等于当前路径的实测成本。
 #
 # 用法：python experiments/seg3d_teacher.py [--split test] [--limit N]
 # 产出：results/seg3d_teacher_dice.csv（逐例逐器官）+ 汇总打印

@@ -94,7 +94,7 @@ Table 3 and Figure 3 compare the four reconstructors under Poisson photon noise.
 | 60 | 0.089 | **0.611** | **0.053** | 0.076 |
 | 90 | 0.087 | 0.090 | **0.050** | 0.075 |
 
-*Table 3. In-circle RMSE under photon noise. Bold marks the best method (ART) and the catastrophic DMR failure at the near-square regime.*
+*Table 3. In-circle RMSE under photon noise. Bold marks the lowest value **at the fixed iteration counts of this table** (ART) — a ranking withdrawn in §4.5, where sweeping the stopping point reverses it in SIRT's favour at every dose — and the catastrophic DMR failure at the near-square regime.*
 
 ![Figure 3](../experiments/results/exp_c_analytic_vs_iterative.png)
 

@@ -65,7 +65,16 @@ def load_zhw(path):
 
 
 def run_onnx(volume_hu):
-    """严格复刻 ai_engine._run_onnx_multiorgan：clip[-1000,400] 归一化 + 沿 z 的 DZ=32 滑窗。"""
+    """复刻 ai_engine._run_onnx_multiorgan：clip[-1000,400] 归一化 + 沿 z 的 DZ=32 滑窗。
+
+    【与当前产品的已知差异，勿再写作「严格复刻」】产品自 2a50e37 起把末窗回移到
+    [Z-DZ, Z)（原先末块由 pad(mode='constant') 补零，而 HU 归一化后 0 就是空气；
+    实测 194 层时末块只有 2 层真实数据、30 层合成空气）。本函数**仍是回移前的写法**，
+    故本脚本产出的是**历史（修复前）证据**，差异只落在末块。具体受此限定的已提交
+    产物是 seg_dice、seg_mapping、seg_confusion 三份——它们的 accuracy 只能称作
+    historical evidence，不得写成对当前 shipped path 的验证。有意不改：既有结果全部
+    在这条路径上产出，改它会让已提交的 CSV 与脚本对不上，而重跑需要 ONNX 推理。
+    """
     import onnxruntime as ort
     norm = np.clip(volume_hu, -1000, 400).astype(np.float32)
     norm = (norm + 1000.0) / 1400.0

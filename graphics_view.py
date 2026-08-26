@@ -599,7 +599,10 @@ class MedicalGraphicsView(QGraphicsView):
             elif self.current_tool == TOOL_AI_TRACK and getattr(self, 'temp_rect_item', None):
                 r = self.temp_rect_item.rect()
                 self.scene.removeItem(self.temp_rect_item)
-                if r.width() > 5:
+                # 【宽高都要校验】原先只看 width：水平方向一拖就能造出 40×0 的框，
+                # 它会一路传到 handle_3d_track_requested，切出空 ROI，np.median 对空
+                # 数组返回 nan，整段被 except 吞掉，用户只看到「什么也没发生」。
+                if r.width() > 5 and r.height() > 5:
                     self.track_requested.emit(r)  # 发射 QRectF，供 3D 连通域追踪使用
 
             elif self.current_tool in [TOOL_SEG_BRUSH, TOOL_SEG_ERASE] and self.temp_item:

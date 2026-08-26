@@ -51,6 +51,15 @@ def zslab_infer(net, img, dz, dev):
     ph, pw = (-H) % 8, (-W) % 8
     seg = np.zeros((Z, H, W), np.uint8)
     with torch.no_grad():
+        # 【时点限定】此处沿用产品**末窗回移（2a50e37）之前**的写法：末块只含
+        # Z % dz 层真实数据、其余补零。产品现已改为回移到 [Z-dz, Z)。以 --infer zslab
+        # 跑出的已提交结果均产自本写法。
+        # 【这里 precision 与 cost 同属旧 path，别照搬教师那条的口径】教师与 ai_engine
+        # 把 z 补到 **32** 的倍数，末块张量恒为整块，故回移不动 block count 也不动
+        # tensor shape；而**本函数补的是 8 的倍数**（见上：pd = (-blk.shape[0]) % 8，
+        # 因为网络有两次 2× 下采样）。于是末块张量真的更小——回移会把它撑回整块。
+        # 结论：本路径的耗时 / 峰值内存**也**属回移前证据，不能声称成本不变。
+        # 同理，「Z % 32 == 0 两种写法相同」是补 32 那几条路径的结论，**不适用于此处**。
         for z0 in range(0, Z, dz):
             z1 = min(z0 + dz, Z)
             blk = img[z0:z1]

@@ -320,8 +320,11 @@ class AutoAIEngineThread:
         # 30 层合成空气，等于让模型在一个几乎全空的 slab 里判断那 2 层。nnU-Net 的滑窗
         # 做法是把末窗回移到 [Z-DZ, Z) 再融合；这里同样回移，重叠部分由后一块的 argmax
         # 覆盖。代价为零，且只影响末块——其余块的 z0 不变。
-        # （块间仍无重叠、每 32 层有一道硬接缝，那是另一件事：改它要引入 logit 融合，
-        #   实测收益 +0.0133 Dice 但 +0.65GB 峰值，见 experiments 的 F 节，未采用。）
+        # （块间仍无重叠、每 32 层有一道硬接缝，那是另一件事：改它要引入 logit 融合。
+        #   experiments 的 F 节记录到 +0.0133 Dice / 1.18× 耗时，但那是一次 historical
+        #   A/B——A 是本次回移**之前**的补零末块 + 无重叠 + 逐块 argmax，B 是
+        #   boundary-anchored + 25% 重叠 + logit 融合，两个变量一起变。故它**不是**在
+        #   当前这条路径上单加重叠的增量收益；+0.65GB 那个数也未归档。未采用。）
         starts = [min(z0, max(0, Z - DZ)) for z0 in range(0, Z, DZ)]
         for z0 in starts:
             if self._cancelled:

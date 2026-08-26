@@ -150,35 +150,59 @@ class AnnotationMixin:
         x1, y1, x2, y2 = max(0, x1), max(0, y1), min(w, x2), min(h, y2)
         p = QProgressDialog("Computing 3D..." if self.is_english else "正在计算 3D...", None, 0, 0, self)
         p.setWindowModality(Qt.WindowModal); p.show(); QApplication.processEvents()
+        # 【失败必须可区分，且不得改动既有蒙版】原实现把整段包在 try/except: pass 里。
+        # 空 ROI（np.median 对空数组返回 nan）、连通域计算抛异常、以及「ROI 内没有任何
+        # 前景标签」三种结果全都表现为「点了没反应」，用户无法区分「没找到结构」与
+        # 「算失败了」。现分成三条出口各给明确反馈；写蒙版的动作全部推迟到成功之后，
+        # 故失败路径连 undo 都不压栈，既有 mask/confidence 逐位不变。
+        tracked = None
+        fail_msg = None
+        e = self.is_english
         try:
             roi = self.volume_hu[idx, y1:y2, x1:x2]
-            med, std = np.median(roi), np.std(roi)
-            bv = (self.volume_hu >= med - 1.5 * std) & (self.volume_hu <= med + 1.5 * std)
-            lab, _ = ndimage.label(bv)
-            rl = lab[idx, y1:y2, x1:x2]
-            rl = rl[rl > 0]  # 过滤背景标签 0
-            if len(rl) > 0:
-                # bincount 统计 ROI 区域内各标签出现次数，取最多的那个为目标
-                # 赋专属标签值 MANUAL_TRACK_LABEL(255)，与 AI 器官类别(1-24)区分显示
-                tracked = (lab == np.bincount(rl.flatten()).argmax())
-                if self.volume_mask is None:
-                    self.volume_mask = np.zeros(self.volume_hu.shape, dtype=np.uint8)
-                self._push_volume_undo()
-                # 【只动追踪层，不碰 AI 器官】旧实现在此处整卷赋值，一次追踪就把
-                # ~100s 推理出的 24 类器官全部抹掉，且经 save_project 落盘后再也
-                # 恢复不回来（实测：缓存 mask 里 100% 体素为 255，器官一个不剩）。
-                # 现改为：先清掉上一次的追踪结果避免多次追踪累积，再写入本次；
-                # 1-24 号器官标签原样保留。
-                self.volume_mask[self.volume_mask == MANUAL_TRACK_LABEL] = 0
-                self.volume_mask[tracked] = MANUAL_TRACK_LABEL
-                # 追踪是用户画的，模型对它没有判断：把这些体素的置信度清成哨兵 0，
-                # 否则定量表会拿「模型对该处原本器官的置信度」冒充追踪结果的置信度
-                if getattr(self, 'volume_conf', None) is not None \
-                        and self.volume_conf.shape == self.volume_mask.shape:
-                    self.volume_conf[tracked] = 0
-        except Exception:
-            pass
+            if roi.size == 0:
+                fail_msg = ("The selected region is empty — draw a box with both width and "
+                            "height inside the image." if e else
+                            "框选区域为空——请在图像内画出同时具有宽和高的方框。")
+            else:
+                med, std = np.median(roi), np.std(roi)
+                if not (np.isfinite(med) and np.isfinite(std)):
+                    fail_msg = ("Could not compute HU statistics for the selected region."
+                                if e else "无法对框选区域计算 HU 统计量。")
+                else:
+                    bv = ((self.volume_hu >= med - 1.5 * std)
+                          & (self.volume_hu <= med + 1.5 * std))
+                    lab, _ = ndimage.label(bv)
+                    rl = lab[idx, y1:y2, x1:x2]
+                    rl = rl[rl > 0]  # 过滤背景标签 0
+                    if len(rl) == 0:
+                        fail_msg = ("No connected structure was found in the selected region."
+                                    if e else "框选区域内未找到连通结构。")
+                    else:
+                        # bincount 统计 ROI 内各标签出现次数，取最多的那个为目标
+                        tracked = (lab == np.bincount(rl.flatten()).argmax())
+        except Exception as exc:                      # 计算失败：如实报错，不动蒙版
+            fail_msg = (f"3D tracking failed: {type(exc).__name__}: {exc}" if e else
+                        f"3D 追踪计算失败：{type(exc).__name__}: {exc}")
         p.close()
+        if fail_msg is not None:
+            QMessageBox.warning(self, "3D Tracking" if e else "智能追踪", fail_msg)
+            return                                    # 未写蒙版，不必刷新定量与显示
+        # —— 以下为成功路径，此前不曾改动任何状态 ——
+        if self.volume_mask is None:
+            self.volume_mask = np.zeros(self.volume_hu.shape, dtype=np.uint8)
+        self._push_volume_undo()
+        # 【只动追踪层，不碰 AI 器官】旧实现在此处整卷赋值，一次追踪就把 ~100s 推理
+        # 出的 24 类器官全部抹掉，且经 save_project 落盘后再也恢复不回来（实测：缓存
+        # mask 里 100% 体素为 255，器官一个不剩）。现改为：先清掉上一次的追踪结果避免
+        # 多次追踪累积，再写入本次；1-24 号器官标签原样保留。
+        self.volume_mask[self.volume_mask == MANUAL_TRACK_LABEL] = 0
+        self.volume_mask[tracked] = MANUAL_TRACK_LABEL
+        # 追踪是用户画的，模型对它没有判断：把这些体素的置信度清成哨兵 0，
+        # 否则定量表会拿「模型对该处原本器官的置信度」冒充追踪结果的置信度
+        if getattr(self, 'volume_conf', None) is not None \
+                and self.volume_conf.shape == self.volume_mask.shape:
+            self.volume_conf[tracked] = 0
         self._update_organ_stats()  # 追踪已改写蒙版，定量面板同步刷新
         self.update_display()
 

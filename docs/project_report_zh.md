@@ -4,7 +4,7 @@
 **报告日期：** 2026-08-26<br>
 **报告用途：** 研究生申请与算法作品集审阅、项目阶段复盘、后续研究决策<br>
 **软件定位：** 教学 / 科研工具，非医疗器械，不得用于临床诊断<br>
-**审计基线：** 固定 Git baseline `2e9b7005b33aed9012b7707ba89b4d0d26bb315d`。中英文 README 相对该 baseline 的 unified diff SHA-256 为 `751a2533b07d241ba955bb73957a28a58692fe75f36ee1bf90ba3a650269e420`；该 hash 只绑定两份 README 的当前内容，不声称它们已 push 或经远端 CI 覆盖。**该值曾一度失效**：上一版发布的是 `08825d60…`，而其后又有一次提交改动了两份 README 却未重算，于是本文件第 11 行邀请读者执行的复算命令会给出不同的值——全项目唯一的密码学自证点当时是失败的。此处已重算并核验通过，但目前没有任何断言在 README 改动时强制重算，见 §10 的建议。
+**审计基线：** 固定 Git baseline `2e9b7005b33aed9012b7707ba89b4d0d26bb315d`。中英文 README 相对该 baseline 的 unified diff SHA-256 为 `0e81db074bde2177efc3c4bbe8f9cfcd1ed9040ee91ffe52a8ab92bc7843ef24`；该 hash 只绑定两份 README 的当前内容，不声称它们已 push 或经远端 CI 覆盖。**该值曾一度失效**：上一版发布的是 `08825d60…`，而其后又有一次提交改动了两份 README 却未重算，于是本文件第 11 行邀请读者执行的复算命令会给出不同的值——全项目唯一的密码学自证点当时是失败的。此处已重算并核验通过，但目前没有任何断言在 README 改动时强制重算，见 §10 的建议。
 
 > 本报告刻意区分四类信息：**本次实测**、**可由仓库产物复算**、**历史实测但未归档**、**推断或未测项**。数值不因叙事需要而跨越这些边界。
 
@@ -19,11 +19,11 @@ README diff 的 canonical 复算命令为：`git -c color.ui=false --no-pager di
 项目最有价值的部分并非“功能很多”，而是形成了一条可审计的闭环：
 
 1. 产品中的数值逻辑被抽成无 Qt 模块，可用合成数据独立测试；
-2. 重建实验直接调用产品的 `recon.py`，分割研究复现产品的真实推理契约；其中 ASD-POCS 亦已接入重建实验室，可在 GUI 中与 DMR/ART/SIRT 并列选用；
+2. 重建实验直接调用产品的 `recon.py`；分割研究复现产品的推理契约，但其复现停在**末窗回移（`2a50e37`）之前**的写法，故属该时点的证据（详见 §6 的口径说明）；其中 ASD-POCS 亦已接入重建实验室，可在 GUI 中与 DMR/ART/SIRT 并列选用；
 3. 研究不仅保留正结果，也保留被大样本推翻的试跑结果和被后续测量撤回的结论；
 4. 数据、模型、许可、软著快照和当前代码之间的边界均被显式记录。
 
-截至本报告日期，项目已经具备较强的**作品集展示价值和工程可信度**：2026-08-26 的一次本机实测，全套回归 **788 PASS / 0 FAIL**，数据无关子集 **696 PASS / 0 FAIL**；这些是 local evidence，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run 32833860765](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、coverage 81%、Ruff PASS，`event=workflow_dispatch`。该历史 CI 不覆盖其后的任何 commit；后续远端结果必须绑定具体 run 与精确 `headSha`。项目仍然不是临床产品，也还不是一项已完成的临床研究：分割验证来自单一公开数据源，教师模型很可能见过该数据；学习式重建使用无噪声合成投影；部分历史性能数字没有归档原始日志。
+截至本报告日期，项目已经具备较强的**作品集展示价值和工程可信度**：2026-08-26 的一次本机实测，全套回归 **854 PASS / 0 FAIL**，数据无关子集 **762 PASS / 0 FAIL**；这些是 local evidence，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run 32833860765](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、coverage 81%、Ruff PASS，`event=workflow_dispatch`。该历史 CI 不覆盖其后的任何 commit；后续远端结果必须绑定具体 run 与精确 `headSha`。项目仍然不是临床产品，也还不是一项已完成的临床研究：分割验证来自单一公开数据源，教师模型很可能见过该数据；学习式重建使用无噪声合成投影；部分历史性能数字没有归档原始日志。
 
 综合判断：这是一个“**产品实现 + 算法研究 + 证据治理**”结合得较完整的医学影像算法作品集。其可信度主要来自对错误结论的主动撤回、对推理路径的同口径比较，以及对不可复现部分的明确承认，而不是来自单个最高 Dice 或功能数量。
 
@@ -57,7 +57,7 @@ README diff 的 canonical 复算命令为：`git -c color.ui=false --no-pager di
 | 软著登记 | 据项目方提交记录，截至 2026-08-25 已提交，两位著作权人尚未收到正式受理通知；不是“登记成功” | [`LICENSE`](../LICENSE) 是项目方状态声明，不是 CPCC 官方受理证明 |
 | 软著 V1.0 快照 | 仓库可验证快照形成于 2026-07-08，source builder 列出 13 个产品模块 | 据项目方记录，该快照用于登记提交；`experiments/` 未包含在提交的源码或说明书材料中 |
 | 当前产品模块 | `pyproject.toml` 声明 19 个顶层 Python 模块，其中 10 个为 Qt-free compute modules；`constants.py` 另为 Qt-free 常量表 | [`pyproject.toml`](../pyproject.toml) 与 [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)；不维护易漂移的精确 LOC |
-| 量化研究 | 4 条研究主线、69 个已提交结果文件 | [`experiments/README.md`](../experiments/README.md) |
+| 量化研究 | 4 条研究主线、61 个已提交结果文件（另有 8 个本地专有产物被 .gitignore 排除，不入库） | [`experiments/README.md`](../experiments/README.md) |
 | 正式论文 / venue | 尚未确定 | `docs/preprint_recon.md` 是稿件，不等于已投稿或已发表 |
 
 ---
@@ -277,9 +277,15 @@ Zero-padding control 保持所有真实 input voxel 不变，只扩大 tensor，
 
 #### C. 独立的 product-teacher z-seam A/B
 
-这一实验不是 student input-size collapse 的复现，而是单独测试 shipped teacher path 的 z seam。Teacher 当前使用 full-xy、z-block=32、per-block argmax。一个 3-case validation 2×2 grid 曾显示 z-overlap 最高约 **+0.205**；实验性 25% z-overlap + logit accumulation 扩到 test split 后，在 59 个可评 cases 上将 all-organ per-case mean Dice 从 **0.8973 提升到 0.9105**，paired gain **+0.0133，95% CI [+0.0072, +0.0194]**，54/59 cases 改善；five-lobe CI 跨 0。Pilot 与 full-test endpoint 都是比较 no-overlap 和 overlap 的 teacher inference；被大幅收缩的是 pilot 所暗示的**大效应量**，不是 full test 中小幅正 gain 的方向。Pilot 只有 3 例，不能作为效应量。
+这一实验不是 student input-size collapse 的复现，而是单独测试 shipped teacher path 的 z seam。Teacher 当前使用 full-xy、z-block=32、per-block argmax。一个 3-case validation 2×2 grid 曾显示 z 分块这个因子最高约 **+0.205**；实验性 25% z-overlap + logit accumulation（同时也把末窗改成 boundary-anchored，故为**合并臂差异、非重叠单独增益**，详见本节末的限定块）扩到 test split 后，在 59 个可评 cases 上将 all-organ per-case mean Dice 从 **0.8973 提升到 0.9105**，paired gain **+0.0133，95% CI [+0.0072, +0.0194]**，54/59 cases 改善；five-lobe CI 跨 0。Pilot 与 full-test endpoint 都是比较 no-overlap 和 overlap 的 teacher inference；被大幅收缩的是 pilot 所暗示的**大效应量**，不是 full test 中小幅正 gain 的方向。Pilot 只有 3 例，不能作为效应量。
 
 相对代价为 **1.18× wall-clock**，该比例可由 committed per-case CSV 复算。历史 peak memory **8.44 → 9.09 GB** 只存在于终端记录，没有归档 artifact。因此产品当前保留 no-overlap path；不能把实验配置写成 shipped feature。
+
+> **这次 A/B 隔离出了什么、没隔离出什么。** 这是一次 historical A/B：A 是 `2a50e37` 之前的
+> 补零末块、无重叠、逐块 argmax；B 是 boundary-anchored、25% 重叠、logit 融合。记录在案的
+> `+0.0133` 与 `1.18×` 描述的是这两组**合并后的**差异；它们**没有单独隔离出重叠这一个
+> 变量**，也**不是**在当前 shipped path 上加重叠所能得到的增量收益或代价。`+0.65 GB`
+> 这个数至今未归档。
 
 #### D. Teacher–student 同路径比较
 
@@ -315,9 +321,9 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 | CNN RMSE、lesion retention | 每 view 档 80 held-out phantoms；global pixel RMSE / per-phantom SSIM / generated-lesion contrast mean | B，historical weights 非 byte-reproducible | [`recon_dl_matrix.csv`](../experiments/results/recon_dl_matrix.csv) · [`recon_dl.py`](../experiments/recon_dl.py) |
 | False-structure 1.67%；OOD ratio 0.807 | 60 paired phantoms；3 OOD families × 24，ratio 定义见 §4.4 | B，historical weights 非 byte-reproducible | [`recon_dl_hallucination.csv`](../experiments/results/recon_dl_hallucination.csv)、[`recon_dl_ood.csv`](../experiments/results/recon_dl_ood.csv) · [`recon_dl.py`](../experiments/recon_dl.py) · `python experiments/recon_dl.py halluc ood` |
 | Student path 0.4903→0.7457 | 同一 weights、24 validation cases；两条 inference path | B，需外部 data / weight | [`seg3d_diag_ch8d3_33600s_zslab.json`](../experiments/results/seg3d_diag_ch8d3_33600s_zslab.json)、[`seg3d_diag_ch8d3_33600s_sliding.json`](../experiments/results/seg3d_diag_ch8d3_33600s_sliding.json) · [`seg3d_diag.py`](../experiments/seg3d_diag.py) |
-| Product overlap +0.0133 / 1.18× | 59 paired all-organ case means；time 由同一批 per-case `sec` 重算 | B，需外部 data / weight | [`seg3d_infer_bias_bench_A.csv`](../experiments/results/seg3d_infer_bias_bench_A.csv)、[`seg3d_infer_bias_bench_B.csv`](../experiments/results/seg3d_infer_bias_bench_B.csv) · [`seg3d_infer_bias.py`](../experiments/seg3d_infer_bias.py) `bench` |
+| Historical A/B（A=回移前无重叠 / B=boundary-anchored+25% 重叠）+0.0133 / 1.18×，非重叠单独增益 | 59 paired all-organ case means；time 由同一批 per-case `sec` 重算 | B，需外部 data / weight | [`seg3d_infer_bias_bench_A.csv`](../experiments/results/seg3d_infer_bias_bench_A.csv)、[`seg3d_infer_bias_bench_B.csv`](../experiments/results/seg3d_infer_bias_bench_B.csv) · [`seg3d_infer_bias.py`](../experiments/seg3d_infer_bias.py) `bench` |
 | Teacher–student `zslab` −0.4500 | 234 matched `(case, lobe)` rows；正文 CI 是 instance bootstrap | B，需外部 data / weight | [`seg3d_teacher_dice.csv`](../experiments/results/seg3d_teacher_dice.csv)、[`seg3d_student_ch8d3_33600s_zslab.csv`](../experiments/results/seg3d_student_ch8d3_33600s_zslab.csv) · [`seg3d_report.py`](../experiments/seg3d_report.py) |
-| 788 full / 696 subset | 2026-08-26 本机实测；commands 见 §11 | A | 本地 runner exit 0 与 PASS count；不是 fresh-clone、coverage 或远端 CI evidence |
+| 854 full / 762 subset | 2026-08-26 本机实测；commands 见 §11 | A | 本地 runner exit 0 与 PASS count；不是 fresh-clone、coverage 或远端 CI evidence |
 | 100s/8.8GB→37s/3.0GB；8.44→9.09GB | 各为历史单机 run | C | 文档中的 terminal record；没有可独立复核 artifact |
 | Exact upstream checkpoint、noisy-CT hallucination、cross-scanner generalisation | 未形成直接 measurement | D | 明确保持 unresolved，不由 checksum 或现有 Dice 推断 |
 
@@ -329,8 +335,8 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 
 | 检查 | 结果 | 解释 |
 |---|---:|---|
-| Full regression with local RIDER | **788 PASS / 0 FAIL** | 2026-08-26 本机实测；真实 DICOM 在场；本地 RIDER export 为 `DERIVED` 且无 explicit HU，故产品路径 viewer-only；标准 HU consumer 由 synthetic classic CT 覆盖；未重跑整卷 AI inference |
-| `SKIP_REAL_DATA=1` local subset | **696 PASS / 0 FAIL** | 2026-08-26 本机实测；合成 DICOM、synthetic event、pure compute 与本地 artifact guard |
+| Full regression with local RIDER | **854 PASS / 0 FAIL** | 2026-08-26 本机实测；真实 DICOM 在场；本地 RIDER export 为 `DERIVED` 且无 explicit HU，故产品路径 viewer-only；标准 HU consumer 由 synthetic classic CT 覆盖；未重跑整卷 AI inference |
+| `SKIP_REAL_DATA=1` local subset | **762 PASS / 0 FAIL** | 2026-08-26 本机实测；合成 DICOM、synthetic event、pure compute 与本地 artifact guard |
 | Fresh local clone | **该 snapshot 未运行** | 不把旧 clean-clone 计数当作该 snapshot 的证据 |
 | Ruff | **PASS** | 2026-08-26 本机执行 `ruff check .`，exit 0 |
 | Pre-commit snapshot coverage | **未运行** | 新增 geometry/safety 代码后不沿用旧 denominator 或 module percentages |
@@ -384,6 +390,37 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 ---
 
 ## 6. 数据、模型与 reproducibility
+
+> **分割证据的时点限定：逐 producer、逐 arm 记载。** 产品早先的 z 分块推理写作
+> `for z0 in range(0, Z, DZ)`，末块只含 `Z % DZ` 层真实数据、其余补零——而 HU 归一化后
+> 0 就是空气。`2a50e37` 把末窗回移到 `[Z-DZ, Z)`。**并非所有 producer 与 arm 都落在这道
+> 分界的同一侧**，故按产物分别写明，不用一句总括代替：
+>
+> | producer | arm / 产物 | 末窗处理 |
+> |---|---|---|
+> | `seg_validate.py` `run_onnx` | `seg_dice`、`seg_mapping`、`seg_confusion` | 回移前的补零末块（自带复刻实现，z 补到 32 的倍数） |
+> | `seg_multi.py` | 已提交 CSV | 由 `2a50e37` **之前**的 `ai_engine` 生成。该脚本是实时调用 `ai_engine` 的，故**当前源码已不再逐步复现这份已提交产物**——今天重跑会走当前引擎。本轮未重跑。 |
+> | `seg_spacing.py` | `direct` 与 `engine` 两臂 | 两臂的已提交结果都生成于修复前。今天重跑会变成「旧 `run_onnx` 对新 engine」，不再只隔 spacing 这一个变量。本轮未重跑。 |
+> | `seg3d_teacher.py` `run_onnx` | teacher Dice | 回移前的补零末块。**仅就这条 32 深度路径而言**（`DZ=32`、z 补到 32 的倍数），回移在构造上不改变 block count 与 tensor shape；故其记录的 wall time / RSS 对当前路径只能算 **indicative**，不是对当前路径的实测。 |
+> | `seg3d_eval.py`、`seg3d_diag.py` —— `zslab_infer` | 以 `--infer zslab` 跑出的产物 | 既是回移前写法，**且 z 只补到 8 的倍数**，末块张量确实小于整块。故此处 **precision 与 cost 同属旧 path**。 |
+> | `seg3d_eval.py`、`seg3d_diag.py` —— `sliding_infer` | 以 `--infer sliding`（默认）跑出的产物 | boundary-anchored：末窗显式贴到 `Zp - pz`。不以相同方式受该修复影响。 |
+> | `seg3d_infer_bias.py` | `A_product`、`C_xy_block_only`、`dice_fullplane`、`bench --config A` | 回移前的补零末块 |
+> | `seg3d_infer_bias.py` | `B_z_overlap_only`、`D_both`、`dice_xy*`、`bench --config B` / `--config D` | boundary-anchored（`_zstream` / `_teacher_sliding` 都把末起点贴到 `Z - dz`） |
+> | `seg3d_infer_bias.py` | `ab`、`train`、`dose` 三组里的 `zslab` 列（`seg3d_infer_bias_ab.csv`、`_train.csv`、`_dose.csv`） | 这三处直接调用 `seg3d_eval.zslab_infer`，**没有 `--infer` 开关**。与上面 `zslab` 行同类，且更重一层：补 8 意味着 **precision 与 cost 同属旧 path**。（学生模型的对照，从未被当作 shipped path 主张。） |
+> | `seg3d_infer_bias.py` | 同三份产物里的 `sliding` 列 | `sliding_infer`，boundary-anchored |
+> | `seg3d_infer_bias.py` | `pad`、`norm` | 张量与统计量诊断，本就不是 z 分块推理的测量 |
+>
+> 撤回了什么、没撤回什么：
+> - **撤回**：**仅对上表中回移前的那几行**，撤回「这些测量等价于、或验证了 `ai_engine`
+>   **当前**所走那条路径」的主张。
+> - **未撤回**：数值本身。每个数对其记录在案的实验配置仍然有效；**同一张表内**、且两臂确实
+>   跑在同一条循环上的组间对比，也仍然成立。
+> - **`Z % 32 == 0` 只是 32 深度、补 32 那几条路径的充分边界**（`ai_engine`、`seg_validate.py`、
+>   `seg3d_teacher.py`，以及 `seg3d_infer_bias.py` 的 `A`/`C` 臂），**不能**外推到补 8 的
+>   `zslab_infer`。
+>
+> 要对当前路径重测，需在整个 split 上重跑 ONNX 推理。本轮未做，也未改动任何已提交结果文件。
+
 
 ### 6.1 数据边界
 
@@ -442,7 +479,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 ### 8.1 作为研究生申请作品集的优势
 
 1. **跨层能力完整。** 同时覆盖 DICOM、Qt UI、numerical reconstruction、3-D segmentation、ONNX deployment、statistics、testing 和 documentation。
-2. **产品与研究相互约束。** 研究不是另写一套 toy code；reconstruction 直接调用 product module，segmentation 按 product contract 复现。
+2. **产品与研究相互约束。** 研究不是另写一套 toy code；reconstruction 直接调用 product module，segmentation 按 product contract 复现——但该复现固定在末窗回移之前的实现上，故是**当时**的 product contract，不是当前的（见 §6）。
 3. **有反证而非只展示正结果。** 3-case `+0.205` 所暗示的大效应被 59-case `+0.0133` 大幅收缩，ART 排名被 fair stopping sweep 撤回，receptive-field 解释被 longer training 与 inference control 推翻。
 4. **理解医学影像中的隐性契约。** Spacing、orientation、HU、SeriesInstanceUID、clustered denominator 和 model provenance 都得到实际处理。
 5. **CPU-only constraint 下完成可用部署。** 通过 resampling、session cache、z-blocking 和 fallback，在没有 GPU 的条件下保持功能可运行。
@@ -463,7 +500,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 |---|---|
 | 作品集展示 | **强**：功能、代码、结果、失败案例与审计链完整 |
 | 教学科研工具 | **可用**：关键流程可运行，边界写明 |
-| 工程可信度 | **较强，但远端证据仍缺**：full/subset 本地回归通过（788/696，exit 0），改动已 commit；`d76bcbb` 及更早已在 `origin/main`，其后的提交仅在本地。仍然没有 fresh-clone 计数、未重算 coverage，也没有任何与这些 commit 的 `headSha` 精确匹配的 remote CI——历史 `2e9b700` 的 manual CI 不覆盖其后的任何 commit。自动 `push` trigger 不作为 P0；binary packaging 不在该 snapshot 范围 |
+| 工程可信度 | **较强，但远端证据仍缺**：full/subset 本地回归通过（exit 0，计数见 §5.1）。**须区分两层**：已 commit 的历史快照止于 `bd129a0`（该 commit 与 `origin/main` 一致，具体 SHA 请以 `git ls-remote origin main` 为准，本报告不复述会随时间失真的具体值）；而 §5.1 所述的这批改动**尚未 commit，是工作区里的 pre-commit local candidate**，既未推送，也不存在与之对应的远端 CI。仍然没有 fresh-clone 计数、未重算 coverage，也没有任何与这些 commit 的 `headSha` 精确匹配的 remote CI——历史 `2e9b700` 的 manual CI 不覆盖其后的任何 commit。自动 `push` trigger 不作为 P0；binary packaging 不在该 snapshot 范围 |
 | 学术发表准备 | **探索阶段**：已有可写结果，但 venue、研究问题与外部验证尚未锁定 |
 | 临床转化 | **不具备**：缺监管、独立临床验证、数据治理与部署体系 |
 
@@ -487,7 +524,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 
 ### 工程冻结与外部等待
 
-1. 2026-08-26 的这批改动已 commit，其中 `d76bcbb` 及更早已 push 到 `origin/main`；尚未 tag、release，也未对任何一个 commit 触发 workflow dispatch。未来远端门只接受与最终 commit 精确 `headSha` 匹配的 run；其 URL/headSha 记在仓库外 evidence 或交付摘要，不回写报告制造第二个文档 commit 与自引用循环。
+1. 截至 2026-08-26，已 commit 并已 push 到 `origin/main` 的历史快照是 `bd129a0`（含其之前的 `d76bcbb` 等）。**本轮 2026-08-26 的这批改动尚未 commit**——它只是工作区里的 pre-commit local candidate，未 stage、未 commit、未 push；尚未 tag、release，也未对任何 commit 触发 workflow dispatch。未来远端门只接受与最终 commit 精确 `headSha` 匹配的 run；其 URL/headSha 记在仓库外 evidence 或交付摘要，不回写报告制造第二个文档 commit 与自引用循环。
 2. 自动 `push` trigger 根因不再是 P0，不阻塞本地工程冻结，也不主动深挖。
 3. 只有获得新的明确授权才可重开 performance run；届时必须使用已接入的 JSON provenance 合约，并核对 machine、configuration、wall time、process peak 与完整 model hashes。
 4. 继续冻结项目方提交记录所指向的 `docs/*.pdf` 与签章材料；等待 CPCC 期间不重建 V1.0 snapshot，状态变化只更新非冻结 Markdown。

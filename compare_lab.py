@@ -135,10 +135,12 @@ class CompareMixin:
         # 平面内刚性配准：勾选后先把既往层对齐到当前层，再显示与算差异。
         # 只在同尺寸时尝试；registration 内部带安全阀，NCC 不升则不采用（applied=False），
         # 此时 rtag 明确标出"未采用"，避免用户以为已配准。
+        applied_reg = False       # 真实采用状态，供 _compare_stat_text 如实标注
         if getattr(self, 'chk_register', None) is not None and self.chk_register.isChecked():
             if prior.shape == self.volume_hu[z].shape:
                 r = registration.register_rigid(self.volume_hu[z], prior)
                 if r['applied']:
+                    applied_reg = True
                     prior = registration.apply_rigid(prior, r['angle_deg'], r['shift_yx'])
                     dy, dx = r['shift_yx']
                     rtag = (f" · reg {r['angle_deg']:+.1f}° ({dy:+d},{dx:+d}) NCC {r['ncc_before']:.2f}→{r['ncc_after']:.2f}"
@@ -152,7 +154,7 @@ class CompareMixin:
         # 标题带既往检查日期（脱敏时隐去——检查日期属可识别信息）
         date = '' if self.anonymize else (str(getattr(self.compare_datasets[0], 'StudyDate', '')) if self.compare_datasets else '')
         dtag = f" {date[:4]}-{date[4:6]}-{date[6:8]}" if len(date) == 8 else ''
-        stat = self._compare_stat_text(self.volume_hu[z], prior)
+        stat = self._compare_stat_text(self.volume_hu[z], prior, applied_reg)
         self.set_view_title(2, (f"V2 [Prior{dtag} {z2 + 1}/{Z2} · {reg}]{rtag}{stat}" if self.is_english
                                 else f"V2 [既往{dtag} {z2 + 1}/{Z2} · {reg}]{rtag}{stat}"))
         # 【V4 必须清空】对比模式只用到 V1/V2（V3 是差值图，由 _compare_stat_text 在可见时
@@ -167,7 +169,7 @@ class CompareMixin:
             self.set_view_title(4, "V4 [unused in comparison mode]" if self.is_english
                                 else "V4 [对比模式下未使用]")
 
-    def _compare_stat_text(self, cur, prev):
+    def _compare_stat_text(self, cur, prev, applied_reg=False):
         """本层 HU 差异定量，返回可直接拼进 V2 标题的一段文字（无差异可比时返回提示）。
 
         计算全在无 Qt 的 followup 模块，本方法只做取值与格式化。
@@ -180,8 +182,11 @@ class CompareMixin:
         病灶变化量——故标题按当前状态如实标注是哪一种。
         """
         e = self.is_english
-        registered = (getattr(self, 'chk_register', None) is not None
-                      and self.chk_register.isChecked())
+        # 【判据是「实际采用了吗」，不是「勾选了吗」】registration 内部有安全阀：
+        # NCC 不升则 applied=False，此时 prev 是**未配准**的原图。若这里仍按 checkbox
+        # 判定，标题会同时出现「配准未采用」与「已刚性配准，无形变校正」——两句直接
+        # 矛盾，而后者会让读者以为差值里的体位差已被校正。故由调用方传入真实采用状态。
+        registered = bool(applied_reg)
         scope = ("rigid-aligned, no deformable" if registered else "z-aligned only") if e else \
                 ("已刚性配准，无形变校正" if registered else "仅z轴对齐")
         ok, why = followup.can_compare(cur, prev)

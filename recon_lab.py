@@ -171,6 +171,17 @@ class ReconLabMixin:
     # =========================================================================
     PHANTOM_N = 256   # 模体分辨率：解析生成故可任选，256 兼顾 Radon 速度与细节
 
+    def _sync_matrix_buttons(self):
+        """按「是否存在重建源图」同步 DMR / 迭代重建按钮的可用性。
+
+        判据必须与 _recon_source_slice 的前提一致：模体在场，或已载入 DICOM 体数据。
+        三处调用点（载入数据、重置、模体开关）共用本方法，避免各自维护一份判据。
+        """
+        has_src = (getattr(self, '_phantom_img', None) is not None
+                   or getattr(self, 'volume_hu', None) is not None)
+        for b in (self.btn_dmr, self.btn_art):
+            b.setEnabled(has_src)
+
     def _recon_source_slice(self):
         """返回重建链路的源图（float32，归一化 [0,1]）与来源标签。
 
@@ -220,6 +231,12 @@ class ReconLabMixin:
             v.image_item.setPixmap(QPixmap()); v.mask_item.setPixmap(QPixmap())
         for b in (self.btn_bp, self.btn_fbp, self.btn_dfr, self.btn_dl):
             b.setEnabled(False)
+        # 【模体也是合法源图】DMR/迭代重建的源由 _recon_source_slice 决定，它**优先**
+        # 取内置模体、其次才是 DICOM 切片。但这两个按钮的可用性此前只看 volume_hu，
+        # 于是空载载入模体后源图明明可用、按钮却仍是灰的——「无需导入数据即可使用
+        # 完整重建实验室」这句公开说明在真实 UI 上不成立。既有测试直接调方法，
+        # 绕过了按钮可达性，因此一直是绿的。
+        self._sync_matrix_buttons()
         e = self.is_english
         self.btn_phantom.setText(("Unload Phantom" if on else "Load Shepp-Logan Phantom") if e
                                  else ("卸下模体" if on else "载入 Shepp-Logan 模体"))

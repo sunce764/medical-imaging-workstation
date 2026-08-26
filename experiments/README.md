@@ -5,7 +5,7 @@ This directory upgrades the main application's two major AI/algorithm capabiliti
 - **Study I (reconstruction)** — uses the standard Shepp-Logan phantom to measure how `recon.py` reconstruction quality varies with dose / filter / algorithm.
 - **Study II (AI segmentation)** — uses a ground-truth-labelled public CT (TotalSegmentator-CT-Lite) to measure the Dice of `organs.onnx`, and to *recover by measurement* its 25-class label mapping.
 
-> The reconstruction experiments directly `import recon`, the workstation's numerical module. Every studied solver, ASD-POCS included, is exposed through the GUI's reconstruction lab. The segmentation experiment replicates `ai_engine`'s identical (step-by-step numerically equivalent) preprocessing and sliding-window inference, running the very same `organs.onnx` the GUI uses.
+> The reconstruction experiments directly `import recon`, the workstation's numerical module. Every studied solver, ASD-POCS included, is exposed through the GUI's reconstruction lab. The segmentation experiments replicate `ai_engine`'s preprocessing and sliding-window inference and run the very same `organs.onnx` the GUI uses.
 
 ## Running
 
@@ -18,7 +18,10 @@ python experiments/recon_cond.py             # Experiment C′ (SVD of C's syste
 python experiments/recon_stopping.py         # Experiment C″ (ART/SIRT iteration sweep; withdraws the "ART is best" ranking)
 python experiments/recon_floor.py            # Experiment A′ (metric floor: is the plateau dose or implementation?)
 python experiments/recon_tv.py               # Experiment C‴ (ASD-POCS/TV baseline; its advantage is monotone in SNR, and by η≈9% it trails at 60/90 views)
-python experiments/cluster_ci.py             # Case-level clustered bootstrap CIs (reads committed CSVs only)
+python experiments/cluster_ci.py             # Case-level clustered bootstrap CIs. NOT read-only: it
+                                             # OVERWRITES the committed results/cluster_ci.json. On a
+                                             # clean clone it exits non-zero by design (a local-only
+                                             # input is absent), leaving that artifact byte-identical.
 ```
 
 Outputs are written to `experiments/results/`: one PNG figure plus one CSV of raw data per experiment.
@@ -98,6 +101,40 @@ In low-dose CT, **the answer to "which algorithm/filter" changes with dose**: in
 ---
 
 # Study II: Quantitative validation of AI segmentation (`seg_validate.py`)
+
+> **Scope of the segmentation evidence, per producer and per arm.** The product's z-blocked
+> inference originally ran `for z0 in range(0, Z, DZ)`, so the tail block held only `Z % DZ` real
+> slices and was zero-padded — and after HU normalisation zero *is* air. `2a50e37` pulled that
+> window back to `[Z-DZ, Z)`. **Not every producer or arm sits on the same side of that change**,
+> so the boundary is stated per artifact rather than as one blanket sentence:
+>
+> | producer | arm / artifact | final-window handling |
+> |---|---|---|
+> | `seg_validate.py` `run_onnx` | `seg_dice`, `seg_mapping`, `seg_confusion` | pre-pullback zero-tail (its own reimplementation; pads z to a multiple of 32) |
+> | `seg_multi.py` | committed CSVs | produced by `ai_engine` **before** `2a50e37`. The script calls `ai_engine` live, so **the current source no longer step-for-step reproduces the committed artifact** — re-running it today would invoke the current engine. Not re-run. |
+> | `seg_spacing.py` | both the `direct` and the `engine` arm | both committed arms were produced before the fix. Re-running today would pit the old `run_onnx` against the **new** engine, so it would no longer isolate spacing. Not re-run. |
+> | `seg3d_teacher.py` `run_onnx` | teacher Dice | pre-pullback zero-tail. For this specific 32-deep path (`DZ=32`, z padded to a multiple of 32) the pullback leaves block count and tensor shape unchanged **by construction**; the recorded wall time / RSS are therefore *indicative* of the current path, not a measurement of it. |
+> | `seg3d_eval.py`, `seg3d_diag.py` — `zslab_infer` | artifacts run with `--infer zslab` | pre-pullback **and** pads z only to a multiple of **8**, so the tail tensor is genuinely smaller than a full block. Here **both accuracy and cost** belong to the old path. |
+> | `seg3d_eval.py`, `seg3d_diag.py` — `sliding_infer` | artifacts run with `--infer sliding` (the default) | boundary-anchored: the last window is appended at `Zp - pz`. Not affected by this fix in the same way. |
+> | `seg3d_infer_bias.py` | `A_product`, `C_xy_block_only`, `dice_fullplane`, `bench --config A` | pre-pullback zero-tail |
+> | `seg3d_infer_bias.py` | `B_z_overlap_only`, `D_both`, `dice_xy*`, `bench --config B` / `--config D` | boundary-anchored (`_zstream` / `_teacher_sliding` append the final start at `Z - dz`) |
+> | `seg3d_infer_bias.py` | the `zslab` columns of `ab`, `train`, `dose` (`seg3d_infer_bias_ab.csv`, `_train.csv`, `_dose.csv`) | these call `seg3d_eval.zslab_infer` directly, with no `--infer` flag. Same category as the `zslab` row above and **one step worse**: pad-to-8 means **both accuracy and cost** are old-path. (Student-model controls; never claimed as the shipped path.) |
+> | `seg3d_infer_bias.py` | the `sliding` columns of the same three artifacts | `sliding_infer`, boundary-anchored |
+> | `seg3d_infer_bias.py` | `pad`, `norm` | tensor/statistics diagnostics — not z-blocked inference measurements at all |
+>
+> What this does and does not withdraw:
+> - **Withdrawn:** for the pre-pullback rows only, the claim that those measurements are equivalent
+>   to — or validate — the path `ai_engine` ships *today*.
+> - **Not withdrawn:** the numbers. Each remains a valid measurement of the configuration recorded
+>   with it, and cross-arm comparisons *within a single table* still hold where those arms ran
+>   through the same loop.
+> - **`Z % 32 == 0` is a sufficient boundary only for the 32-deep, pad-to-32 paths** (`ai_engine`,
+>   `seg_validate.py`, `seg3d_teacher.py`, and the `A`/`C` arms of `seg3d_infer_bias.py`). It does
+>   **not** carry over to `zslab_infer`, which pads to a multiple of 8.
+>
+> Re-measuring against the current path would require re-running ONNX inference over the full
+> split. That has not been done, and no committed result file was edited.
+
 
 ## Motivation
 The 25-class label→organ mapping of `organs.onnx` was long only **inferred** (no official dataset.json). This study objectively measures segmentation quality on a ground-truth-labelled public CT, and **recovers the mapping by measurement via a confusion matrix rather than guessing it**.
@@ -311,9 +348,13 @@ every committed per-case artefact against the split, and the answer is not unifo
 | `seg3d_infer_bias_bench_A/B.csv` | 59 | **all in `test`** |
 | `seg_multi.csv`, `seg_spacing_fix_multi.csv` | 20 | 16 in `train`, 1 in `val`, 3 in `test` |
 
-The last row is **not** a leak. Those two lines measure the **third-party TotalSegmentator weights**, which
-were never trained on this dataset — the split exists for the student trained here, and does not apply to a
-model that predates it. `seg_multi.py:67` draws its 20 cases with `rng.permutation(...)[:n]` over all 297,
+The last row is **not** a split leak, but it is not an independent hold-out either. Those two lines measure
+the **third-party TotalSegmentator weights**, which predate the split defined here — that split exists for the
+student trained in this repository and cannot bind a model that came before it. What it does **not** establish
+is independence: `organs.onnx` was trained on the full TotalSegmentator dataset, of which this Lite subset is a
+part, so **overlap with these cases is likely and cannot be ruled out case by case** (the upstream release
+publishes no per-case training manifest). Read the teacher's numbers as performance on data it has probably
+seen, not as a hold-out result — the same qualification the Limitations section states. `seg_multi.py:67` draws its 20 cases with `rng.permutation(...)[:n]` over all 297,
 seeded, and it was written before the split existed.
 
 What it does mean is a comparison that must never be made: **the 0.909 from those 20 cases cannot be put
@@ -336,7 +377,7 @@ python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt --infer zslab  # f
 python experiments/seg3d_infer_bias.py all                     # line E, five controls, ~25 min
 python experiments/seg3d_infer_bias.py grid --yes               # 2x2 pilot, 3 cases (exploratory)
 python experiments/seg3d_infer_bias.py teacher --yes            # teacher window-size sweep, 3 cases
-python experiments/seg3d_infer_bias.py bench --config A --yes  # line F, shipped path, ~35 min
+python experiments/seg3d_infer_bias.py bench --config A --yes  # line F, shipped path as of the run, ~35 min
 python experiments/seg3d_infer_bias.py bench --config B --yes  # line F, +z overlap,  ~40 min
 
 # student on the held-out test split, both inference paths — see the note below on why both
@@ -403,7 +444,7 @@ The right upper lobe is both the weakest **and** the rarest (present in 31 of 57
 
 Cost is set by model FLOPs times input voxels, and is independent of how much data the model was trained on: **1.6192 µs/voxel**, fitted across four input sizes (1.363 s at 32×160², 7.638 s at 32×384² per block) with 77 ONNX nodes.
 
-**CoreML is not free acceleration on this Mac.** Switching `onnxruntime` from `CPUExecutionProvider` to `CoreMLExecutionProvider` measures **5.682 s/block against 5.237 s/block — 8.5 % slower**, not faster. The negative result is kept in the artefacts deliberately: "try CoreML on Apple silicon" is the obvious first idea, and the obvious first idea costs an afternoon to re-discover.
+**CoreML is not free acceleration on this Mac.** Switching `onnxruntime` from `CPUExecutionProvider` to `CoreMLExecutionProvider` measured **5.682 s/block against 5.237 s/block — 8.5 % slower** on that machine, on that one run. The archived CSV keeps only the n=3 means with no dispersion, so this is a **historical point estimate**: it does not establish that the gap exceeds run-to-run variation, only that CoreML was not faster there. The negative result is kept in the artefacts deliberately: "try CoreML on Apple silicon" is the obvious first idea, and the obvious first idea costs an afternoon to re-discover.
 
 ### C — The student learns "lung", and never learns "which lobe"
 
@@ -505,8 +546,12 @@ This experiment is **not** a replication of the student's input-size collapse. I
 
 The test split holds 61 cases; **`s0099` and `s0340` contain none of the 24 organs in scope** and therefore produce no rows, leaving 59 evaluable and paired.
 
-- **A** = shipped behaviour. Reproduces the published teacher baseline exactly: **0.8867** [0.8587, 0.9139] over 234 lobe instances, −0.0000 against line A. The re-implementation is unbiased.
-- **B** = one change only: 25 % z-overlap with logit accumulation instead of per-block `argmax`.
+- **A** = the **then-shipped** behaviour (pre-`2a50e37`: zero-padded tail, no overlap, per-block
+  `argmax`). It is *not* the path `ai_engine` ships today. Reproduces the published teacher baseline exactly: **0.8867** [0.8587, 0.9139] over 234 lobe instances, −0.0000 against line A. The re-implementation is unbiased.
+- **B** = 25 % z-overlap with logit accumulation instead of per-block `argmax`, **and** a
+  boundary-anchored final window (`_zstream` appends the last start at `Z - dz`).
+
+> **What this A/B does and does not isolate.** Historical A/B compares pre-`2a50e37` zero-padded, no-overlap, per-block-argmax A with boundary-anchored, 25%-overlap, logit-fusion B. The recorded `+0.0133` and `1.18×` describe these combined arms; they do not isolate overlap alone and are not the incremental effect or cost of adding overlap to the current shipped path. The `+0.65 GB` figure remains unarchived.
 
 | paired, test split | n | A | B | B − A |
 |---|---|---|---|---|
@@ -518,11 +563,11 @@ lung lobe, so the lobe row is 57 cases, not 59. The header previously said 59 fo
 
 **54 of 59 cases improve.** The five largest per-organ gains are `lung_upper_lobe_left` +0.048 (n=52), `lung_middle_lobe_right` +0.026 (n=48), `thyroid_gland` +0.025 (n=19), `adrenal_gland_left` +0.024 (n=48) and `gallbladder` +0.024 (n=41). **Two** organs lose, not one: `lung_upper_lobe_right` −0.028 (n=31) and `kidney_cyst_right` −0.040, the latter present in a single case. An earlier version of this paragraph named gains ranked 1st, 5th and 6th as "largest" and called the right-upper-lobe loss "the only loss"; both were recomputed from `seg3d_infer_bias_bench_A/B.csv` and corrected. On lung lobes alone the interval **crosses zero** — not significant.
 
-Cost: **1.18×** wall-clock, peak memory **8.44 → 9.09 GB** (+0.65 GB). For context, raising the block height to `DZ=64` was rejected earlier at 14.3 GB.
+Cost: **1.18×** wall-clock, peak memory **8.44 → 9.09 GB** (+0.65 GB, **measured-but-unarchived** — see the note below). For context, raising the block height to `DZ=64` was rejected earlier at 14.3 GB.
 
 > **Where each of those two numbers can be checked.** The 1.18× is recomputable from the committed per-case artefacts (`seg3d_infer_bias_bench_A.csv` / `_B.csv` carry a `sec` column). The two memory figures are **not** — at the time of the run the peak was only printed to the terminal, never written to a file, so nothing in `results/` backs them up. `bench` now appends `config, split, n_cases, peak_gb` to `seg3d_infer_bias_bench_peak.csv`, but **the committed run predates that change and was not re-run** — re-running would overwrite evidence cited above. Treat 8.44 / 9.09 as measured-but-unarchived until a future run regenerates them. Each figure is still a whole-process `ru_maxrss` from a run of exactly one configuration, which is the only way that counter means anything. The next authorised `seg3d_infer_bias.py bench` run also emits an append-only timestamped JSON sidecar with the machine, exact configuration, whole-run wall time, process-lifetime peak memory, Git commit, dependency versions, and SHA-256 for both the ONNX graph and external weight blob. `seg3d_bench.py` uses the same contract. This code-path contract is tested with temporary fake weights; it is **not** evidence that a new real benchmark has already run.
 
-A 2×2 grid separating the two factors (in-plane size × z-blocking) on three cases had suggested z-overlap was worth up to **+0.205**. Over the full split it is worth **+0.013**. That three-case figure was an outlier, and stating it here is the point: the honest version of this line is "a cheap marginal improvement", not "a defect costing 20 % accuracy". The full-split measurement exists to stop the outlier from becoming the headline.
+A 2×2 grid separating the two factors (in-plane size × z-blocking) on three cases had suggested up to **+0.205** for the z-blocking factor. Over the full split the corresponding historical A/B records **+0.013** — a combined arm difference, not overlap in isolation. That three-case figure was an outlier, and stating it here is the point: the honest version of this line is "a cheap marginal improvement", not "a defect costing 20 % accuracy". The full-split measurement exists to stop the outlier from becoming the headline.
 
 The student and the teacher respond differently in the measured controls: the student, trained without augmentation on fixed 128² patches, collapses when the tensor grows. The teacher, trained with nnU-Net's scaling augmentation, is much less sensitive to that in-plane-size change. A separate teacher A/B measures a small gain from z overlap, but these controls do not decompose all remaining teacher error or prove that seams are its exclusive source.
 
@@ -543,9 +588,13 @@ and the student `zslab` and `sliding` paths. The table covers all 57 test cases 
 > **The intervals above resample lobe instances, not cases.** `bootstrap_ci` and
 > `paired_test` treat the five lobes of one case as five independent draws, but lobes
 > within a case share a scan, a patient and an inference pass — they are clustered. A
-> case-level cluster bootstrap (5,000 reps, seed 0) widens the student intervals by up to
-> ~1.5×: student `zslab` becomes [0.3734, 0.4990] and the paired difference
-> [−0.5079, −0.3927]; the teacher's own interval barely moves ([0.8569, 0.9135]). By the
+> case-level cluster bootstrap (`cluster_ci.py`, **2,000 reps**, seed 0) widens the student
+> intervals by up to ~1.5×: student `zslab` becomes **[0.3732, 0.4992]** and the teacher's own
+> interval barely moves (**[0.855, 0.9139]**). Both are read straight from the committed
+> [`cluster_ci.json`](results/cluster_ci.json). *Earlier revisions quoted a 5,000-rep run
+> ([0.3734, 0.4990] / [0.8569, 0.9135]) plus a paired difference [−0.5079, −0.3927]; no committed
+> script reproduces those — `cluster_ci.py` has only ever used `n_boot=2000` and computes no
+> paired difference. Withdrawn in favour of the artifact.* By the
 > same argument the Wilcoxon at `seg3d_report.py` treats 234 clustered pairs as
 > independent, so **`p = 3.7×10⁻³⁹` is quoted to a precision the design does not support**
 > — the effective n is nearer 57. **No conclusion changes**: the paired interval stays far
@@ -593,4 +642,4 @@ be read as an improvement.)*
 - **Scanner diversity exists in the source but is unmeasurable here.** The images are clinical-routine CT from University Hospital Basel, and the upstream dataset documents its collection as spanning many scanners, sequences and institutions (Zenodo record 10047292, TotalSegmentator v2.0.1, CC-BY-4.0). But the Lite derivative ships no per-case acquisition metadata, and the NIfTI headers carry none either — `descrip` and `aux_file` are empty, the DICOM vendor tags having been dropped at conversion. So **nothing here is stratified by device**. On top of that, all 297 volumes are resampled to exactly (1.5, 1.5, 1.5) mm — read from the headers, not assumed — which erases acquisition geometry. Cross-scanner and cross-protocol behaviour is therefore **unmeasured, not excluded**; claiming either direction would be unsupported.
 
 ## Study IV — one-sentence summary
-The shipped 31.2 M-parameter teacher segments five lung lobes at Dice **0.8867** [0.859, 0.914] for 1.62 µs/voxel — a cost **CoreML makes 8.5% worse rather than better** — while the 0.35 M student exposes a model–inference-path interaction: 28× more training reaches 0.490 on `zslab`, and training-size sliding reaches **0.746** with the same weights; pure zero-padding alone removes 99.3% of foreground. The evidence points to tensor extent / padding × `InstanceNorm3d` × fixed-size/no-augmentation training, but normalization replacement was not tested and the cause is not unique. Separately, the product-teacher z-seam A/B yields **+0.013 all-organ Dice over 59 evaluable test cases** for 1.18× time and +0.65 GB, not the +0.205 suggested by three cases. The test split was not used for training or validation-stage selection, but it was subsequently evaluated through teacher baseline, product A/B, and both student paths. On the matched `zslab` path, the student remains **0.4500 below** the teacher [−0.4877, −0.4118].
+The shipped 31.2 M-parameter teacher segments five lung lobes at Dice **0.8867** [0.859, 0.914] for 1.62 µs/voxel — a cost **CoreML makes 8.5% worse rather than better** — while the 0.35 M student exposes a model–inference-path interaction: 28× more training reaches 0.490 on `zslab`, and training-size sliding reaches **0.746** with the same weights; pure zero-padding alone removes 99.3% of foreground. The evidence points to tensor extent / padding × `InstanceNorm3d` × fixed-size/no-augmentation training, but normalization replacement was not tested and the cause is not unique. Separately, the product-teacher z-seam historical A/B (combined arms, not overlap alone; its +0.65 GB unarchived) records **+0.013 all-organ Dice over 59 evaluable test cases** for 1.18× time and +0.65 GB, not the +0.205 suggested by three cases. The test split was not used for training or validation-stage selection, but it was subsequently evaluated through teacher baseline, product A/B, and both student paths. On the matched `zslab` path, the student remains **0.4500 below** the teacher [−0.4877, −0.4118].

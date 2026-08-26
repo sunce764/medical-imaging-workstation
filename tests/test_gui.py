@@ -1994,6 +1994,560 @@ def test_recon_iter_options_contract():
           "ASD-POCS 与 ART 的档位不同（相同即说明绑定被改回了通用表）")
 
 
+def test_compare_registration_label_truth():
+    """配准状态标注必须由「实际是否采用」决定，不是由 checkbox 决定。
+
+    由来：registration.register_rigid 内置安全阀——NCC 不升时 applied=False，此时
+    prior 仍是**未配准**的原图。而统计文字此前只看 chk_register.isChecked()，于是
+    标题写「配准未采用」、同一行的统计却写「已刚性配准，无形变校正」，两句直接矛盾，
+    且后者会让读者以为差值中的体位差已被校正。判据改为调用方传入的真实采用状态。
+    """
+    print("[对比定量：配准状态如实标注]")
+    import unittest.mock as _mock
+
+    import numpy as _np
+    from PySide6.QtWidgets import QCheckBox, QLabel, QSlider
+
+    import compare_lab
+    import registration as _reg
+
+    # 【驱动真实 caller，不直调 helper】把 _compare_stat_text 单独拿出来传参，只能证明
+    # 「这个 helper 会照传入的布尔值写字」——而缺陷恰恰在**谁来算这个布尔值**：
+    # _render_compare 早先给标题算 rtag 用的是 r['applied']，给统计算却用 checkbox，
+    # 两条口径分叉。故此处执行真实的 _render_compare，捕获它写出的标题，再核对同一
+    # 行里的 rtag 与统计段是否指向同一个采用状态。
+    class _Fake(compare_lab.CompareMixin):
+        is_english = False
+        anonymize = True                 # 跳过 StudyDate 拼接，避免依赖真实数据集
+
+        def __init__(self):
+            self.chk_register = QCheckBox(); self.chk_register.setChecked(True)
+            self.slider_ww = QSlider(); self.slider_ww.setRange(1, 4000); self.slider_ww.setValue(1500)
+            self.slider_wl = QSlider(); self.slider_wl.setRange(-1000, 1000); self.slider_wl.setValue(-600)
+            self.lbl_ww = QLabel(); self.lbl_wl = QLabel()
+            self.views = {}              # 空视图字典：V3/V4 分支自然跳过
+            self.compare_datasets = []
+            self._primary_zpos = self._compare_zpos = None   # 走索引比例分支
+            self.current_3d_pos = [0, 0, 0]
+            self.titles = {}
+
+        def set_view_title(self, vid, text):
+            self.titles[vid] = text
+
+        def _show_windowed(self, vid, hu2d, ww, wl):
+            pass                          # 渲染不在本测试范围内
+
+    rs = _np.random.RandomState(0)
+    cur = rs.rand(4, 24, 24).astype(_np.float32) * 400
+
+    def _render(prior_vol, reg_result):
+        f = _Fake()
+        f.volume_hu = cur
+        f.compare_volume = prior_vol
+        if reg_result is None:            # 尺寸不同：根本不会调 register_rigid
+            f._render_compare()
+        else:
+            with _mock.patch.object(_reg, 'register_rigid', return_value=reg_result):
+                f._render_compare()
+        return f.titles[2]
+
+    # ① 勾选了，但 registration 的安全阀判定 NCC 不升 → applied=False
+    t_no = _render(cur.copy(), dict(angle_deg=0.0, shift_yx=(0, 0), ncc_before=0.9,
+                                    ncc_after=0.8, improved=False, applied=False))
+    check("配准未采用" in t_no and "仅z轴对齐" in t_no and "已刚性配准" not in t_no,
+          f"勾选但 applied=False：标题与统计同为「未采用/仅z轴对齐」（得「{t_no[-52:]}」）")
+
+    # ② 尺寸不同 → 压根没配准。此时 followup.can_compare 先一步判定不可比，统计段
+    # 走的是「Δ 不可比」分支、根本不带 scope 后缀——所以这里不能要求出现「仅z轴对齐」
+    # （那是我最初写错的断言）。真正要钉住的是：**两处都不得声称已配准**。
+    t_sz = _render(rs.rand(4, 20, 20).astype(_np.float32) * 400, None)
+    check("配准不适用" in t_sz and "已刚性配准" not in t_sz and "不可比" in t_sz,
+          f"尺寸不同：标题写「不适用」、统计写「不可比」，均不声称已配准（得「{t_sz[-52:]}」）")
+
+    # ③ 真正采用了 → 两处都必须改口
+    t_ok = _render(cur.copy(), dict(angle_deg=1.5, shift_yx=(1, -2), ncc_before=0.80,
+                                    ncc_after=0.94, improved=True, applied=True))
+    check("已刚性配准" in t_ok and "配准未采用" not in t_ok and "仅z轴对齐" not in t_ok,
+          f"applied=True：标题与统计同为「已配准」（得「{t_ok[-52:]}」）")
+
+    # ④ 同一行里绝不能出现互斥的两句——这正是当初被抓到的原始症状
+    for tag, t in (("未采用", t_no), ("尺寸不同", t_sz), ("已采用", t_ok)):
+        check(not ("已刚性配准" in t and ("配准未采用" in t or "配准不适用" in t)),
+              f"{tag} 情形下标题内无自相矛盾的配准口径")
+
+
+def test_3d_track_failure_is_visible():
+    """3D 追踪的三条失败路径都必须给反馈，且一律不改动既有蒙版。
+
+    由来：原实现整段包在 try/except: pass 里，空 ROI、连通域计算异常、以及「ROI 内
+    没有前景标签」三种结果全都表现为「点了没反应」，用户无法区分「没找到结构」与
+    「算失败了」。同时 graphics_view 的 ROI 门只校验宽度，水平一拖就能造出 40×0 的框。
+    """
+    print("[3D 追踪：失败可区分且不改蒙版]")
+    import unittest.mock as _mock
+
+    import numpy as _np
+    from PySide6.QtCore import QRectF
+    from PySide6.QtWidgets import QMessageBox, QWidget
+
+    import annotation_lab as _al
+    from constants import AXIAL as _AX
+
+    class _Fake(QWidget, _al.AnnotationMixin):
+        is_english = False
+        recon_mode_active = False
+        compare_mode_active = False
+        hu_calibrated = True
+        canonical_orientation = True
+        inplane_spacing_valid = True
+        uniform_z_geometry_valid = True
+
+        def __init__(self):
+            super().__init__()
+            self.volume_hu = _np.random.RandomState(0).rand(6, 24, 24).astype(_np.float32) * 400
+            self.volume_mask = _np.zeros((6, 24, 24), _np.uint8)
+            self.volume_mask[0, 0, 0] = 7          # 既有 AI 器官标签，失败路径不得动它
+            self.volume_conf = None
+            self.current_3d_pos = [3, 12, 12]
+            self.views = {0: {'plane': _AX}}
+            self.undo_n = 0
+
+        def _push_volume_undo(self):
+            self.undo_n += 1
+
+        def _update_organ_stats(self):
+            pass
+
+        def update_display(self):
+            pass
+
+    shown = []
+    with _mock.patch.object(QMessageBox, 'warning', lambda *a, **k: shown.append(a)):
+        # ① 计算抛异常
+        f = _Fake(); before = f.volume_mask.copy()
+        with _mock.patch.object(_al.ndimage, 'label', side_effect=RuntimeError("boom")):
+            f.handle_3d_track_requested(0, QRectF(3, 3, 16, 16))
+        check(bool(shown), "计算异常时弹出警告，不再静默吞掉")
+        check(_np.array_equal(before, f.volume_mask) and f.undo_n == 0,
+              f"异常路径不改动蒙版、不压 undo（undo_n={f.undo_n}）")
+        # ② ROI 内没有连通结构
+        shown.clear()
+        g = _Fake(); before_g = g.volume_mask.copy()
+        with _mock.patch.object(_al.ndimage, 'label',
+                                return_value=(_np.zeros((6, 24, 24), int), 0)):
+            g.handle_3d_track_requested(0, QRectF(3, 3, 16, 16))
+        check(bool(shown), "未找到连通结构时给出明确反馈（区别于「算失败了」）")
+        check(_np.array_equal(before_g, g.volume_mask) and g.undo_n == 0,
+              "未找到结构时同样不改动蒙版、不压 undo")
+        # ③ 空 ROI（宽或高为 0）
+        shown.clear()
+        h = _Fake()
+        h.handle_3d_track_requested(0, QRectF(5, 5, 0, 0))
+        check(bool(shown), "空 ROI 给出明确反馈")
+    # ④ 上游的 ROI 门：用**真实 Qt press→move→release** 打，不读源码正则。
+    # 早先这里是拿 graphics_view.py 的源文本套 `if r.width() > N and r.height() > N:`。
+    # 那只能证明仓库里有这么一行字符串，证明不了拖出来的框真的被拦住：把条件写成
+    # `or`、把 emit 移到判断之外、或者换一个等价写法，正则照样命中。故改为造真事件。
+    from PySide6.QtCore import QEvent as _QEvent
+    from PySide6.QtCore import QPointF as _QPointF
+    from PySide6.QtGui import QMouseEvent as _QMouseEvent
+    from PySide6.QtGui import QPixmap as _QPixmap
+
+    from constants import TOOL_AI_TRACK as _TRACK
+    from graphics_view import MedicalGraphicsView as _GV
+    gv = _GV(1)
+    _pm = _QPixmap(256, 256); _pm.fill(Qt.black)
+    gv.set_image(_pm); gv.resize(300, 300); gv.show()
+    _app_ = QApplication.instance(); _app_.processEvents()
+
+    def _drag_track(x0, y0, x1, y1, steps=3):
+        """按住 → 拖 → 松开，返回这一次拖拽发出的 track_requested 次数。"""
+        gv.current_tool = _TRACK
+        got = []
+        slot = (lambda r: got.append(r))
+        gv.track_requested.connect(slot)
+        try:
+            gv.mousePressEvent(_QMouseEvent(_QEvent.MouseButtonPress, _QPointF(x0, y0),
+                                            Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+            for i in range(1, steps + 1):
+                gv.mouseMoveEvent(_QMouseEvent(_QEvent.MouseMove,
+                                               _QPointF(x0 + (x1 - x0) * i / steps,
+                                                        y0 + (y1 - y0) * i / steps),
+                                               Qt.NoButton, Qt.LeftButton, Qt.NoModifier))
+            gv.mouseReleaseEvent(_QMouseEvent(_QEvent.MouseButtonRelease, _QPointF(x1, y1),
+                                              Qt.LeftButton, Qt.NoButton, Qt.NoModifier))
+            _app_.processEvents()
+        finally:
+            gv.track_requested.disconnect(slot)
+        return got
+
+    n_flat_h = len(_drag_track(110, 110, 190, 110))     # 纯水平：高 = 0，正是 40×0 那个形状
+    check(n_flat_h == 0, f"水平扁平框（高 0）不发 track_requested（得 {n_flat_h} 次）")
+    n_flat_w = len(_drag_track(110, 110, 110, 190))     # 纯垂直：宽 = 0
+    check(n_flat_w == 0, f"垂直扁平框（宽 0）不发 track_requested（得 {n_flat_w} 次）")
+    n_tiny = len(_drag_track(110, 110, 113, 113))       # 误触级小框
+    check(n_tiny == 0, f"误触级小框不发 track_requested（得 {n_tiny} 次）")
+    got_ok = _drag_track(110, 110, 175, 165)            # 正常框选
+    check(len(got_ok) == 1, f"正常框选只发一次 track_requested（得 {len(got_ok)} 次）")
+    if got_ok:
+        r_ok = got_ok[0]
+        check(r_ok.width() > 5 and r_ok.height() > 5,
+              f"发出的矩形宽高都非退化（{r_ok.width():.0f}×{r_ok.height():.0f}）")
+    gv.close(); _app_.processEvents()
+
+
+def test_cluster_ci_artifact_safety():
+    """cluster_ci.py 覆写已提交产物前的 fail-closed 与原子写契约。
+
+    由来：该脚本会**覆写** `results/cluster_ci.json`（一份已提交证据）。实测在旧实现
+    上有两个真实缺口：
+      ① `except (OSError, ValueError): prev_keys = set()` —— 既有文件损坏时被当成
+         「没有既有文件」，于是防缩小的闸门恰在最该生效的时刻整个关闭。实测干净
+         clone + 半截 JSON → **exit 0，4 键被静默覆写成 3 键**。
+      ② `open(dest, "w")` 先截断后写，写到一半失败就把已提交产物留成 0 字节。
+    两条都不是理论风险：照 README 复现的人就会踩上。
+
+    本测试全程在临时目录里跑（monkeypatch `cluster_ci.RESULTS`），
+    **绝不触碰 tracked 的 `experiments/results/`**。
+    """
+    print("[cluster_ci：覆写已提交产物的 fail-closed 与原子写]")
+    import json as _json
+    import shutil as _shutil
+    import tempfile as _tf
+    import unittest.mock as _mock
+    sys.path.insert(0, os.path.join(_ROOT, "experiments"))
+    import cluster_ci as _cc
+
+    CSV = "case,label,dice\nA,1,0.90\nA,2,0.80\nB,1,0.85\nB,2,0.95\nC,1,0.7\nC,2,0.75\n"
+    required = [n for n, lo in _cc.TARGETS if not lo]
+    local = [n for n, lo in _cc.TARGETS if lo]
+    made = []
+
+    def _env(dest_obj="full", omit=()):
+        """造一个隔离的 RESULTS 目录；dest_obj 决定既有产物长什么样。"""
+        d = _tf.mkdtemp(prefix="cci-test-"); made.append(d)
+        for n, _lo in _cc.TARGETS:
+            if n not in omit:
+                with open(os.path.join(d, n), "w", encoding="utf-8") as f:
+                    f.write(CSV)
+        dest = os.path.join(d, "cluster_ci.json")
+        if dest_obj == "full":
+            with open(dest, "w", encoding="utf-8") as f:
+                _json.dump({n: {"mean": 1} for n, _ in _cc.TARGETS}, f)
+        elif dest_obj is not None:
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write(dest_obj)
+        return d, dest
+
+    def _run(d):
+        """在隔离目录里跑一次 main()，返回退出码（0 = 成功）。
+
+        吞掉 main() 的表格输出：本测试要跑八轮，照原样打会给套件塞进四十来行噪声，
+        把真正的 PASS/FAIL 行淹掉。
+        """
+        import contextlib as _ctx
+        import io as _io
+        with _mock.patch.object(_cc, "RESULTS", d), _ctx.redirect_stdout(_io.StringIO()):
+            try:
+                _cc.main(); return 0
+            except SystemExit as e:
+                return e.code if isinstance(e.code, int) else 1
+            except BaseException:
+                return 1
+
+    def _bytes_kept(label, dest_obj, omit=(), inject=None):
+        """跑一次并断言：非零退出 + 目标逐字节未变 + 无残留临时文件。"""
+        d, dest = _env(dest_obj, omit)
+        b0 = open(dest, "rb").read(); before = set(os.listdir(d))
+        if inject is None:
+            rc = _run(d)
+        else:
+            with _mock.patch.object(_cc.json, "dump", side_effect=inject):
+                rc = _run(d)
+        b1 = open(dest, "rb").read()
+        left = sorted(set(os.listdir(d)) - before)
+        check(rc != 0 or inject is not None, f"{label}：非零退出（得 rc={rc}）")
+        check(b1 == b0, f"{label}：目标逐字节未变（{len(b0)}B → {len(b1)}B）")
+        check(not left, f"{label}：无残留临时文件（得 {left}）")
+
+    try:
+        # ① 既有目标损坏/不可解析 —— 旧实现在这里 exit 0 并缩小键集
+        _bytes_kept("既有目标为半截 JSON", '{"a": ', omit=local)
+        # ② 合法 JSON 但 schema 不对（顶层不是 {产物名: {指标}}）
+        _bytes_kept("既有目标 schema 异常（list）", "[1, 2, 3]", omit=local)
+        _bytes_kept("既有目标 schema 异常（bare string）", '"seg3d_teacher_dice.csv"', omit=local)
+        # ③ 必需输入缺失
+        _bytes_kept("必需输入缺失", "full", omit=[required[0]])
+        # ④ 输入键集缺失 / 缩小（缺列、无有效行）—— 旧实现是 KeyError / ValueError 裸抛
+        d, dest = _env(omit=local)
+        with open(os.path.join(d, required[0]), "w", encoding="utf-8") as f:
+            f.write("case,label\nA,1\nB,2\n")
+        b0 = open(dest, "rb").read(); rc = _run(d)
+        check(rc != 0 and open(dest, "rb").read() == b0,
+              f"输入 CSV 缺 dice 列：非零退出且目标未变（rc={rc}）")
+        d, dest = _env(omit=local)
+        with open(os.path.join(d, required[0]), "w", encoding="utf-8") as f:
+            f.write("case,label,dice\nA,1,nan\nB,2,x\n")
+        b0 = open(dest, "rb").read(); rc = _run(d)
+        check(rc != 0 and open(dest, "rb").read() == b0,
+              f"输入无任何有效有限行：非零退出且目标未变（rc={rc}）")
+        # ⑤ 注入写入失败：目标不得被截断，临时文件不得残留。
+        # 【既有产物只放必需键】若照 ⑥ 那样放满 4 键而输入缺 local_only 那条，防缩小
+        # 的闸门会**先一步**退出，写盘根本走不到——那样这条断言就变成「因为没写所以
+        # 没坏」，绿得毫无意义。实测确曾如此：会话起点版本在这条上假绿，
+        # 而同样的注入在能真正走到写盘时把 147B 的目标截成 0B。
+        d, dest = _env(dest_obj=None, omit=local)
+        with open(dest, "w", encoding="utf-8") as f:
+            _json.dump({n: {"mean": 1} for n in required}, f)
+        b0 = open(dest, "rb").read(); before = set(os.listdir(d))
+        reached = {"n": 0}
+        def _boom(*a, _r=reached, **k):
+            _r["n"] += 1
+            raise OSError("disk full")
+        with _mock.patch.object(_cc.json, "dump", _boom):
+            rc = _run(d)
+        b1 = open(dest, "rb").read()
+        left = sorted(set(os.listdir(d)) - before)
+        check(reached["n"] >= 1, f"注入确实命中了写盘调用（得 {reached['n']} 次；0 次说明这条没测到东西）")
+        check(rc != 0, f"写入中途失败：非零退出（得 rc={rc}）")
+        check(b1 == b0, f"写入中途失败：目标逐字节未变（{len(b0)}B → {len(b1)}B）")
+        check(not left, f"写入中途失败：无残留临时文件（得 {left}）")
+        # ⑥ 成功路径必须是「同目录临时文件 → fsync → os.replace」
+        d, dest = _env(omit=local)
+        with open(dest, "w", encoding="utf-8") as f:
+            _json.dump({n: {"mean": 1} for n in required}, f)   # 键集不缩小
+        seen = {"replace": [], "fsync": 0}
+        _rr, _rf = os.replace, os.fsync
+        def _spy_replace(a, b, _r=_rr, _s=seen): _s["replace"].append((a, b)); return _r(a, b)
+        def _spy_fsync(fd, _f=_rf, _s=seen): _s["fsync"] += 1; return _f(fd)
+        with _mock.patch.object(_cc.os, "replace", _spy_replace), \
+             _mock.patch.object(_cc.os, "fsync", _spy_fsync):
+            rc = _run(d)
+        check(rc == 0, f"成功路径退出码 0（得 {rc}）")
+        check(len(seen["replace"]) == 1, f"用 os.replace 原子替换（得 {len(seen['replace'])} 次）")
+        if seen["replace"]:
+            _tmp, _tgt = seen["replace"][0]
+            check(os.path.dirname(os.path.abspath(_tmp)) == os.path.dirname(os.path.abspath(_tgt)),
+                  "临时文件与目标同目录（跨卷 os.replace 会抛 OSError）")
+        check(seen["fsync"] >= 1, f"落盘前 fsync（得 {seen['fsync']} 次）")
+        # ⑦ 【防缩小闸门本身】既有 4 键产物 + 必需输入齐全 + local_only 输入缺失。
+        # 这是整个改动存在的理由，却曾**一条都没测到**：①②③ 里 dest 虽是 4 键，但
+        # 要么文件已损坏、要么必需输入缺失，`_prev_keys` 或必需输入检查先一步退出；
+        # ⑤⑥ 又特意把 dest 缩到 3 键好让写盘可达。实测把 `if prev_keys is not None:`
+        # 改成 `if False:`，套件仍 24/24 全绿——闸门删掉都测不出来。
+        d, dest = _env(dest_obj="full", omit=local)      # 4 键在，缺的正是 local_only 那条
+        b0 = open(dest, "rb").read()
+        before = set(os.listdir(d))
+        rc = _run(d)
+        b1 = open(dest, "rb").read()
+        left = sorted(set(os.listdir(d)) - before)
+        prev4 = set(_json.loads(b0.decode("utf-8")))
+        check(len(prev4) == len(_cc.TARGETS),
+              f"前置条件：既有产物确有全部 {len(_cc.TARGETS)} 个键（得 {len(prev4)}）")
+        check(rc != 0, f"防缩小闸门：拒绝把 4 键覆写成 3 键，非零退出（得 rc={rc}）")
+        check(b1 == b0, f"防缩小闸门：目标逐字节未变（{len(b0)}B → {len(b1)}B）")
+        check(not left, f"防缩小闸门：无残留临时文件（得 {left}）")
+
+        # ⑧ 完整合法输入正常成功，四个键齐全
+        d, dest = _env()
+        rc = _run(d)
+        got = _json.load(open(dest, encoding="utf-8"))
+        check(rc == 0 and set(got) == {n for n, _ in _cc.TARGETS},
+              f"完整输入正常写出全部 {len(_cc.TARGETS)} 个键（rc={rc}，得 {len(got)} 键）")
+    finally:
+        for d in made:
+            _shutil.rmtree(d, ignore_errors=True)
+    # 本测试自始至终没碰 tracked 产物——这条断言把该性质本身钉住
+    check(all(not str(d).startswith(os.path.join(_ROOT, "experiments", "results"))
+              for d in made), "全程在临时目录内，未触碰 tracked experiments/results/")
+
+
+def test_public_wording_gate():
+    """公开口径的语义门：按**语义类别**扫，不按固定句子。
+
+    由来：本仓库的撤回守卫已被同义改写绕开三次——`(ART) is the most robust`（右括号）、
+    `ART is **the** cleanest`（冠词）、`best **method** (ART)`（中缀名词）。每次修法都是
+    往黑名单里再加一条精确短语，于是下一次改写照样绕开。本断言改为按类别成对匹配：
+    「主体词 + 断言词」在同一行内同时出现即命中，中间隔什么都无所谓；再由「限定词」放行。
+    这样同义改写不再是逃逸口，而是必须显式带上限定。
+
+    覆盖五类当前最容易回潮的公开口径：
+      ① 已撤回的 ART/SIRT 排名；
+      ② 分割实验与当前 shipped path 的等价主张（末窗回移后已不成立）；
+      ③ 把「≈180 视角后收益递减」读成剂量结论；
+      ④ 把 +0.0133 / 1.18× 写成「重叠这一个变量的单独增益」——那次 A/B 的 A 与 B
+         同时差在末窗处理与重叠两处，合并效应不可拆；
+      ⑤ 把历史成本数字写成「当前路径成本不变 / 已复测」——只有补 32 的那几条路径
+         在构造上块数与张量形状不变，而 zslab 补的是 8，成本同属旧 path。
+    """
+    print("[公开口径语义门]")
+    import re
+    # 【CHANGELOG 必须在内】它是公开文件，且实测确实藏着一处「the shipped teacher's
+    # …path」的现在时主张——早先版本没把它列进来，那条按构造就扫不到。
+    docs = ["README.md", "README.zh-CN.md", "docs/preprint_recon.md",
+            "docs/technical_report.md", "docs/project_report_zh.md",
+            "experiments/README.md", "docs/manual_en.md", "docs/manual_zh.md",
+            "THIRD_PARTY_NOTICES.md", "docs/spacing_contract.md", "CHANGELOG.md"]
+    texts = {}
+    for rel in docs:
+        fp = os.path.join(_ROOT, rel)
+        if os.path.exists(fp):
+            texts[rel] = open(fp, encoding="utf-8").read()
+    check(len(texts) == len(docs), f"语义门覆盖 {len(docs)} 份公开文档（实得 {len(texts)}）")
+
+    # (主体词, 断言词, 放行词) —— 主体与断言同行即命中，放行词任一出现即豁免。
+    # 放行词要够宽，否则门过严会逼人绕过它——本轮初版就因缺 `discretisation floor`
+    # 与「各自最优」型表头而误报 5 处，其中一处正是撤回句自身。误报和漏报同样有害。
+    RULES = [
+        ("ART 排名",
+         r"\bART\b|constrained iteration|受约束迭代",
+         r"most robust|最鲁棒|lowest RMSE|cleanest|最干净|best\b|最优的?方法",
+         r"withdraw|Withdraw|撤回|~~|fixed iteration|固定迭代|at (those|these) same counts|该[轮次]数下"
+         # 「ART best | SIRT best」是各自最优的对照表头，不是排名主张；
+         # 「not that either is …」是撤回句本身。
+         r"|SIRT (best|better by)|各自最优|not that either is|并非(说)?哪一个"),
+        ("分割与当前 shipped path 等价",
+         r"seg_validate|seg3d_teacher|segmentation (stud|experiment|work)|分割(研究|实验)",
+         r"step-for-step|逐步等价|equivalent to the shipped|与当前 ?shipped|validates? the .{0,20}pipeline|验证了.{0,10}管线",
+         r"pre-`?2a50e37|pre-pullback|回移(之)?前|historical|历史（?修复前|时点限定|not withdrawn|未撤回"),
+        # 【这两条刻意不枚举动词】上一版列了 is worth / measures / yields…，实测仍被
+        # improves / comes from / still hold / apply to / 保持不变 等七种改写绕开——
+        # 那是「精确短语黑名单」换了一层皮而已。改成**共现不变式**：只要那几个量值
+        # （或成本名词）与「重叠」/「当前路径」出现在同一行，就必须带上限定词，
+        # 否则命中。这样逃逸口不再是换个动词，而是必须把限定显式写出来。
+        ("重叠增益被写成单独变量",
+         r"(?i)\+0\.0133|\+0\.013\b|1\.18×|1\.184×|\+0\.65 ?GB|0\.65 ?GB|\+0\.205",
+         r"(?i)z-overlap|z ?overlap|overlap|z-seam|z seam|z ?重叠|z ?接缝|"
+         r"shipped|we ship|current (path|pipeline)|产品现状|当前(路径|管线)",
+         r"historical A/B|combined arm|combined\b|合并后|do not isolate|does not isolate|"
+         r"没有单独隔离|非重叠单独增益|unarchived|未归档|没有归档|不可复现|boundary-anchored|not overlap alone|"
+         r"不是重叠单独|then-shipped|pre-`?2a50e37|回移前|withdrawn|撤回|~~"),
+        ("历史成本被写成当前路径成本",
+         r"(?i)wall[- ]clock|peak (memory|RSS)|µs/voxel|us/voxel|耗时|峰值内存|cost figures?|成本类",
+         r"(?i)unchanged|unaffected|are not affected|still hold|remains? the same|remains? unchanged|"
+         r"apply (directly )?to|carry over|不受影响|原样有效|保持不变|同样适用|"
+         r"re-?measured (on|against) the current|已在当前路径(复测|实测)|"
+         r"current (path|pipeline)|shipped path|we ship|当前(路径|管线)",
+         r"indicative|by construction|构造上|not a measurement|不是.{0,12}实测|"
+         r"historical evidence|historical A/B|pre-`?2a50e37|回移前|multiple of 8|补到 8|~~|"
+         r"only for the 32-deep|仅就这条|只是 32 深度|withdrawn|撤回"),
+        ("180 视角=剂量够了",
+         r"180 ?views?|180 ?视角",
+         r"enough is enough|dose is sufficient|剂量(已)?足够|剂量够",
+         r"withdraw|撤回|~~|earlier revisions|metric floor|离散化地板|not (a )?dose conclusion|不是剂量结论"
+         # 「discretisation floor」是英文原词；「早期文本…后续」是记述撤回过程。
+         r"|discretisation floor|discretization floor|早期文本|earlier text|后续把"),
+    ]
+
+    def _quoted_mask(text):
+        """整篇扫一遍，标出每个字符是否落在引号 / 反引号内。
+
+        必须整篇扫而不是逐行：CHANGELOG 的撤回叙述里，被引用的原句常常跨行折行
+        （开引号在这一行、闭引号在下一行）。逐行配对时那种行会看起来「引号不成对」，
+        于是引用被当成主张，产生永久误报。
+        """
+        mask = bytearray(len(text))
+        in_d = in_b = False
+        for i, c in enumerate(text):
+            if c == '"' and not in_b:
+                in_d = not in_d
+                mask[i] = 1
+                continue
+            if c == '`' and not in_d:
+                in_b = not in_b
+                mask[i] = 1
+                continue
+            if c == '\n':
+                mask[i] = 0
+                continue
+            mask[i] = 1 if (in_d or in_b) else 0
+        return mask
+
+    def scan(txts):
+        """返回 [(rule, rel, lineno, line)]，供断言与变异自检共用。
+
+        【提及 ≠ 主张】CHANGELOG 会逐字引用被撤回的原句来叙述「它是怎么被撤回的」，
+        那是 mention 不是 use。若不区分，这类叙述会被永久误报，而误报最终会逼人
+        把门关掉——那比漏报更糟。判据：断言词落在引号 / 反引号内即视为引用。
+        """
+        out = []
+        for rel, t in txts.items():
+            mask = _quoted_mask(t)
+            starts, pos = [], 0
+            for line in t.splitlines(True):
+                starts.append(pos); pos += len(line)
+            lines = t.splitlines()
+            # 段落 = 空行分隔的块；para_of[i] 给出第 i 行所属段落的完整文本
+            para_of, buf, idxs = {}, [], []
+            for i, line in enumerate(lines + [""]):
+                if line.strip():
+                    buf.append(line); idxs.append(i)
+                else:
+                    blob = "\n".join(buf)
+                    for k in idxs:
+                        para_of[k] = blob
+                    buf, idxs = [], []
+            for name, subj, claim, excuse in RULES:
+                for i, line in enumerate(lines):
+                    if not re.search(subj, line):
+                        continue
+                    if re.search(excuse, para_of.get(i, line)):
+                        continue
+                    m = re.search(claim, line)
+                    if m is None:
+                        continue
+                    if mask[starts[i] + m.start()]:
+                        continue                      # 引用，非主张
+                    out.append((name, rel, i + 1, line.strip()))
+        return out
+
+    hits = scan(texts)
+    check(not hits,
+          f"公开口径无未加限定的回潮（违规 {len(hits)}：{[f'{h[1]}:{h[2]}' for h in hits[:4]]}）")
+
+    # 【deliberate known-bad RED】三类各注入一句**同义改写**——用词与历史违规句都不同，
+    # 若语义门仍是固定句子表，它们会全部漏网。注入只在内存副本上进行，不碰任何文件。
+    KNOWN_BAD = [
+        ("ART 排名", "Under photon noise the constrained iteration is simply the cleanest of the four."),
+        ("分割与当前 shipped path 等价", "The segmentation study validates the shipped inference pipeline as correct."),
+        ("180 视角=剂量够了", "Beyond 180 views the dose is sufficient for this task."),
+        ("重叠增益被写成单独变量",
+         "Switching on z-overlap is worth +0.0133 Dice on the path we ship."),
+        ("历史成本被写成当前路径成本",
+         "Because the block count never moves, wall-clock and peak memory are unaffected."),
+        # 下面八条全部**实测绕开过**本门的前几版（前三版分别是精确短语表、
+        # 动词枚举表、加了 measures/yields 的动词表）。它们不是从规则词表里抄下来的，
+        # 而是复审独立构造出来打穿门的原句——作为 deliberate known-bad 才有证据力。
+        ("重叠增益被写成单独变量", "Adding z-overlap yields +0.0133 Dice on the path we ship."),
+        ("重叠增益被写成单独变量", "z-overlap improves Dice by +0.0133 on the current pipeline."),
+        ("重叠增益被写成单独变量", "The +0.0133 Dice comes from z-overlap on the shipped path."),
+        ("重叠增益被写成单独变量", "开启 z 重叠可带来 +0.0133 Dice 的提升。"),
+        ("历史成本被写成当前路径成本", "The wall-clock figures still hold for the current path."),
+        ("历史成本被写成当前路径成本", "Peak memory remains the same on today's shipped path."),
+        ("历史成本被写成当前路径成本", "These cost figures apply directly to the pipeline we ship."),
+        ("历史成本被写成当前路径成本", "耗时与峰值内存保持不变。"),
+        # 裸 historical / 历史 曾是万能豁免：给违规句尾巴加一句就能整条失效。已收窄。
+        ("重叠增益被写成单独变量",
+         "z-overlap is worth +0.0133 on the shipped path (historical run)."),
+    ]
+    for rule_name, bad_line in KNOWN_BAD:
+        probe = dict(texts)
+        probe["__known_bad__"] = bad_line
+        caught = [h for h in scan(probe) if h[1] == "__known_bad__"]
+        check(any(h[0] == rule_name for h in caught),
+              f"语义门能抓到「{rule_name}」的同义改写（注入：{bad_line[:52]}…）")
+    # 反向自检：一句带了限定的同义改写必须被放行，否则门过严会逼人绕过它
+    ok_probe = dict(texts)
+    ok_probe["__ok__"] = ("The segmentation study validates the shipped inference pipeline "
+                          "as it stood pre-`2a50e37`.")
+    ok_probe["__ok2__"] = "This historical A/B records +0.0133; it does not isolate overlap alone."
+    ok_probe["__ok3__"] = ("For this 32-deep path the block count is unchanged by construction, "
+                           "so the recorded wall-clock is indicative rather than a measurement.")
+    for _k in ("__ok__", "__ok2__", "__ok3__"):
+        check(not [h for h in scan(ok_probe) if h[1] == _k],
+              f"带限定的同义改写被正确放行（门不过严）：{_k}")
+
+
 def test_recon_pipeline_helpers():
     """重建预处理/上采样纯函数直接单测——合成数组，无 Qt / 真实数据 / 系统矩阵。"""
     print("[重建预处理/上采样纯函数]")
@@ -3964,8 +4518,24 @@ def test_matrix_recon_ui(app):
         # 无源图时两个入口都必须安全退出（此前靠 volume_hu 判空，改模体后由 _prepare 统一兜底）
         vi.run_dmr(); vi.run_art_sirt(); app.processEvents()
         check(True, "无源图时 DMR / ART 安全空转，不崩")
+        # 【按钮可达性，不是方法可调用性】本测试其余部分直接调 run_dmr()/run_art_sirt()，
+        # 那绕过了 QPushButton 的 enabled 状态。实测曾出现：空载载入模体后源图完全可用、
+        # 两个按钮却仍是灰的——「无需导入数据即可使用完整重建实验室」这句公开说明在真实
+        # UI 上不成立，而直调方法的测试一路全绿。故先断言无源图时不可点，再断言模体到位
+        # 后可点，把 UI 层的门也钉住。
+        check(not vi.btn_dmr.isEnabled() and not vi.btn_art.isEnabled(),
+              "无源图时 DMR / 迭代重建按钮不可点（避免点了没反应）")
 
         vi.btn_phantom.click(); app.processEvents()      # 内置模体，不需要任何 DICOM
+        src_after_phantom, _ = vi._recon_source_slice()
+        check(src_after_phantom is not None
+              and vi.btn_dmr.isEnabled() and vi.btn_art.isEnabled(),
+              f"仅载入模体（无任何 DICOM）后按钮真实可点（dmr={vi.btn_dmr.isEnabled()}, "
+              f"art={vi.btn_art.isEnabled()}）")
+        vi.btn_phantom.click(); app.processEvents()      # 卸下模体：无源图，应重新变灰
+        check(not vi.btn_dmr.isEnabled() and not vi.btn_art.isEnabled(),
+              "卸下模体后按钮重新不可点")
+        vi.btn_phantom.click(); app.processEvents()      # 再载入，供后续用例使用
         vi.cb_matrix_size.setCurrentIndex(0)             # 取最小矩阵尺寸
         img_small, sino, theta, n = vi._prepare_small_image_and_sinogram()
         check(img_small is not None and img_small.shape == (n, n),
@@ -5337,6 +5907,10 @@ def main_run():
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
         test_asdpocs_numerics()        # ASD-POCS/TV 正则化：合成小系统，无 Qt / 真实数据
         test_recon_iter_options_contract()  # 迭代档位与方法的绑定：纯逻辑，无 Qt
+        test_cluster_ci_artifact_safety()  # 覆写已提交产物的 fail-closed / 原子写：临时目录，无 Qt
+        test_public_wording_gate()         # 公开口径语义门：纯文本，无 Qt
+        test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
+        test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
         test_sampling_density()       # 纯 recon.make_theta，无 Qt / 真实数据
@@ -5426,6 +6000,10 @@ def main_run():
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
         test_asdpocs_numerics()        # ASD-POCS/TV 正则化：合成小系统，无 Qt / 真实数据
         test_recon_iter_options_contract()  # 迭代档位与方法的绑定：纯逻辑，无 Qt
+        test_cluster_ci_artifact_safety()  # 覆写已提交产物的 fail-closed / 原子写：临时目录，无 Qt
+        test_public_wording_gate()         # 公开口径语义门：纯文本，无 Qt
+        test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
+        test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
         test_zero_grade_guards(app, m)  # 归零级守卫：合成数据，无真实数据依赖
