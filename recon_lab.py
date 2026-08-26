@@ -1,7 +1,7 @@
 # =============================================================================
 # 重建实验室 Mixin
 # 负责：CT 断层重建教学实验室的全部 UI 调度（投影生成 / BP / FBP / DFR /
-#       DMR / ART / SIRT，重建模式进出、视图刷新）。
+#       DMR / ART / SIRT / ASD-POCS，重建模式进出、视图刷新）。
 #
 # 设计：以 Mixin 形式并入 MedicalViewer（class MedicalViewer(QMainWindow,
 #       ReconLabMixin)）。这些方法通过 self 访问主窗口的 UI 控件与状态
@@ -567,10 +567,30 @@ class ReconLabMixin:
         self.lbl_time.setText(f"DMR lstsq: {t_ms:.1f} ms" if self.is_english else f"直接矩阵重建耗时: {t_ms:.1f} ms")
 
     # =========================================================================
-    # ART / SIRT 迭代重建
+    # ART / SIRT / ASD-POCS 迭代重建
     # =========================================================================
+    # 各方法的迭代档位与默认值。**别合并成一张通用表**——见 ui_builder 里的说明：
+    # ASD-POCS 每轮 = 一次 ART 扫掠 + n_grad 次 TV 最速下降，收敛慢一个量级，
+    # 用 ART 的 10/20/50 去跑它会得到比 FBP 还差的结果（实测 n=64、180 视角）。
+    ITER_OPTIONS = {
+        'ART':      (["10", "20", "50"], 1),
+        'SIRT':     (["10", "20", "50"], 1),
+        # 50 是实测第一个胜过 FBP 的档；150 约 6.1 s、300 约 12.6 s（n=64，本机）。
+        'ASD-POCS': (["50", "100", "150", "300"], 2),
+    }
+
+    def _sync_art_iter_options(self, method):
+        """把迭代次数下拉框换成当前方法适用的档位，尽量保留用户已选的值。"""
+        items, default_idx = self.ITER_OPTIONS.get(method, self.ITER_OPTIONS['ART'])
+        prev = self.cb_art_iter.currentText()
+        self.cb_art_iter.blockSignals(True)
+        self.cb_art_iter.clear()
+        self.cb_art_iter.addItems(items)
+        self.cb_art_iter.setCurrentIndex(items.index(prev) if prev in items else default_idx)
+        self.cb_art_iter.blockSignals(False)
+
     def run_art_sirt(self):
-        """ART 和 SIRT 迭代重建——通过逐步修正逼近方程组的解。
+        """ART / SIRT / ASD-POCS 迭代重建——通过逐步修正逼近方程组的解。
 
         ART（代数重建技术，Algebraic Reconstruction Technique）：
           逐射线更新，每次用一条射线的残差修正整个图像：
@@ -584,7 +604,13 @@ class ReconLabMixin:
           其中 C = diag(1/列和)，R = diag(1/行和) 是归一化矩阵。
           特点：每次迭代计算量更大（矩阵乘法），但噪声鲁棒性更好，收敛更平滑。
 
-        两种方法共同特点：
+        ASD-POCS（TV 正则化的压缩感知重建，Sidky & Pan 2008）：
+          每轮 = 一次带松弛的 ART 扫掠（投影到数据一致集与非负集）+ n_grad 次
+          全变差最速下降。相比前两者多了一个先验：真实断层图像的梯度是稀疏的。
+          特点：稀疏角/低剂量下明显优于 ART/SIRT，但收敛慢一个量级——迭代次数
+          档位因此与前两者不同（见 ITER_OPTIONS），用 ART 的轮数跑它会更差。
+
+        三种方法共同特点：
           - x = clip(x, 0) 每轮强制非负约束（HU值不存在负像素强度）
           - 支持中途取消（wasCanceled），取消后显示当前迭代的中间结果
           - 视图分配与 DMR 相同：V1=原图, V2=弦图, V3=误差, V4=重建
@@ -620,12 +646,11 @@ class ReconLabMixin:
             prog_iter.setValue(it + 1)
             QApplication.processEvents()
 
-        if method == 'ART':
-            img_recon, t_ms = recon_lib.compute_art(
-                A, p_vec, n, n_iter, cancel_check=_cancel, progress_cb=_progress)
-        else:
-            img_recon, t_ms = recon_lib.compute_sirt(
-                A, p_vec, n, n_iter, cancel_check=_cancel, progress_cb=_progress)
+        solver = {'ART': recon_lib.compute_art,
+                  'SIRT': recon_lib.compute_sirt,
+                  'ASD-POCS': recon_lib.compute_asdpocs}.get(method, recon_lib.compute_sirt)
+        img_recon, t_ms = solver(
+            A, p_vec, n, n_iter, cancel_check=_cancel, progress_cb=_progress)
 
         prog_iter.close()
         n_done = done[0]                   # 实际完成轮数；未取消时等于 n_iter

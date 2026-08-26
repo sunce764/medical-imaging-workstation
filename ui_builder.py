@@ -469,19 +469,26 @@ class UiBuilderMixin:
         h_ms.setStretch(0, 1); h_ms.setStretch(1, 2); mxlay.addLayout(h_ms)
         h_mm = QHBoxLayout()
         self.lbl_art_method = QLabel("迭代方法:"); self.lbl_art_method.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.cb_art_method = QComboBox(); self.cb_art_method.addItems(["ART", "SIRT"])
+        self.cb_art_method = QComboBox(); self.cb_art_method.addItems(["ART", "SIRT", "ASD-POCS"])
         self.cb_art_method.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         h_mm.addWidget(self.lbl_art_method); h_mm.addWidget(self.cb_art_method)
         h_mm.setStretch(0, 1); h_mm.setStretch(1, 2); mxlay.addLayout(h_mm)
         h_mi = QHBoxLayout()
         self.lbl_art_iter = QLabel("迭代次数:"); self.lbl_art_iter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self.cb_art_iter = QComboBox(); self.cb_art_iter.addItems(["10", "20", "50"])
-        self.cb_art_iter.setCurrentIndex(1); self.cb_art_iter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.cb_art_iter = QComboBox()
+        # 档位跟着方法走，不是一张通用表：ASD-POCS 每轮含一次 ART 扫掠 + 20 次 TV
+        # 最速下降，收敛比 ART/SIRT 慢一个量级。实测 n=64、180 视角、无噪：
+        # ASD-POCS 10 轮 RMSE 0.1296、20 轮 0.1125，**都比 FBP 的 0.0869 还差**，
+        # 50 轮 0.0448 才首次胜过 FBP。若沿用 10/20/50 这张表，实验室会把一个
+        # 正确实现的算法展示成"最差的那个"。填充见 _sync_art_iter_options。
+        self._sync_art_iter_options(self.cb_art_method.currentText())
+        self.cb_art_method.currentTextChanged.connect(self._sync_art_iter_options)
+        self.cb_art_iter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         h_mi.addWidget(self.lbl_art_iter); h_mi.addWidget(self.cb_art_iter)
         h_mi.setStretch(0, 1); h_mi.setStretch(1, 2); mxlay.addLayout(h_mi)
         self.btn_dmr = QPushButton("直接矩阵重建 (DMR)"); self.btn_dmr.setProperty("class", "ActionBtn")
         self.btn_dmr.setStyleSheet("background-color: #1A5276; color: white;"); self.btn_dmr.clicked.connect(self.run_dmr)
-        self.btn_art = QPushButton("ART / SIRT 迭代重建"); self.btn_art.setProperty("class", "ActionBtn")
+        self.btn_art = QPushButton("迭代重建 (ART / SIRT / ASD-POCS)"); self.btn_art.setProperty("class", "ActionBtn")
         self.btn_art.setStyleSheet("background-color: #145A32; color: white;"); self.btn_art.clicked.connect(self.run_art_sirt)
         mxlay.addWidget(self.btn_dmr); mxlay.addWidget(self.btn_art)
         self.grp_matrix.setLayout(mxlay)

@@ -14,10 +14,10 @@
 
 **3D multi-organ CT segmentation and tomographic reconstruction**, wrapped in a clinical-style DICOM workstation (PySide6/Qt6, CPU-only).
 
-- **Written from first principles** — direct Fourier reconstruction via the central-slice theorem, the analytic Shepp-Logan phantom, and the DMR / ART / SIRT iterative solvers.
+- **Written from first principles** — direct Fourier reconstruction via the central-slice theorem, the analytic Shepp-Logan phantom, and the DMR / ART / SIRT / ASD-POCS iterative solvers.
 - **Two networks trained from scratch** — a 1.9 M residual U-Net for sparse-view reconstruction, and a 0.35 M 3D U-Net for lung lobes.
 - **A shipped model that arrived with no documented origin** — its **label scheme** identified by measurement, then validated against public ground truth on 20- and 57-case samples drawn from a 297-case public dataset.
-- **Four quantitative studies, two multi-case validations, and an ablation that changed the product** — the reconstruction studies directly `import recon`, the workstation's numerical module; all studied solvers except ASD-POCS are GUI-exposed, while ASD-POCS is currently experiment/test-only. The segmentation studies replicate `ai_engine`'s pipeline step-for-step and run the very same `organs.onnx`.
+- **Four quantitative studies, two multi-case validations, and an ablation that changed the product** — the reconstruction studies directly `import recon`, the workstation's numerical module; every studied solver, ASD-POCS included, is selectable in the GUI's reconstruction lab. The segmentation studies replicate `ai_engine`'s pipeline step-for-step and run the very same `organs.onnx`.
 
 > [!WARNING]
 > **Teaching and research only.** This software is not a certified medical device and must not be used for clinical diagnosis. AI segmentation and organ measurements are automated estimates, not clinical findings.
@@ -36,7 +36,7 @@ Python 3.10 · PySide6/Qt6 · **CPU-only, no GPU** · synthetic phantoms and de-
 
 | File | What it holds | Backing artefacts |
 |---|---|---|
-| [`recon.py`](recon.py) | Direct Fourier reconstruction from the central-slice theorem (incl. the half-pixel correction for even sizes), the analytic Shepp-Logan phantom, and the DMR / ART / SIRT solvers — all written from first principles. Radon/FBP call scikit-image; the table below says which is which | [`exp_a_dose_quality.csv`](experiments/results/exp_a_dose_quality.csv), [`exp_b_filters.csv`](experiments/results/exp_b_filters.csv) |
+| [`recon.py`](recon.py) | Direct Fourier reconstruction from the central-slice theorem (incl. the half-pixel correction for even sizes), the analytic Shepp-Logan phantom, and the DMR / ART / SIRT / ASD-POCS solvers — all written from first principles (ASD-POCS follows the Sidky & Pan 2008 pseudocode). Radon/FBP call scikit-image; the table below says which is which | [`exp_a_dose_quality.csv`](experiments/results/exp_a_dose_quality.csv), [`exp_b_filters.csv`](experiments/results/exp_b_filters.csv) |
 | [`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) | Five controls on the student's tensor-extent / padding / normalisation interaction, plus a separate product-teacher z-overlap A/B and the streaming fusion needed for its paired 59-case run | [`_pad.csv`](experiments/results/seg3d_infer_bias_pad.csv), [`_norm.csv`](experiments/results/seg3d_infer_bias_norm.csv), [`_bench_A.csv`](experiments/results/seg3d_infer_bias_bench_A.csv) / [`_bench_B.csv`](experiments/results/seg3d_infer_bias_bench_B.csv) |
 | [`seg3d_train.py`](experiments/seg3d_train.py) · [`seg3d_eval.py`](experiments/seg3d_eval.py) | 3D U-Net trained from scratch: patient-level split (`SPLIT_SEED=0` → 207/29/61), paired evaluation, bootstrap CI, Wilcoxon | [`seg3d_student_*_zslab.csv`](experiments/results/seg3d_student_ch8d3_33600s_zslab.csv), [`seg3d_teacher_dice.csv`](experiments/results/seg3d_teacher_dice.csv) |
 | [`recon_dl.py`](experiments/recon_dl.py) | 1.9 M residual U-Net for sparse-view reconstruction, measured for hallucination rate and out-of-distribution transfer rather than RMSE alone | [`recon_dl_matrix.csv`](experiments/results/recon_dl_matrix.csv), [`recon_dl_hallucination.csv`](experiments/results/recon_dl_hallucination.csv), [`recon_dl_ood.csv`](experiments/results/recon_dl_ood.csv) |
@@ -130,12 +130,12 @@ Three-dimensional medical volumes make memory and I/O the binding constraint lon
 ## Engineering and testing
 
 - The original God-object is decomposed into **5 UI mixins + 10 Qt-free compute modules**; the complete 19-module packaging inventory is declared in `pyproject.toml`.
-- The **2026-08-26 pre-commit local freeze-candidate snapshot** recorded **758 PASS / 0 FAIL** for the full suite with the local RIDER series present and **667 PASS / 0 FAIL** for `SKIP_REAL_DATA=1`. These are local results, not fresh-clone, coverage, or remote-CI evidence. As of that snapshot, the latest exact-SHA remote evidence was baseline **`2e9b700`**, [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765), with **520 PASS / 0 FAIL**, **81% coverage**, **Ruff PASS**, and `event=workflow_dispatch`; that historical CI does not cover the pre-commit candidate snapshot. Any later remote result is evidence only when its `headSha` exactly matches the commit under review. Its run/headSha should be recorded outside the repository or in the delivery summary rather than creating a second documentation commit. The custom runner promotes uncaught Qt signal/slot exceptions to failures, so a printed traceback can no longer coexist with exit code 0.
+- The **2026-08-26 pre-commit local freeze-candidate snapshot** recorded **784 PASS / 0 FAIL** for the full suite with the local RIDER series present and **693 PASS / 0 FAIL** for `SKIP_REAL_DATA=1`. These are local results, not fresh-clone, coverage, or remote-CI evidence. As of that snapshot, the latest exact-SHA remote evidence was baseline **`2e9b700`**, [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765), with **520 PASS / 0 FAIL**, **81% coverage**, **Ruff PASS**, and `event=workflow_dispatch`; that historical CI does not cover the pre-commit candidate snapshot. Any later remote result is evidence only when its `headSha` exactly matches the commit under review. Its run/headSha should be recorded outside the repository or in the delivery summary rather than creating a second documentation commit. The custom runner promotes uncaught Qt signal/slot exceptions to failures, so a printed traceback can no longer coexist with exit code 0.
 - Reconstruction tests assert numerical correctness, not merely finite output; DICOM loading is defensive against malformed metadata.
 
 ```bash
-python tests/test_gui.py                     # 2026-08-26 pre-commit snapshot: 758 local full-suite checks; local RIDER present
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-26 pre-commit snapshot: 667 local data-independent checks
+python tests/test_gui.py                     # 2026-08-26 pre-commit snapshot: 784 local full-suite checks; local RIDER present
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-26 pre-commit snapshot: 693 local data-independent checks
 ruff check .                                 # lint
 coverage run tests/test_gui.py && coverage report
 ```

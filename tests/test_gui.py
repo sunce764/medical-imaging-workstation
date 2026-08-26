@@ -1941,6 +1941,47 @@ def test_asdpocs_numerics():
     R.compute_asdpocs(A, p_vec, n_s, 3, progress_cb=seen.append)
     check(seen == [0, 1, 2], f"ASD-POCS progress_cb 每轮回调一次（得 {seen}）")
 
+def test_recon_iter_options_contract():
+    """迭代档位表必须与方法下拉框同步，且不得提供已实测劣于 FBP 的轮数。
+
+    由来：把 ASD-POCS 接进重建实验室时，原下拉框只有 10/20/50 —— 那是给 ART/SIRT
+    定的。ASD-POCS 每轮含一次带松弛的 ART 扫掠 + n_grad 次 TV 最速下降，收敛慢一个
+    量级。实测（n=64、180 视角、无噪、本机）：
+
+        FBP 0.0869 | ASD-POCS 10 轮 0.1296 · 20 轮 0.1125 · 50 轮 0.0448
+                   | 100 轮 0.0091 · 150 轮 0.0025 · 300 轮 0.0002
+
+    即 10 与 20 轮**都比 FBP 还差**，50 轮才首次胜过。沿用同一张档位表，会让一个
+    实现正确的算法在教学界面里显示成"最差的那个"——而这个实验室的全部意义就是
+    让人比较算法。故把档位绑到方法上，并在此锁死。
+    """
+    print("[迭代档位表与方法的绑定]")
+    from recon_lab import ReconLabMixin
+    opts = ReconLabMixin.ITER_OPTIONS
+    # 下拉框的方法列表来自 ui_builder，档位表若漏一项，切到它会静默回退成 ART 的档位
+    import re as _re
+    src = open(os.path.join(_ROOT, "ui_builder.py"), encoding="utf-8").read()
+    m = _re.search(r"cb_art_method\.addItems\(\[([^\]]*)\]\)", src)
+    check(m is not None, "能从 ui_builder 解析出方法下拉框的条目（解析失败说明本测试的定位写错了）")
+    if m:
+        listed = _re.findall(r'"([^"]+)"', m.group(1))
+        check(len(listed) >= 3, f"方法下拉框至少 3 项（实得 {listed}）")
+        check(set(listed) == set(opts), f"档位表与下拉框逐项对应（下拉 {listed} / 表 {sorted(opts)}）")
+    for meth, (items, default_idx) in opts.items():
+        check(len(items) >= 3, f"{meth} 至少 3 个档位（实得 {items}）")
+        check(0 <= default_idx < len(items), f"{meth} 的默认索引 {default_idx} 落在档位范围内")
+        check(all(i.isdigit() and int(i) > 0 for i in items), f"{meth} 的档位全为正整数（{items}）")
+        check(items == sorted(items, key=int), f"{meth} 的档位递增（{items}）")
+    # 承重断言：ASD-POCS 不得提供实测劣于 FBP 的轮数
+    asd = [int(i) for i in opts['ASD-POCS'][0]]
+    check(min(asd) >= 50,
+          f"ASD-POCS 最低档 {min(asd)} ≥ 50（10/20 轮实测 RMSE 0.1296/0.1125 劣于 FBP 0.0869）")
+    check(int(opts['ASD-POCS'][0][opts['ASD-POCS'][1]]) >= 100,
+          "ASD-POCS 的默认档 ≥ 100（50 轮仅刚超过 FBP，不适合作为默认展示）")
+    check(asd != [int(i) for i in opts['ART'][0]],
+          "ASD-POCS 与 ART 的档位不同（相同即说明绑定被改回了通用表）")
+
+
 def test_recon_pipeline_helpers():
     """重建预处理/上采样纯函数直接单测——合成数组，无 Qt / 真实数据 / 系统矩阵。"""
     print("[重建预处理/上采样纯函数]")
@@ -3911,11 +3952,19 @@ def test_matrix_recon_ui(app):
                 pm = vi.views[vid]['view'].image_item.pixmap()
                 check(not pm.isNull(), f"V{vid} 已渲染（{pm.width()}×{pm.height()}）")
 
-            for meth in ('ART', 'SIRT'):
+            for meth in ('ART', 'SIRT', 'ASD-POCS'):
                 idx = vi.cb_art_method.findText(meth)
+                check(idx >= 0, f"方法下拉框含 {meth}")
                 if idx < 0:
                     continue
-                vi.cb_art_method.setCurrentIndex(idx)
+                vi.cb_art_method.setCurrentIndex(idx); app.processEvents()
+                # 切换方法必须同步换掉迭代档位。ASD-POCS 每轮 = 一次 ART 扫掠 +
+                # n_grad 次 TV 下降，用 ART 的 10/20 轮跑它，实测 n=64、180 视角、
+                # 无噪时 RMSE 0.1296 / 0.1125，**比 FBP 的 0.0869 还差**——沿用同一
+                # 张档位表会把一个正确实现展示成最差的那个。
+                offered = [vi.cb_art_iter.itemText(i) for i in range(vi.cb_art_iter.count())]
+                check(offered == list(vi.ITER_OPTIONS[meth][0]),
+                      f"{meth} 的迭代档位随方法切换（得 {offered}）")
                 vi.cb_art_iter.setCurrentIndex(0)
                 vi._last_recon_img = None
                 vi.run_art_sirt(); app.processEvents()
@@ -5251,6 +5300,7 @@ def main_run():
         test_geometry_fingerprint_contract()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
         test_asdpocs_numerics()        # ASD-POCS/TV 正则化：合成小系统，无 Qt / 真实数据
+        test_recon_iter_options_contract()  # 迭代档位与方法的绑定：纯逻辑，无 Qt
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
         test_sampling_density()       # 纯 recon.make_theta，无 Qt / 真实数据
@@ -5339,6 +5389,7 @@ def main_run():
         test_geometry_fingerprint_contract()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
         test_asdpocs_numerics()        # ASD-POCS/TV 正则化：合成小系统，无 Qt / 真实数据
+        test_recon_iter_options_contract()  # 迭代档位与方法的绑定：纯逻辑，无 Qt
         test_dl_recon_guard()
         test_recon_pipeline_helpers()
         test_zero_grade_guards(app, m)  # 归零级守卫：合成数据，无真实数据依赖

@@ -26,7 +26,7 @@ These tradeoffs are textbook material [4]. What is comparatively uncommon is a *
 2. **Does the best filter depend on dose?** How do five standard FBP apodisation filters rank across sparse and dense sampling?
 3. **Analytic or iterative under noise?** How do FBP, direct least-squares inversion, and the iterative solvers ART and SIRT compare under a simplified monoenergetic Beer–Lambert + Poisson photon-noise model?
 
-Our aim is pedagogical and baseline-oriented: the value is in reproducibility and clarity, not novelty. The experiments call the workstation's shipped numerical module directly. BP, FBP, DFR, DMR, ART and SIRT are exposed through the GUI; ASD-POCS is implemented in that module but currently has no GUI entry, so its measurements characterise an experiment-only solver rather than a user-exposed feature.
+Our aim is pedagogical and baseline-oriented: the value is in reproducibility and clarity, not novelty. The experiments call the workstation's shipped numerical module directly. BP, FBP, DFR, DMR, ART, SIRT and ASD-POCS are all exposed through the GUI, so every solver measured here is one a user can run. ASD-POCS carries a method-specific iteration list in that GUI: at the 10–20 sweeps that suit ART/SIRT it is measurably worse than FBP (§4.7), so offering it those values would misrepresent a correct implementation.
 
 ## 2. Background and Related Work
 
@@ -153,7 +153,7 @@ Three corrections follow.
 §4.3 compares FBP, DMR, ART and SIRT. That set omits the standard sparse-view
 baseline — total-variation (TV) regularised iterative reconstruction — so the
 "which method" question was answered inside an incomplete method set.
-`experiments/recon_tv.py` adds ASD-POCS [7] (implemented in `recon.compute_asdpocs`,
+`experiments/recon_tv.py` adds ASD-POCS [7] (implemented in `recon.compute_asdpocs` and exposed in the workstation's reconstruction lab alongside DMR/ART/SIRT, so §1's statement that the studied algorithms are the ones users can run holds for it too,
 parameters as published: α=0.2, N_grad=20, β=1.0, β_red=0.995, α_red=0.95, r_max=0.95)
 and sweeps it against the same phantom, noise realisations and system matrices used in
 §4.5, with all solvers oracle-stopped (`results/exp_c_asdpocs.csv`).

@@ -2,6 +2,37 @@
 
 This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
+## ASD-POCS reaches the GUI, and its iteration list had to differ (2026-08-26)
+
+The TV baseline added earlier lived in `recon.py` and was called only by
+`experiments/recon_tv.py` and the tests. Five documents had been amended to disclose that —
+"ASD-POCS is implemented in that module but currently has no GUI entry, so its measurements
+characterise an experiment-only solver rather than a user-exposed feature." That disclosure was
+honest, but it opened an exception in the one claim this project's reconstruction studies rest
+on: that the object under test is the code users actually run. The exception is now closed by
+wiring the solver in rather than by keeping the caveat, and all five disclosures are rewritten.
+
+**The iteration dropdown could not be reused, and measurement is why.** It offered 10 / 20 / 50,
+chosen for ART and SIRT. One ASD-POCS iteration is a relaxed ART sweep *plus* `n_grad` TV
+steepest-descent steps, so it converges an order of magnitude slower. Measured at n=64,
+180 views, noise-free, on this machine:
+
+| | FBP | 10 | 20 | 50 | 100 | 150 | 300 |
+|---|---|---|---|---|---|---|---|
+| in-circle RMSE | 0.0869 | **0.1296** | **0.1125** | 0.0448 | 0.0091 | 0.0025 | 0.0002 |
+| wall clock | — | 0.49 s | 0.93 s | 2.28 s | 4.60 s | 6.10 s | 12.59 s |
+
+At the two shortest settings a correct implementation is **worse than FBP**, and 50 is the first
+that beats it. Shipping the shared list would have made the reconstruction laboratory — whose
+entire purpose is comparing algorithms — display ASD-POCS as the worst of them. The iteration
+options are therefore bound to the method (`ReconLabMixin.ITER_OPTIONS`), ASD-POCS getting
+50 / 100 / 150 / 300 with 150 as default, and `test_recon_iter_options_contract` locks that: the
+options table must match the method dropdown parsed out of `ui_builder.py` item for item, and
+ASD-POCS's minimum may not drop below 50. Both halves matter — an entry missing from the table
+silently falls back to ART's list rather than failing.
+
+Full suite 758 → **784**, `SKIP_REAL_DATA=1` subset 667 → **693**, both exit 0, ruff clean.
+
 ## Pre-commit local contract snapshot (2026-08-26)
 
 These changes were verified in the 2026-08-26 pre-commit local freeze-candidate snapshot. As of that snapshot they had not been committed, pushed, released, or covered by remote CI.

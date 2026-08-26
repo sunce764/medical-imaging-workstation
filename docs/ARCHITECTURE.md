@@ -11,13 +11,13 @@ main.py            MedicalViewer + entry point (--data load, clinical render, W/
 —— UI layer (mixins merged into MedicalViewer) ——
 ui_builder.py      UiBuilderMixin    three-column layout and all widget construction
 interaction.py     InteractionMixin  Cine playback + MPR linkage / navigation
-recon_lab.py       ReconLabMixin     reconstruction-lab UI scheduling (projection / BP / FBP / DFR / DMR / ART / SIRT)
+recon_lab.py       ReconLabMixin     reconstruction-lab UI scheduling (projection / BP / FBP / DFR / DMR / ART / SIRT / ASD-POCS)
 compare_lab.py     CompareMixin      dual-series follow-up comparison (anatomical registration / linkage)
 annotation_lab.py  AnnotationMixin   annotation, mask editing, organ quantification, project persistence
 ai_engine.py       AutoAIEngineThread  background AI inference (sliding window + signal callbacks)
 graphics_view.py   MedicalGraphicsView  interactive image view + ROIGraphicsItem
 —— Qt-free compute modules (unit-tested without the main window) ——
-recon.py           reconstruction algorithms (Radon / BP / FBP / DFR / DMR / ART / SIRT)
+recon.py           reconstruction algorithms (Radon / BP / FBP / DFR / DMR / ART / SIRT / ASD-POCS)
 quantify.py        organ quantification (volume mL + seven HU statistics per organ)
 segmentation.py    classical fallback segmentation (lung connected-components)
 mpr_geometry.py    MPR coordinate mapping + dual-series z-registration

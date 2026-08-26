@@ -14,10 +14,10 @@
 
 **三维多器官 CT 分割与断层重建**，封装在一个临床式 DICOM 工作站里（PySide6/Qt6，CPU-only）。
 
-- **按第一性原理自行实现**——基于中心切片定理的直接傅里叶重建、解析 Shepp-Logan 模体，以及 DMR / ART / SIRT 迭代求解器。
+- **按第一性原理自行实现**——基于中心切片定理的直接傅里叶重建、解析 Shepp-Logan 模体，以及 DMR / ART / SIRT / ASD-POCS 迭代求解器。
 - **两个网络从零训练**——用于稀疏视角重建的 1.9M 残差 U-Net，与用于肺叶分割的 0.35M 3D U-Net。
 - **随软件发布的分割模型来路无任何文档**——其标签方案由本项目实测识别，并在公开真值上验证：21 器官 20 例、肺叶 57 例，抽自一个 297 例的公开数据集。
-- **四项量化研究、两项多例验证，以及一次促成产品改动的消融**——重建类研究直接 `import recon`（工作站的数值模块）；除 ASD-POCS 目前只供实验 / 测试调用、尚未接入 GUI 外，其余被测求解器均为 GUI 入口使用的函数。分割类研究逐步复现 `ai_engine` 的管线，跑的是同一个 `organs.onnx`。
+- **四项量化研究、两项多例验证，以及一次促成产品改动的消融**——重建类研究直接 `import recon`（工作站的数值模块）；被测求解器（含 ASD-POCS）全部可在 GUI 的重建实验室里选用。分割类研究逐步复现 `ai_engine` 的管线，跑的是同一个 `organs.onnx`。
 
 > [!WARNING]
 > **仅供教学与科研。** 本软件不是经认证的医疗器械，不得用于临床诊断。AI 分割和器官定量均为自动估计，不构成临床结论。
@@ -36,7 +36,7 @@ Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开
 
 | 文件 | 里面是什么 | 支撑产物 |
 |---|---|---|
-| [`recon.py`](recon.py) | 基于中心切片定理的直接傅里叶重建（含偶数尺寸的半像素修正）、解析 Shepp-Logan 模体，以及 DMR / ART / SIRT 求解器——均按第一性原理自行实现。Radon/FBP 调 scikit-image，下方表格逐项写明哪个是哪个 | [`exp_a_dose_quality.csv`](experiments/results/exp_a_dose_quality.csv)、[`exp_b_filters.csv`](experiments/results/exp_b_filters.csv) |
+| [`recon.py`](recon.py) | 基于中心切片定理的直接傅里叶重建（含偶数尺寸的半像素修正）、解析 Shepp-Logan 模体，以及 DMR / ART / SIRT / ASD-POCS 求解器——均按第一性原理自行实现（ASD-POCS 照 Sidky & Pan 2008 伪码）。Radon/FBP 调 scikit-image，下方表格逐项写明哪个是哪个 | [`exp_a_dose_quality.csv`](experiments/results/exp_a_dose_quality.csv)、[`exp_b_filters.csv`](experiments/results/exp_b_filters.csv) |
 | [`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) | 学生模型 tensor extent / padding / normalization interaction 的五条对照；以及独立的产品 teacher z-overlap A/B 和支撑 59 例配对运行的流式融合 | [`_pad.csv`](experiments/results/seg3d_infer_bias_pad.csv)、[`_norm.csv`](experiments/results/seg3d_infer_bias_norm.csv)、[`_bench_A.csv`](experiments/results/seg3d_infer_bias_bench_A.csv) / [`_bench_B.csv`](experiments/results/seg3d_infer_bias_bench_B.csv) |
 | [`seg3d_train.py`](experiments/seg3d_train.py) · [`seg3d_eval.py`](experiments/seg3d_eval.py) | 从零训练的 3D U-Net：患者级划分（`SPLIT_SEED=0` → 207/29/61）、配对评估、bootstrap CI、Wilcoxon | [`seg3d_student_*_zslab.csv`](experiments/results/seg3d_student_ch8d3_33600s_zslab.csv)、[`seg3d_teacher_dice.csv`](experiments/results/seg3d_teacher_dice.csv) |
 | [`recon_dl.py`](experiments/recon_dl.py) | 用于稀疏视角重建的 1.9M 残差 U-Net，测的不只是 RMSE，还有虚构结构率与分布外迁移 | [`recon_dl_matrix.csv`](experiments/results/recon_dl_matrix.csv)、[`recon_dl_hallucination.csv`](experiments/results/recon_dl_hallucination.csv)、[`recon_dl_ood.csv`](experiments/results/recon_dl_ood.csv) |
@@ -69,7 +69,7 @@ Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开
 |---|---|
 | **临床阅片** | classic single-frame CT；仅在 patient-space geometry 可证明时按解剖方向排序；anatomical MPR 只要求 canonical orientation、有效 in-plane spacing 与 uniform z geometry，HU preset / ROI / AI 等 intensity consumer 则独立要求有效 CT calibration；slab projection · 9 种带能力门控的测量与标注工具 · 椭圆 ROI 统计 · PACS 四角信息 · Cine 播放 · follow-up comparison 要求完整 geometry/intensity contract。Enhanced/multi-frame 与 non-CT 输入拒绝；non-canonical 或 geometry 不完整时只保留安全的 viewer 功能 |
 | **AI 分割** | 25 类后台滑窗 ONNX 推理（含 5 个肺叶）· 三平面彩色叠加与可点图例 · 光标 HUD · 器官统计与 CSV 导出 · marching cubes 三维表面预览、形状特征与 STL 导出 · 画笔/橡皮编辑和撤销 · 逐体素置信度 |
-| **重建实验室** | 内置解析 Shepp-Logan 模体 · Radon 投影 · BP / 含 5 种滤波器的 FBP / DFR · 从零实现的 DMR、ART、SIRT · 误差图与 RMSE · 学习式 CNN 后处理，并在界面展示训练视角和输入滤波器限制 |
+| **重建实验室** | 内置解析 Shepp-Logan 模体 · Radon 投影 · BP / 含 5 种滤波器的 FBP / DFR · 从零实现的 DMR、ART、SIRT、ASD-POCS（TV 正则化）· 误差图与 RMSE · 学习式 CNN 后处理，并在界面展示训练视角和输入滤波器限制 |
 | **安全与审阅** | 屏幕身份固定替换为 `ANON`；显式导出文件名使用每次加载随机 `ANON-…` 别名并以 suffix 防覆盖 · 明示 DICOM tags、内部 project/cache identifiers 与 burned-in pixel text 不会被自动匿名化 · 常驻 AI 免责声明 · 模型说明卡（实测出处及未测边界）· 中英双语界面 |
 
 ## 自己实现的，与调用库的
@@ -130,12 +130,12 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 10 个无 Qt 计算模块**；完整的 19-module packaging inventory 以 `pyproject.toml` 为准。
-- **截至 2026-08-26 记录的 pre-commit 本地 freeze-candidate snapshot**，本机全套（本地 RIDER 在场）为 **758 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **667 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`；该历史 CI 不覆盖此 pre-commit candidate snapshot。后续远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力，其 run/headSha 应记入仓库外 evidence 或交付摘要，不再制造第二个文档 commit。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
+- **截至 2026-08-26 记录的 pre-commit 本地 freeze-candidate snapshot**，本机全套（本地 RIDER 在场）为 **784 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **693 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`；该历史 CI 不覆盖此 pre-commit candidate snapshot。后续远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力，其 run/headSha 应记入仓库外 evidence 或交付摘要，不再制造第二个文档 commit。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
-python tests/test_gui.py                     # 2026-08-26 pre-commit snapshot：本机全套 758 项；本地 RIDER 在场
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-26 pre-commit snapshot：本机数据无关子集 667 项
+python tests/test_gui.py                     # 2026-08-26 pre-commit snapshot：本机全套 784 项；本地 RIDER 在场
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-26 pre-commit snapshot：本机数据无关子集 693 项
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```

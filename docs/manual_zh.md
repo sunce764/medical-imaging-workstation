@@ -15,7 +15,7 @@
 **软件简介**：本软件是一款基于 PySide6（Qt6）的桌面端 CT 医学影像工作站，面向影像教学与科研，集成三大部分——**临床阅片工具**、**AI 多器官分割**、以及**CT 断层重建教学实验室**。软件支持 DICOM 影像的加载、多平面重组（MPR）阅片、窗宽窗位调节、测量与标注、AI 自动器官分割与定量、双序列随访对比，以及从投影到重建的完整教学演示。
 **已验证运行环境**：macOS 本机（Python 3.10）；截至下述 snapshot，远端数据无关测试曾在 GitHub Actions 的 Ubuntu runner 通过。Windows 未在该 snapshot 验证，不能据此声明平台兼容性。依赖 PySide6、pydicom、NumPy、SciPy、scikit-image、ONNX Runtime。
 **开发语言**：Python。
-**软件规模**：应用代码分为 UI mixin 与无 Qt 计算模块；截至 2026-08-26 记录的 pre-commit 本地 freeze-candidate snapshot，本机全套回归为 758 PASS，`SKIP_REAL_DATA=1` 子集为 667 PASS。这些是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。
+**软件规模**：应用代码分为 UI mixin 与无 Qt 计算模块；截至 2026-08-26 记录的 pre-commit 本地 freeze-candidate snapshot，本机全套回归为 784 PASS，`SKIP_REAL_DATA=1` 子集为 693 PASS。这些是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。
 **定位声明**：本软件为**影像教学 / 科研工具**，**不是经认证的医疗器械，不得用于临床诊断**；AI 分割与定量结果为自动推断，仅供参考。
 
 ---
