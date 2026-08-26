@@ -459,7 +459,7 @@ class UiBuilderMixin:
                 f"输入须为 Ram-Lak(ramp) 滤波的 FBP —— 平滑滤波器已把细节滤掉，网络无从恢复。")
 
         # 矩阵重建分组：尺寸 / 方法 / 迭代次数 / DMR / ART 按钮
-        self.grp_matrix = QGroupBox("直接矩阵重建 && ART / SIRT")
+        self.grp_matrix = QGroupBox("直接矩阵重建 && 迭代重建")
         mxlay = QVBoxLayout(); mxlay.setSpacing(8)
         h_ms = QHBoxLayout()
         self.lbl_matrix_size = QLabel("图像尺寸:"); self.lbl_matrix_size.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -477,9 +477,11 @@ class UiBuilderMixin:
         self.lbl_art_iter = QLabel("迭代次数:"); self.lbl_art_iter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.cb_art_iter = QComboBox()
         # 档位跟着方法走，不是一张通用表：ASD-POCS 每轮含一次 ART 扫掠 + 20 次 TV
-        # 最速下降，收敛比 ART/SIRT 慢一个量级。实测 n=64、180 视角、无噪：
-        # ASD-POCS 10 轮 RMSE 0.1296、20 轮 0.1125，**都比 FBP 的 0.0869 还差**，
-        # 50 轮 0.0448 才首次胜过 FBP。若沿用 10/20/50 这张表，实验室会把一个
+        # 最速下降，收敛比 ART/SIRT 慢一个量级。按**本实验室默认路径**实测
+        # （shepp_logan(256) → prepare_small_image 到 32×32、180°×1×、无噪，
+        #  即 cb_matrix_size 与 combo_oversample 的默认档）：
+        # ASD-POCS 10 轮圆内 RMSE 0.1460、20 轮 0.1336，**都比 FBP 的 0.0995 还差**，
+        # 50 轮 0.0672 才首次胜过 FBP。若沿用 10/20/50 这张表，实验室会把一个
         # 正确实现的算法展示成"最差的那个"。填充见 _sync_art_iter_options。
         self._sync_art_iter_options(self.cb_art_method.currentText())
         self.cb_art_method.currentTextChanged.connect(self._sync_art_iter_options)

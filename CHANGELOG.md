@@ -14,13 +14,24 @@ wiring the solver in rather than by keeping the caveat, and all five disclosures
 
 **The iteration dropdown could not be reused, and measurement is why.** It offered 10 / 20 / 50,
 chosen for ART and SIRT. One ASD-POCS iteration is a relaxed ART sweep *plus* `n_grad` TV
-steepest-descent steps, so it converges an order of magnitude slower. Measured at n=64,
-180 views, noise-free, on this machine:
+steepest-descent steps, so it converges an order of magnitude slower. Measured **on the laboratory's own default
+path** — `shepp_logan(256)` through `prepare_small_image` to 32×32, 180°×1×, noise-free, i.e. the
+default entries of `cb_matrix_size` and `combo_oversample`:
 
 | | FBP | 10 | 20 | 50 | 100 | 150 | 300 |
 |---|---|---|---|---|---|---|---|
-| in-circle RMSE | 0.0869 | **0.1296** | **0.1125** | 0.0448 | 0.0091 | 0.0025 | 0.0002 |
-| wall clock | — | 0.49 s | 0.93 s | 2.28 s | 4.60 s | 6.10 s | 12.59 s |
+| in-circle RMSE | 0.0995 | **0.1460** | **0.1336** | 0.0672 | 0.0142 | 0.0034 | 0.0003 |
+
+Cost is linear in rounds: ≈8.8 ms/round at the 32×32 default (300 rounds ≈2.7 s) and ≈37 ms/round
+at 64×64. Absolute seconds vary with machine and load and are given as an order of magnitude only;
+an earlier revision of this entry printed a per-configuration wall-clock row whose implied per-round
+cost swung 13% between adjacent rows, which cannot be real.
+
+**An earlier revision of this table was measured in the wrong frame.** The numbers were taken from
+`experiments.recon_study.get_phantom` at 64×64 — the study phantom, at a size the user has to
+select — while the argument they support is about a GUI feature. The tier boundary is unchanged
+under the corrected measurement (50 is still the first tier that beats FBP, at 32×32 and at 64×64
+alike), but evidence for a claim about the shipped path has to come from that path.
 
 At the two shortest settings a correct implementation is **worse than FBP**, and 50 is the first
 that beats it. Shipping the shared list would have made the reconstruction laboratory — whose
@@ -37,6 +48,7 @@ Full suite 758 → **784**, `SKIP_REAL_DATA=1` subset 667 → **693**, both exit
 
 These changes were verified in the 2026-08-26 pre-commit local freeze-candidate snapshot. As of that snapshot they had not been committed, pushed, released, or covered by remote CI.
 
+- **Coronal and sagittal views were displayed with the head–foot axis inverted; they are now superior-at-top.** `mpr_geometry.hover_to_voxel` / `voxel_to_crosshair` map the view's vertical pixel as `z = Z - 1 - py` instead of `z = py`, the clinical renderer applies `np.flipud` to both the HU plane and the mask overlay, and `interaction.py`'s hover read-out and cross-hair placement use the same convention, so the three stay consistent. This is a user-visible change to what the two reformatted planes look like — axial is unaffected. `test_dicom_landmark_orientation` pins it by driving an asymmetric bright landmark through the synthetic DICOM loader and the real render path and asserting all six of A/P/L/R/S/I. **This change shipped in the commit that introduced the geometry contract without being recorded in that commit's message or here; the entry is added retroactively.**
 - The supported DICOM contract is now classic single-frame CT only. Enhanced CT, non-CT, and multi-frame input fail closed before pixel decoding. The historical multi-frame row below records the earlier crash fix, not the current support policy.
 - Spatial geometry is accepted only when every slice independently has finite, unit-length, orthogonal IOP direction cosines and the series-level IOP/IPP, PixelSpacing, and projected slice positions prove the required capability. Slice spacing no longer falls back to `SpacingBetweenSlices`, `SliceThickness`, or a 1 mm default; MPR, physical quantification, mesh, AI, and comparison fail closed independently when their contracts are not met.
 - Standard HU is all-or-nothing per series: every retained slice needs finite slope/intercept plus either explicit `RescaleType=HU` or the classic CT `ORIGINAL` / non-`LOCALIZER` / non-multi-energy guarantee. `DERIVED` images without explicit HU, unknown/non-HU units, mixed-unit series, and the unsupported multi-energy contract remain raw-value viewer-only.

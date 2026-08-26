@@ -1955,10 +1955,13 @@ def test_recon_iter_options_contract():
 
     由来：把 ASD-POCS 接进重建实验室时，原下拉框只有 10/20/50 —— 那是给 ART/SIRT
     定的。ASD-POCS 每轮含一次带松弛的 ART 扫掠 + n_grad 次 TV 最速下降，收敛慢一个
-    量级。实测（n=64、180 视角、无噪、本机）：
+    量级。按**实验室默认路径**实测——`shepp_logan(256)` 经 `prepare_small_image`
+    降到 32×32、180°×1×、无噪，即 `cb_matrix_size` 与 `combo_oversample` 的默认档
+    （此前这组数取自 `experiments.recon_study.get_phantom` 的 64×64，那是研究口径，
+    不是用户会跑到的那条路；档位是 GUI 特性，证据必须同帧）：
 
-        FBP 0.0869 | ASD-POCS 10 轮 0.1296 · 20 轮 0.1125 · 50 轮 0.0448
-                   | 100 轮 0.0091 · 150 轮 0.0025 · 300 轮 0.0002
+        FBP 0.0995 | ASD-POCS 10 轮 0.1460 · 20 轮 0.1336 · 50 轮 0.0672
+                   | 100 轮 0.0142 · 150 轮 0.0034 · 300 轮 0.0003
 
     即 10 与 20 轮**都比 FBP 还差**，50 轮才首次胜过。沿用同一张档位表，会让一个
     实现正确的算法在教学界面里显示成"最差的那个"——而这个实验室的全部意义就是
@@ -1984,7 +1987,7 @@ def test_recon_iter_options_contract():
     # 承重断言：ASD-POCS 不得提供实测劣于 FBP 的轮数
     asd = [int(i) for i in opts['ASD-POCS'][0]]
     check(min(asd) >= 50,
-          f"ASD-POCS 最低档 {min(asd)} ≥ 50（10/20 轮实测 RMSE 0.1296/0.1125 劣于 FBP 0.0869）")
+          f"ASD-POCS 最低档 {min(asd)} ≥ 50（10/20 轮实测 RMSE 0.1460/0.1336 劣于 FBP 0.0995）")
     check(int(opts['ASD-POCS'][0][opts['ASD-POCS'][1]]) >= 100,
           "ASD-POCS 的默认档 ≥ 100（50 轮仅刚超过 FBP，不适合作为默认展示）")
     check(asd != [int(i) for i in opts['ART'][0]],
@@ -3991,8 +3994,9 @@ def test_matrix_recon_ui(app):
                     continue
                 vi.cb_art_method.setCurrentIndex(idx); app.processEvents()
                 # 切换方法必须同步换掉迭代档位。ASD-POCS 每轮 = 一次 ART 扫掠 +
-                # n_grad 次 TV 下降，用 ART 的 10/20 轮跑它，实测 n=64、180 视角、
-                # 无噪时 RMSE 0.1296 / 0.1125，**比 FBP 的 0.0869 还差**——沿用同一
+                # n_grad 次 TV 下降，用 ART 的 10/20 轮跑它，按实验室默认路径实测
+                # （32×32、180°×1×、无噪）RMSE 0.1460 / 0.1336，**比 FBP 的 0.0995
+                # 还差**——沿用同一
                 # 张档位表会把一个正确实现展示成最差的那个。
                 offered = [vi.cb_art_iter.itemText(i) for i in range(vi.cb_art_iter.count())]
                 check(offered == list(vi.ITER_OPTIONS[meth][0]),

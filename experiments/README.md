@@ -5,7 +5,7 @@ This directory upgrades the main application's two major AI/algorithm capabiliti
 - **Study I (reconstruction)** — uses the standard Shepp-Logan phantom to measure how `recon.py` reconstruction quality varies with dose / filter / algorithm.
 - **Study II (AI segmentation)** — uses a ground-truth-labelled public CT (TotalSegmentator-CT-Lite) to measure the Dice of `organs.onnx`, and to *recover by measurement* its 25-class label mapping.
 
-> The reconstruction experiments directly `import recon`, the workstation's numerical module. All studied solvers except ASD-POCS are exposed through the GUI; ASD-POCS is implemented in `recon.py` but is currently called only by its experiment and tests. The segmentation experiment replicates `ai_engine`'s identical (step-by-step numerically equivalent) preprocessing and sliding-window inference, running the very same `organs.onnx` the GUI uses.
+> The reconstruction experiments directly `import recon`, the workstation's numerical module. Every studied solver, ASD-POCS included, is exposed through the GUI's reconstruction lab. The segmentation experiment replicates `ai_engine`'s identical (step-by-step numerically equivalent) preprocessing and sliding-window inference, running the very same `organs.onnx` the GUI uses.
 
 ## Running
 

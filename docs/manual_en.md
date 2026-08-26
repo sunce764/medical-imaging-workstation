@@ -15,7 +15,7 @@
 **Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
 **Verified environment**: local macOS with Python 3.10; the data-independent suite had also passed historically on a GitHub Actions Ubuntu runner as of the snapshot below. Windows was not verified in that snapshot and no platform-compatibility claim is made for it. Dependencies include PySide6, pydicom, NumPy, SciPy, scikit-image, and ONNX Runtime.
 **Development language**: Python.
-**Software scale**: application code is split across UI mixins and Qt-free compute modules. The 2026-08-26 pre-commit local freeze-candidate snapshot recorded 784 local full-suite checks and 693 `SKIP_REAL_DATA=1` checks; these are local results, not fresh-clone, coverage, or remote-CI evidence.
+**Software scale**: application code is split across UI mixins and Qt-free compute modules. A local run on 2026-08-26 recorded 788 full-suite checks and 696 `SKIP_REAL_DATA=1` checks; these are local results, not fresh-clone, coverage, or remote-CI evidence.
 **Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
 
 ---
@@ -203,7 +203,7 @@ The **"Register"** checkbox in the top toolbar (**enabled only in comparison mod
 
 ## 9. Reconstruction Lab (CT Tomographic-reconstruction Teaching)
 
-Click the top tab to switch to **"Reconstruction lab."** This module takes the current slice as its subject and fully demonstrates the process from X-ray projection to image reconstruction. Within it, the forward Radon projection and the analytic inverses (BP / FBP) are built on scikit-image's `radon` / `iradon`; the four inverse-solver algorithms DFR, DMR, ART, and SIRT are implemented as self-contained numerical code in this project.
+Click the top tab to switch to **"Reconstruction lab."** This module takes the current slice as its subject and fully demonstrates the process from X-ray projection to image reconstruction. Within it, the forward Radon projection and the analytic inverses (BP / FBP) are built on scikit-image's `radon` / `iradon`; the five inverse-solver algorithms DFR, DMR, ART, SIRT and ASD-POCS are implemented as self-contained numerical code in this project.
 
 ![Reconstruction lab](img/manual_recon_lab.png)
 
@@ -229,10 +229,10 @@ The "Image reconstruction algorithms" area provides:
 
 ### 9.3 Matrix / Iterative Reconstruction
 
-In the "Direct matrix reconstruction & ART / SIRT" area, select the **image size (16/32/64)**, **iterative method (ART / SIRT)**, and **iteration count**; it provides:
+In the "Matrix Recon & Iterative" area, select the **image size (16/32/64)**, **iterative method (ART / SIRT)**, and **iteration count**; it provides:
 
 - **Direct matrix reconstruction (DMR)**: solves the projection system of equations by least squares;
-- **ART / SIRT iterative reconstruction**: algebraic iterative reconstruction, with an error map and RMSE.
+- **ART / SIRT / ASD-POCS iterative reconstruction**: algebraic and TV-regularised iterative reconstruction, with an error map and RMSE.
 
 ### 9.4 Deep-Learning Reconstruction (CNN post-processing)
 

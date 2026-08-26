@@ -69,7 +69,7 @@ The **built-in Shepp-Logan phantom** makes the whole reconstruction pipeline usa
 |---|---|
 | **Clinical reading** | Classic single-frame CT loading with patient-space sorting when geometry is provable · tri-planar MPR with linked cross-hairs only for canonical series with valid in-plane and uniform z geometry · HU presets/ROI/AI and other intensity consumers independently require valid CT calibration · slab MIP / MinIP / AIP · 9 measurement and annotation tools with capability gates · ellipse ROI statistics · four-corner PACS overlay · Cine playback · dual-series follow-up comparison for series meeting the full geometry/intensity contract. Enhanced/multi-frame and non-CT inputs are rejected; non-canonical or incomplete geometry remains viewer-only where safe |
 | **AI segmentation** | Background sliding-window ONNX inference for 25 classes, including 5 lung lobes · tri-planar colour overlay and clickable legend · cursor HUD · per-organ statistics and CSV export · 3-D marching-cubes surface preview, shape features and STL export · brush/eraser editing with undo · per-voxel confidence reporting |
-| **Reconstruction lab** | Built-in analytic Shepp-Logan phantom · Radon projection · BP / FBP with 5 filters / DFR · first-principles DMR, ART and SIRT solvers · error maps and RMSE · learned CNN post-processing with its training-view and input-filter constraints shown in the UI |
+| **Reconstruction lab** | Built-in analytic Shepp-Logan phantom · Radon projection · BP / FBP with 5 filters / DFR · first-principles DMR, ART, SIRT and ASD-POCS (TV-regularised) solvers · error maps and RMSE · learned CNN post-processing with its training-view and input-filter constraints shown in the UI |
 | **Safety and review** | On-screen identity is replaced by `ANON`; explicit export filenames use a per-load random `ANON-…` alias and collision-safe suffixes · explicit warning that DICOM tags, internal project/cache identifiers, and burned-in pixel text are not anonymised · persistent AI disclaimer · model card covering measured provenance and unmeasured limits · bilingual EN / 中文 interface |
 
 ## Implemented here, or called from a library
@@ -130,12 +130,12 @@ Three-dimensional medical volumes make memory and I/O the binding constraint lon
 ## Engineering and testing
 
 - The original God-object is decomposed into **5 UI mixins + 10 Qt-free compute modules**; the complete 19-module packaging inventory is declared in `pyproject.toml`.
-- The **2026-08-26 pre-commit local freeze-candidate snapshot** recorded **784 PASS / 0 FAIL** for the full suite with the local RIDER series present and **693 PASS / 0 FAIL** for `SKIP_REAL_DATA=1`. These are local results, not fresh-clone, coverage, or remote-CI evidence. As of that snapshot, the latest exact-SHA remote evidence was baseline **`2e9b700`**, [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765), with **520 PASS / 0 FAIL**, **81% coverage**, **Ruff PASS**, and `event=workflow_dispatch`; that historical CI does not cover the pre-commit candidate snapshot. Any later remote result is evidence only when its `headSha` exactly matches the commit under review. Its run/headSha should be recorded outside the repository or in the delivery summary rather than creating a second documentation commit. The custom runner promotes uncaught Qt signal/slot exceptions to failures, so a printed traceback can no longer coexist with exit code 0.
+- A **local run on 2026-08-26** recorded **788 PASS / 0 FAIL** for the full suite with the local RIDER series present and **696 PASS / 0 FAIL** for `SKIP_REAL_DATA=1`. These are local results, not fresh-clone, coverage, or remote-CI evidence. As of that snapshot, the latest exact-SHA remote evidence was baseline **`2e9b700`**, [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765), with **520 PASS / 0 FAIL**, **81% coverage**, **Ruff PASS**, and `event=workflow_dispatch`; that historical CI does not cover any commit after it. Any later remote result is evidence only when its `headSha` exactly matches the commit under review. Its run/headSha should be recorded outside the repository or in the delivery summary rather than creating a second documentation commit. The custom runner promotes uncaught Qt signal/slot exceptions to failures, so a printed traceback can no longer coexist with exit code 0.
 - Reconstruction tests assert numerical correctness, not merely finite output; DICOM loading is defensive against malformed metadata.
 
 ```bash
-python tests/test_gui.py                     # 2026-08-26 pre-commit snapshot: 784 local full-suite checks; local RIDER present
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-26 pre-commit snapshot: 693 local data-independent checks
+python tests/test_gui.py                     # 2026-08-26 local run: 788 full-suite checks; local RIDER present
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-26 local run: 696 data-independent checks
 ruff check .                                 # lint
 coverage run tests/test_gui.py && coverage report
 ```
@@ -143,7 +143,7 @@ coverage run tests/test_gui.py && coverage report
 <details>
 <summary><strong>Coverage detail</strong></summary>
 
-Coverage was not recomputed for the 2026-08-26 pre-commit snapshot. As of that snapshot, the latest exact-SHA remote baseline above reported **81%**; its denominator and per-module percentages are not evidence for the pre-commit snapshot after the new geometry and safety code. A future exact-SHA run should publish the updated report rather than carrying forward stale figures.
+Coverage was not recomputed for the 2026-08-26 changes. As of that snapshot, the latest exact-SHA remote baseline above reported **81%**; its denominator and per-module percentages are not evidence for the current tree after the new geometry and safety code. A future exact-SHA run should publish the updated report rather than carrying forward stale figures.
 
 </details>
 

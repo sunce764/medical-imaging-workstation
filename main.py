@@ -289,7 +289,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         for g, en, cn in (
             (self.grp_proj, "Projection Generation", "X射线投影生成"),
             (self.grp_algo, "Reconstruction Algorithms", "图像重建算法"),
-            (self.grp_matrix, "Matrix Recon && ART / SIRT", "直接矩阵重建 && ART / SIRT"),
+            (self.grp_matrix, "Matrix Recon && Iterative", "直接矩阵重建 && 迭代重建"),
             (self.grp_mon, "Performance Monitor", "算法性能监控"),
             (self.grp_patient, "PATIENT INFO", "患者信息"),
             (self.grp_display, "READING", "阅片"),
