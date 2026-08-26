@@ -500,8 +500,17 @@ def test_edge_cases(v, app):
     v.volume_hu = saved_hu                      # 还原真实体数据
     v.volume_mask = np.zeros(v.volume_hu.shape, np.uint8)
     v.current_3d_pos = saved_pos
-    check(v.volume_hu.shape[1:] == (512, 512) and float(v.volume_hu.min()) < -500,
-          f"退出前还原真实 HU 体数据 (shape={v.volume_hu.shape}, min={float(v.volume_hu.min()):.0f})")
+    # 【为什么不用 min < -500】原判据是范围式的，而本段要证的是「还原成了原来那一份」。
+    # 任何 min 够低的数组都能满足它——本序列（RIDER/CTP 导出）在当前 spec 下是
+    # 原始存储值而非标定 HU，min 恰为 PixelPaddingValue −2000，标定与否都 < −500，
+    # 于是这条断言既证明不了「还原对了」，标签里的「HU」也与实际内容不符。改为恒等
+    # 判据：还原的必须就是保存的那个对象。HU 转换的数值正确性由
+    # test_hu_conversion 用已知 pix/slope/intercept 单独断言（含非 1 的 slope）。
+    check(v.volume_hu is saved_hu and v.volume_hu.shape[1:] == (512, 512),
+          f"退出前还原的就是保存的那份体数据本身 (shape={v.volume_hu.shape})")
+    check(not v.hu_calibrated and float(v.volume_hu.min()) == -2000.0,
+          f"本序列按当前 spec 为原始存储值而非标定 HU（hu_calibrated={v.hu_calibrated}, "
+          f"min={float(v.volume_hu.min()):.0f} = PixelPaddingValue）")
     # 脱敏隐去对比既往日期（PHI）
     vv = m.MedicalViewer(data_dir=os.path.join(_ROOT, "肺癌")); app.processEvents()
     if vv.ai_thread:
@@ -3500,6 +3509,29 @@ def test_geometry_fingerprint_contract():
         check(fp != fn(reordered_identity, (3, 8, 9)),
               "同 UID/shape 但 SOP→slice 绑定改变时 fingerprint 改变")
         check(fp != fn(a, (3, 9, 8)), "volume shape 改变时 fingerprint 改变")
+        # 【为什么必须逐项单独变异几何】上面三条只动 SOP 顺序与 volume shape。把
+        # iop/ipp/pixel_spacing 整体从 payload 里删掉（几何指纹完全失效），这三条
+        # **依然全部通过**——实测确认。而 fingerprint 存在的理由恰恰是「同一序列
+        # 几何改变时 UID 与 shape 可以完全不变」，那一半此前零覆盖。故三个几何字段
+        # 各自单独变一次，且必须各自都能改变 fingerprint；合并成一次变异不行，那样
+        # 只要任一字段仍在 payload 里就能过。
+        z_respaced = [one("1.2.3.1", 0), one("1.2.3.2", 2), one("1.2.3.3", 4)]
+        check(fp != fn(z_respaced, (3, 8, 9)),
+              "仅 IPP 改变（z 间距 1→2mm，SOP 顺序与 shape 不变）→ fingerprint 改变")
+        coronal = [SimpleNamespace(SOPInstanceUID=d.SOPInstanceUID,
+                                   SeriesInstanceUID=d.SeriesInstanceUID,
+                                   ImageOrientationPatient=(1, 0, 0, 0, 0, -1),
+                                   ImagePositionPatient=d.ImagePositionPatient,
+                                   PixelSpacing=d.PixelSpacing) for d in a]
+        check(fp != fn(coronal, (3, 8, 9)),
+              "仅 IOP 改变（轴位→冠状，SOP 顺序与 shape 不变）→ fingerprint 改变")
+        respaced = [SimpleNamespace(SOPInstanceUID=d.SOPInstanceUID,
+                                    SeriesInstanceUID=d.SeriesInstanceUID,
+                                    ImageOrientationPatient=d.ImageOrientationPatient,
+                                    ImagePositionPatient=d.ImagePositionPatient,
+                                    PixelSpacing=(1.0, 1.0)) for d in a]
+        check(fp != fn(respaced, (3, 8, 9)),
+              "仅 PixelSpacing 改变（0.7×0.9→1.0×1.0，其余不变）→ fingerprint 改变")
 
 
 def test_mpr_linkage(app):
