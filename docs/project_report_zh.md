@@ -500,7 +500,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 |---|---|
 | 作品集展示 | **强**：功能、代码、结果、失败案例与审计链完整 |
 | 教学科研工具 | **可用**：关键流程可运行，边界写明 |
-| 工程可信度 | **较强，但远端证据仍缺**：full/subset 本地回归通过（exit 0，计数见 §5.1）。**须区分两层**：已 commit 的历史快照止于 `bd129a0`（该 commit 与 `origin/main` 一致，具体 SHA 请以 `git ls-remote origin main` 为准，本报告不复述会随时间失真的具体值）；而 §5.1 所述的这批改动**尚未 commit，是工作区里的 pre-commit local candidate**，既未推送，也不存在与之对应的远端 CI。仍然没有 fresh-clone 计数、未重算 coverage，也没有任何与这些 commit 的 `headSha` 精确匹配的 remote CI——历史 `2e9b700` 的 manual CI 不覆盖其后的任何 commit。自动 `push` trigger 不作为 P0；binary packaging 不在该 snapshot 范围 |
+| 工程可信度 | **较强**：full/subset 本地回归通过（exit 0，计数见 §5.1），且本地计数已按「本地全套 / 本地 `SKIP_REAL_DATA` 子集」分层标注，不与 clean-clone 或远端结果混用。**commit / push / exact-SHA CI 属仓库外的可变交付状态，本报告不固化**——核验时请实时比较 live `main` 与目标 GitHub Actions run 的 `headSha`，两者逐字符一致才算远端门通过。仍然没有 fresh-clone 计数、也未重算 coverage：这两项无论远端状态如何都不由本报告代言。binary packaging 不在该 snapshot 范围 |
 | 学术发表准备 | **探索阶段**：已有可写结果，但 venue、研究问题与外部验证尚未锁定 |
 | 临床转化 | **不具备**：缺监管、独立临床验证、数据治理与部署体系 |
 
@@ -511,7 +511,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 | 优先级 | 风险 / 局限 | 当前处理 | 剩余动作 |
 |---|---|---|---|
 | 高 | 分割证据来自单一 dataset，teacher 可能见过 test cases | 明确披露，不宣称外部泛化 | 如进入论文阶段，需独立 dataset；属新实验，须另行批准 |
-| 低 | GitHub Actions `push` trigger 历史上未自动产生 run | `2e9b700` 曾由 manual `workflow_dispatch` 覆盖；2026-08-26 之后的提交尚无远端 CI | 不作为该 snapshot 的 P0；未来仅以 exact `headSha` run 判断远端门 |
+| 低 | GitHub Actions `push` trigger 历史上未自动产生 run | 该 trigger 不可靠，故远端门一律以 manual `workflow_dispatch` 产生的 run 为准；具体 run 不在报告内固化 | 不作为 P0；判据是该 run 的 `headSha` 与被核验 commit 逐字符一致 |
 | 中 | Product no-overlap path 存在小幅 seam loss | 已量化收益和成本，未冒充已修复 | 仅在明确接受 +memory / +time 后决定是否采用 |
 | 中 | Study III 为 noise-free synthetic | limitation 已显式写入 | 若投稿，需 realistic noise 与 external baseline |
 | 中 | Historical model provenance 不完整 | 当前 hashes 与未记录项均披露 | 新模型建立 export manifest 与 result-time hash |
@@ -524,7 +524,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 
 ### 工程冻结与外部等待
 
-1. 截至 2026-08-26，已 commit 并已 push 到 `origin/main` 的历史快照是 `bd129a0`（含其之前的 `d76bcbb` 等）。**本轮 2026-08-26 的这批改动尚未 commit**——它只是工作区里的 pre-commit local candidate，未 stage、未 commit、未 push；尚未 tag、release，也未对任何 commit 触发 workflow dispatch。未来远端门只接受与最终 commit 精确 `headSha` 匹配的 run；其 URL/headSha 记在仓库外 evidence 或交付摘要，不回写报告制造第二个文档 commit 与自引用循环。
+1. **commit / push / exact-SHA CI 都属仓库外的可变交付状态，本报告一律不固化**——任何写死的 SHA、run id 或 URL 都会被随后的文档提交再次推翻，这正是本节曾经犯过的错。核验方式是实时比较：`git ls-remote origin refs/heads/main` 给出的 live `main`，与目标 GitHub Actions run 的 `headSha`，两者逐字符一致才算远端门通过。自动 `push` trigger 历史上不可靠，故该门只接受 manual `workflow_dispatch` 产生的 run。tag 与 release 仍不在本次范围。
 2. 自动 `push` trigger 根因不再是 P0，不阻塞本地工程冻结，也不主动深挖。
 3. 只有获得新的明确授权才可重开 performance run；届时必须使用已接入的 JSON provenance 合约，并核对 machine、configuration、wall time、process peak 与完整 model hashes。
 4. 继续冻结项目方提交记录所指向的 `docs/*.pdf` 与签章材料；等待 CPCC 期间不重建 V1.0 snapshot，状态变化只更新非冻结 Markdown。
