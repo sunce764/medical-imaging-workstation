@@ -16,6 +16,7 @@ import csv
 import json
 import math
 import os
+import tempfile
 from datetime import datetime
 
 import numpy as np
@@ -42,6 +43,7 @@ import mesh3d
 import model_card
 import quantify
 from constants import AXIAL, LABEL_LUT, MANUAL_TRACK_LABEL
+from dicom_geometry import series_fingerprint
 from graphics_view import ROIGraphicsItem
 
 
@@ -86,7 +88,8 @@ class MeshView(QLabel):
         self.rotated.emit(self.azimuth, self.elevation); self.settled.emit()
 
 
-def mask_cache_matches(saved_uid, saved_shape, cur_uid, cur_shape):
+def mask_cache_matches(saved_uid, saved_shape, saved_fingerprint,
+                       cur_uid, cur_shape, cur_fingerprint):
     """判断磁盘缓存的分割蒙版能否安全恢复到当前序列（纯函数，无 Qt，可独立单测）。
 
     只比 shape 是不够的：缓存按 PatientID 命名，而同一患者的随访/复扫序列
@@ -105,6 +108,12 @@ def mask_cache_matches(saved_uid, saved_shape, cur_uid, cur_shape):
         return False, "当前序列缺 SeriesInstanceUID，无法确认与缓存是否同源"
     if str(saved_uid) != str(cur_uid):
         return False, "SeriesInstanceUID 不同（同一患者的另一序列），拒绝套用"
+    if not saved_fingerprint:
+        return False, "缓存缺 geometry/order fingerprint（legacy），无法证明切片对应关系"
+    if not cur_fingerprint:
+        return False, "当前序列无法生成 geometry/order fingerprint，拒绝自动恢复"
+    if str(saved_fingerprint) != str(cur_fingerprint):
+        return False, "geometry/order fingerprint 不同，拒绝把缓存套到不同切片顺序"
     return True, ""
 
 
@@ -124,7 +133,11 @@ class AnnotationMixin:
           3. 对该 HU 范围内的体素做 3D 连通域标记
           4. 选取在 ROI 框内体素最多的连通域标签，即为目标结构
         """
-        if self.volume_hu is None or self.recon_mode_active or self.compare_mode_active:
+        if (self.volume_hu is None or self.recon_mode_active or self.compare_mode_active
+                or not all((getattr(self, 'hu_calibrated', False),
+                            getattr(self, 'canonical_orientation', False),
+                            getattr(self, 'inplane_spacing_valid', False),
+                            getattr(self, 'uniform_z_geometry_valid', False)))):
             return
         if self.views[vid]['plane'] != AXIAL:
             QMessageBox.information(self, "Info" if self.is_english else "提示",
@@ -261,6 +274,9 @@ class AnnotationMixin:
             if snap.shape != self.volume_mask.shape:
                 return
             self.volume_mask = snap
+            if z == self._VOL_UNDO_CLEAR:
+                # 用户撤销了全局清空；后续保存应持久化恢复后的非零 mask，而非 empty intent。
+                self._mask_cache_clear_requested = False
             # conf 与 mask 同源同快照：要么一起回退，要么都不动。形状不符时置 None
             # 而不是留着旧的——留着会让 quantify 拿错网格的哨兵去剔体素。
             if conf_snap is not None and conf_snap.shape == snap.shape:
@@ -291,15 +307,17 @@ class AnnotationMixin:
           3. 计算面积（像素数 × 像素间距²）和平均 HU
           4. 弹框确认，用户选择是否保存裁剪图像和 CSV 记录
         """
-        if self.recon_mode_active or self.compare_mode_active or self.views[vid]['plane'] != AXIAL:
+        if (self.recon_mode_active or self.compare_mode_active or self.views[vid]['plane'] != AXIAL
+                or not getattr(self, 'hu_calibrated', False)
+                or not getattr(self, 'inplane_spacing_valid', False)):
             return
         idx = self.current_3d_pos[0]
         ds = self.dicom_datasets[idx]
         hu = self.volume_hu[idx]
         # 列间距缺省回退到行间距而非 1.0：畸形 DICOM 的 PixelSpacing=[0.7, None] 下，
         # 写死 1.0 会让面积/体积整体偏大（0.7 时 +42.9%）。与 main.py 同一口径。
-        _psr = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
-        sp = (_psr, self._dcm_float(ds, 'PixelSpacing', _psr, idx=1))
+        _psr = self._dcm_float(ds, 'PixelSpacing', 0.0, idx=0)
+        sp = (_psr, self._dcm_float(ds, 'PixelSpacing', 0.0, idx=1))
         h, w = hu.shape
         # 用 QPainter 将多边形光栅化为掩码图像
         mq = QImage(w, h, QImage.Format_Grayscale8); mq.fill(Qt.black)
@@ -320,9 +338,12 @@ class AnnotationMixin:
                 img = np.clip(hu, -1250, 250)
                 img = ((img + 1250) / 1500 * 255).astype(np.uint8)
                 fn = f"{self._export_tag()}_S{idx+1}_{datetime.now().strftime('%H%M%S')}.png"
-                ed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Exported_Lesions")
+                ed = getattr(self, 'export_dir',
+                             os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "Exported_Lesions"))
                 os.makedirs(ed, exist_ok=True)
-                s_p, _ = QFileDialog.getSaveFileName(self, "Save", os.path.join(ed, fn), "PNG (*.png)")
+                default_path = self._unique_export_path(ed, fn)
+                s_p, _ = QFileDialog.getSaveFileName(self, "Save", default_path, "PNG (*.png)")
                 if s_p:
                     # img*bm：将 ROI 外的像素清零，保留病灶区域
                     QImage((img * bm).data, w, h, w, QImage.Format_Grayscale8).copy().save(s_p)
@@ -424,9 +445,11 @@ class AnnotationMixin:
                 return
             # 用专属槽位，免得之后一次 3D 追踪把它顶掉——确认框刚承诺过 Ctrl+Z 可还原。
             # adopt=True：旧蒙版与旧 conf 本来就要被丢弃，移交给撤销栈是零成本的。
+            self._invalidate_running_ai()  # 先作废旧代次，避免后台结果在清空后复活
             self._push_volume_undo(slot=self._VOL_UNDO_CLEAR, adopt=True)
             self.volume_mask = np.zeros(self.volume_hu.shape, dtype=np.uint8)
             self.volume_conf = None
+            self._mask_cache_clear_requested = True
         if idx in self.global_annotations:
             self.global_annotations[idx] = []
         self._update_organ_stats()  # 蒙版已清，定量面板同步清空
@@ -461,8 +484,9 @@ class AnnotationMixin:
     def _load_annotations_json(self, pid):
         """尝试加载同 PatientID 命名的注解 JSON 文件，恢复历史标注。
         文件不存在/损坏静默跳过；结构畸形的单条标注被过滤（不带崩后续渲染）。"""
-        af = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "Exported_Lesions", f"{self._safe_name(pid)}_annotations.json")
+        ed = getattr(self, 'persistence_dir',
+                     os.path.join(os.path.dirname(os.path.abspath(__file__)), "Exported_Lesions"))
+        af = os.path.join(ed, f"{self._safe_name(pid)}_annotations.json")
         if not os.path.exists(af):
             return
         try:
@@ -472,24 +496,25 @@ class AnnotationMixin:
                 return
             meta = raw.pop('__meta__', None)
             saved_uid = (meta or {}).get('series_uid', '') if isinstance(meta, dict) else ''
+            saved_fingerprint = ((meta or {}).get('geometry_fingerprint', '')
+                                 if isinstance(meta, dict) else '')
             cur_uid = self._current_series_uid()
-            if saved_uid and cur_uid and saved_uid != cur_uid:
+            cur_fingerprint = self._current_geometry_fingerprint()
+            if (not saved_uid or not cur_uid or saved_uid != cur_uid
+                    or not saved_fingerprint or saved_fingerprint != cur_fingerprint):
                 # 明确是另一序列：拒绝。标注坐标按切片号存，套到同形状的另一序列上
                 # 会落在完全不同的解剖上，而测距/ROI 会照样给出数字。
-                print(f"标注文件属于另一序列（{saved_uid} != {cur_uid}），已跳过加载：{af}")
+                print("标注文件缺少或不匹配 geometry/order fingerprint，"
+                      f"已跳过加载：{af}")
                 e = self.is_english
                 QMessageBox.information(
                     self, "Annotations not loaded" if e else "标注未加载",
-                    ("A saved annotation file exists for this patient, but it belongs to a "
-                     "different series and was not loaded — its slice indices would land on "
-                     "different anatomy here. It is left on disk, untouched.") if e else
-                    ("本患者存在已保存的标注文件，但它属于另一个序列，故未加载"
-                     "——其切片号在当前序列上对应的是不同解剖。原文件保留在磁盘上，未改动。"))
+                    ("The saved annotations lack a matching geometry/order fingerprint and "
+                     "were not loaded; their slice indices cannot be proven safe. The file "
+                     "was left untouched.") if e else
+                    ("已保存标注缺少匹配的 geometry/order fingerprint，无法证明切片号对应"
+                     "关系，故未加载；原文件保留在磁盘上，未改动。"))
                 return
-            if not saved_uid:
-                # 旧版本产物没有 UID。与蒙版不同，标注是用户手工产出、无法重算，
-                # 故这里选择加载而非拒绝，但把「未能确认序列」如实说出来。
-                print(f"标注文件未记录 SeriesInstanceUID（旧版本产物），无法确认序列归属：{af}")
             for k, v in raw.items():
                 # JSON 键只能是字符串，数字键需要转回 int
                 key = int(k) if isinstance(k, str) and k.isdigit() else k
@@ -509,26 +534,37 @@ class AnnotationMixin:
             return ''
         return str(getattr(self.dicom_datasets[0], 'SeriesInstanceUID', '') or '')
 
-    def _load_saved_mask(self, pid):
-        """尝试加载上次保存的 AI 分割标签图(.npz)，SeriesInstanceUID 与 shape 双双匹配才恢复。
+    def _current_geometry_fingerprint(self):
+        """当前有序 volume 的稳定 geometry/order SHA-256；无法证明时为空。"""
+        if self.volume_hu is None:
+            return ''
+        return series_fingerprint(self.dicom_datasets, self.volume_hu.shape)
 
-        判定逻辑在纯函数 mask_cache_matches（无 Qt，可独立单测）。只比 shape 会把同一
-        患者另一序列（随访/复扫，常同为 512²）的蒙版静默套用，导致器官定量给出错误体积。
+    def _load_saved_mask(self, pid):
+        """尝试加载上次保存的 AI 分割标签图(.npz)。自动恢复要求 SeriesInstanceUID、
+        mask/volume shape 与 geometry/order fingerprint 三者均匹配；legacy cache 缺少
+        fingerprint 时 fail closed。判定逻辑在纯函数 mask_cache_matches（无 Qt，可独立
+        单测），避免同一患者的随访/复扫、切片重排或几何变化静默复用错误蒙版。
         """
-        fp = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                          "Exported_Lesions", f"{self._safe_name(pid)}_mask.npz")
+        ed = getattr(self, 'persistence_dir',
+                     os.path.join(os.path.dirname(os.path.abspath(__file__)), "Exported_Lesions"))
+        fp = os.path.join(ed, f"{self._safe_name(pid)}_mask.npz")
         if not os.path.exists(fp):
             return False
         try:
             z = np.load(fp)
             m = z['mask']
             saved_uid = str(z['series_uid'].item()) if 'series_uid' in z.files else ''
-            ok, why = mask_cache_matches(saved_uid, m.shape,
-                                         self._current_series_uid(), self.volume_hu.shape)
+            saved_fingerprint = (str(z['geometry_fingerprint'].item())
+                                 if 'geometry_fingerprint' in z.files else '')
+            ok, why = mask_cache_matches(saved_uid, m.shape, saved_fingerprint,
+                                         self._current_series_uid(), self.volume_hu.shape,
+                                         self._current_geometry_fingerprint())
             if not ok:
                 print(f"跳过磁盘缓存的分割蒙版：{why}；将重新运行 AI 分割。")
                 return False
             self.volume_mask = m.astype(np.uint8)
+            self._mask_cache_clear_requested = False
             return True
         except Exception as e:
             print(f"Warning: failed to load saved mask: {e}")
@@ -537,33 +573,125 @@ class AnnotationMixin:
     def save_project(self):
         """将当前所有标注保存为 JSON 文件（以 PatientID 命名），方便下次加载时自动恢复。
         JSON 键必须为字符串（JSON 规范），整数切片索引在此序列化为字符串，加载时再转回 int。
+
+        单个目标文件通过同目录临时文件 + ``os.replace`` 原子替换；JSON 与 NPZ 是两个
+        独立目标，因此不声称跨文件事务原子性。任何前置条件、序列化或替换失败均返回
+        False，且不会显示成功提示。
         """
         if not self.dicom_datasets:
-            return
+            QMessageBox.warning(self, "Save Failed" if self.is_english else "保存失败",
+                                ("No DICOM series is loaded."
+                                 if self.is_english else "尚未加载 DICOM 序列。"))
+            return False
+
+        series_uid = self._current_series_uid().strip()
+        geometry_fingerprint = self._current_geometry_fingerprint().strip()
+        if not series_uid or not geometry_fingerprint:
+            missing = []
+            if not series_uid:
+                missing.append("SeriesInstanceUID")
+            if not geometry_fingerprint:
+                missing.append("geometry fingerprint")
+            QMessageBox.warning(
+                self, "Save Failed" if self.is_english else "保存失败",
+                (("Project persistence requires verified " + " and ".join(missing) + ".")
+                 if self.is_english else
+                 ("工程持久化缺少可验证的 " + " 和 ".join(missing) + "，未写入任何文件。")))
+            return False
+
+        mask_present = self.volume_mask is not None
+        # 任何 ndarray（包括全零）都先验 shape；不能因为 np.any=False 就绕过 payload 校验，
+        # 让 wrong-shape zero 先覆盖 JSON、再留下无法安全恢复的旧 NPZ。
+        if mask_present and (self.volume_hu is None
+                             or tuple(self.volume_mask.shape) != tuple(self.volume_hu.shape)):
+            QMessageBox.warning(
+                self, "Save Failed" if self.is_english else "保存失败",
+                ("The segmentation mask shape does not match the current volume."
+                 if self.is_english else "分割蒙版 shape 与当前 volume 不一致，未写入任何文件。"))
+            return False
+        has_nonzero_mask = mask_present and bool(np.any(self.volume_mask))
+        explicit_empty = (mask_present and not has_nonzero_mask
+                          and getattr(self, '_mask_cache_clear_requested', False))
+        # fresh/AI-pending placeholder zero 不写 NPZ；用户明确清空则写带 provenance 的零 NPZ，
+        # 使重开后仍为空且跳过 AI，防止旧非零 cache 复活。
+        write_mask = bool(has_nonzero_mask or explicit_empty)
+
         pid = self._safe_name(str(getattr(self.dicom_datasets[0], 'PatientID', 'Unknown')))
-        ed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Exported_Lesions")
-        os.makedirs(ed, exist_ok=True)
+        ed = getattr(self, 'persistence_dir',
+                     os.path.join(os.path.dirname(os.path.abspath(__file__)), "Exported_Lesions"))
+        json_target = os.path.join(ed, f"{pid}_annotations.json")
+        npz_target = os.path.join(ed, f"{pid}_mask.npz")
+        payload = {'__meta__': {
+                       'series_uid': series_uid,
+                       'geometry_fingerprint': geometry_fingerprint,
+                   },
+                   **{str(k): v for k, v in self.global_annotations.items()}}
+        temp_paths = []
+        replaced = []
+        replacement_target = None
         try:
-            with open(os.path.join(ed, f"{pid}_annotations.json"), 'w', encoding='utf-8') as f:
-                # 与蒙版同理记录 SeriesInstanceUID：文件按 PatientID 命名，同一患者的
-                # 随访/复扫序列会共用文件名。放在保留键 __meta__ 下——切片键都是数字
-                # 字符串或 'all'，不会冲突；旧文件没有该键，加载端按「无法确认」处理。
-                json.dump({'__meta__': {'series_uid': self._current_series_uid()},
-                           **{str(k): v for k, v in self.global_annotations.items()}},
-                          f, indent=4)
-            # 一并保存 AI 多器官分割标签图，下次加载可直接恢复，免掉 ~100s 重算。
-            # 必须连同 SeriesInstanceUID 一起写入：加载时据此确认是同一序列，
-            # 避免把同一患者另一序列（随访/复扫）的蒙版张冠李戴（见 mask_cache_matches）。
-            if self.volume_mask is not None and np.any(self.volume_mask):
-                np.savez_compressed(os.path.join(ed, f"{pid}_mask.npz"),
-                                    mask=self.volume_mask,
-                                    series_uid=np.array(self._current_series_uid()))
+            os.makedirs(ed, exist_ok=True)
+
+            # 先完整序列化所有临时文件；任一写入失败时，既有目标文件均保持不变。
+            json_fd, json_temp = tempfile.mkstemp(
+                prefix=f".{pid}_annotations.", suffix=".tmp", dir=ed)
+            temp_paths.append(json_temp)
+            with os.fdopen(json_fd, 'w', encoding='utf-8') as f:
+                json.dump(payload, f, indent=4)
+                f.flush(); os.fsync(f.fileno())
+
+            if write_mask:
+                npz_fd, npz_temp = tempfile.mkstemp(
+                    prefix=f".{pid}_mask.", suffix=".tmp", dir=ed)
+                temp_paths.append(npz_temp)
+                with os.fdopen(npz_fd, 'wb') as f:
+                    np.savez_compressed(f, mask=self.volume_mask,
+                                        series_uid=np.array(series_uid),
+                                        geometry_fingerprint=np.array(geometry_fingerprint))
+                    f.flush(); os.fsync(f.fileno())
+
+            replacement_target = os.path.basename(json_target)
+            os.replace(json_temp, json_target); replaced.append(replacement_target)
+            if write_mask:
+                replacement_target = os.path.basename(npz_target)
+                os.replace(npz_temp, npz_target); replaced.append(replacement_target)
+
+            if write_mask:
+                # 只有所有目标替换均成功才消费 intent；失败路径保留 True，允许用户重试。
+                self._mask_cache_clear_requested = False
+
+            if self.anonymize:
+                QMessageBox.warning(
+                    self, "Internal project identifiers" if self.is_english else "内部工程仍含标识",
+                    ("De-ID does not anonymize internal project persistence. The JSON/NPZ cache "
+                     "retains PatientID/SeriesInstanceUID and geometry provenance for safe reload."
+                     if self.is_english else
+                     "脱敏开关不会匿名化内部工程持久化。为安全恢复与 provenance，JSON/NPZ 缓存"
+                     "仍保留 PatientID/SeriesInstanceUID 和几何标识。"))
             QMessageBox.information(self, "Success" if self.is_english else "成功",
                                     "Project saved." if self.is_english else "标注工程已保存。")
+            return True
         except Exception as e:
+            partial = ""
+            if replacement_target is not None:
+                joined = ", ".join(replaced)
+                completed = joined or "none"
+                partial = ((f"\nReplacement failed for {replacement_target}; already replaced: "
+                            f"{completed}. Cross-file atomicity is not provided.")
+                           if self.is_english else
+                           (f"\n替换失败目标：{replacement_target}；已替换目标："
+                            f"{joined or '无'}。本操作不提供跨文件原子性。"))
             QMessageBox.warning(self, "Save Failed" if self.is_english else "保存失败",
-                                (f"Failed to save project:\n{e}" if self.is_english
-                                 else f"标注工程保存失败：\n{e}"))
+                                ((f"Failed to save project:\n{e}{partial}") if self.is_english
+                                 else f"标注工程保存失败：\n{e}{partial}"))
+            return False
+        finally:
+            for temp_path in temp_paths:
+                try:
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
+                except OSError:
+                    pass
 
     # =========================================================================
     # 器官定量 / 图例
@@ -571,13 +699,18 @@ class AnnotationMixin:
     def _compute_organ_stats(self):
         """器官定量薄包装：读取 self 的体积/蒙版/spacing 后调用纯函数
         quantify.compute_organ_stats（无 Qt，可独立单测）。返回按体积降序的列表。"""
-        if self.volume_mask is None or self.volume_hu is None or not self.dicom_datasets:
+        if (self.volume_mask is None or self.volume_hu is None or not self.dicom_datasets
+                or not all((getattr(self, 'hu_calibrated', False),
+                            getattr(self, 'canonical_orientation', False),
+                            getattr(self, 'inplane_spacing_valid', False),
+                            getattr(self, 'uniform_z_geometry_valid', False)))):
             return []
         ds = self.dicom_datasets[0]
-        _psr = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)
-        spacing = (_psr,
-                   self._dcm_float(ds, 'PixelSpacing', _psr, idx=1),  # 列间距缺省回退行间距
-                   self._slice_spacing() or 1.0)   # 层间距而非层厚：见 main._slice_spacing
+        _psr = self._dcm_float(ds, 'PixelSpacing', 0.0, idx=0)
+        spacing = (_psr, self._dcm_float(ds, 'PixelSpacing', 0.0, idx=1),
+                   self._slice_spacing())
+        if not all(value > 0 for value in spacing):
+            return []
         # volume_conf 只在 ONNX 路径产出；手工编辑过蒙版后形状仍一致，故置信度沿用
         # 原推理结果——注意画笔改过的体素其置信度并非模型对新标签的置信度，
         # 这一点在定量面板的提示文案里已写明。
@@ -654,7 +787,10 @@ class AnnotationMixin:
         取 cb_paint_target 的选中项作为对象，与画笔编辑保持同一"当前器官"语义，
         不再单设一个下拉——多一个状态就多一处可能不同步。
         """
-        if self.volume_mask is None or not self._organ_stats:
+        if (self.volume_mask is None or not self._organ_stats
+                or not all((getattr(self, 'canonical_orientation', False),
+                            getattr(self, 'inplane_spacing_valid', False),
+                            getattr(self, 'uniform_z_geometry_valid', False)))):
             return
         lid = self.cb_paint_target.currentData()
         e = self.is_english
@@ -666,11 +802,12 @@ class AnnotationMixin:
         # extract_surface 的 spacing 契约是 (行间距, 列间距, 层厚)，两者不可混用同一个值：
         # 面内各向异性时，网格的体积/表面积/球形度与导出 STL 的尺寸会整体错，而数量级
         # 仍然对得上，肉眼看不出来。此前这里传的是 (ps, ps, st)。
-        ps_row = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0) if ds is not None else 1.0
-        ps_col = self._dcm_float(ds, 'PixelSpacing', ps_row, idx=1) if ds is not None else 1.0
-        ps = ps_row      # 层间距估算的标量代表值
+        ps_row = self._dcm_float(ds, 'PixelSpacing', 0.0, idx=0) if ds is not None else 0.0
+        ps_col = self._dcm_float(ds, 'PixelSpacing', 0.0, idx=1) if ds is not None else 0.0
         # z 尺度取层间距而非层厚（重叠重建下二者可差一倍，网格会被拉伸/压扁）
-        st = (self._slice_spacing() or (ps * 3)) if ds is not None else 1.0
+        st = self._slice_spacing() if ds is not None else 0.0
+        if not all(value > 0 for value in (ps_row, ps_col, st)):
+            return
         # marching cubes 在 512² 体积上 step=1 约 1.4s、step=2 约 0.11s（实测），
         # 故取 2：这是交互预览，不是几何精算；耗时与精度的取舍在 mesh3d 模块注释里说明。
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -766,10 +903,12 @@ class AnnotationMixin:
     def _export_stl(self, nm, verts, faces):
         """把网格写为 ASCII STL 到 Exported_Lesions/（文件名经 _safe_name 净化）。"""
         e = self.is_english
-        ed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Exported_Lesions")
+        ed = getattr(self, 'export_dir',
+                     os.path.join(os.path.dirname(os.path.abspath(__file__)), "Exported_Lesions"))
         os.makedirs(ed, exist_ok=True)
-        pid = "ANON" if self.anonymize else str(getattr(self.dicom_datasets[0], 'PatientID', 'Unknown'))
-        fp = os.path.join(ed, f"{self._safe_name(pid)}_{self._safe_name(nm)}.stl")
+        tag = self._export_tag() if self.anonymize else self._safe_name(
+            str(getattr(self.dicom_datasets[0], 'PatientID', 'Unknown')))
+        fp = self._unique_export_path(ed, f"{tag}_{self._safe_name(nm)}.stl")
         try:
             with open(fp, 'wb') as f:
                 f.write(mesh3d.to_stl_bytes(verts, faces, self._safe_name(nm)))
@@ -801,10 +940,12 @@ class AnnotationMixin:
         rows = self._organ_stats or self._compute_organ_stats()
         if not rows:
             return
-        pid = "ANON" if self.anonymize else str(getattr(self.dicom_datasets[0], 'PatientID', 'Unknown'))
-        ed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Exported_Lesions")
+        tag = self._export_tag() if self.anonymize else self._safe_name(
+            str(getattr(self.dicom_datasets[0], 'PatientID', 'Unknown')))
+        ed = getattr(self, 'export_dir',
+                     os.path.join(os.path.dirname(os.path.abspath(__file__)), "Exported_Lesions"))
         os.makedirs(ed, exist_ok=True)
-        fp = os.path.join(ed, f"{self._safe_name(pid)}_organ_stats.csv")
+        fp = self._unique_export_path(ed, f"{tag}_organ_stats.csv")
         try:
             with open(fp, 'w', newline='', encoding='utf-8-sig') as f:
                 w = csv.writer(f)
@@ -885,12 +1026,15 @@ class AnnotationMixin:
                     line.setToolTip(anno['id'])          # toolTip 存 UUID，Delete 键删除时用
                     line.setFlag(QGraphicsLineItem.ItemIsSelectable)
                     vdata['view'].scene.addItem(line)
-                    # 距离计算：勾股定理，分别乘以 X/Y 方向像素间距换算为毫米
-                    dist = math.sqrt(
-                        ((anno['p2'][0] - anno['p1'][0]) * sp[1]) ** 2 +
-                        ((anno['p2'][1] - anno['p1'][1]) * sp[0]) ** 2
-                    )
-                    txt = QGraphicsTextItem(f"{dist:.1f} mm")
+                    if getattr(self, 'inplane_spacing_valid', False):
+                        dist = math.sqrt(
+                            ((anno['p2'][0] - anno['p1'][0]) * sp[1]) ** 2 +
+                            ((anno['p2'][1] - anno['p1'][1]) * sp[0]) ** 2
+                        )
+                        label = f"{dist:.1f} mm"
+                    else:
+                        label = "distance unavailable" if self.is_english else "距离不可用"
+                    txt = QGraphicsTextItem(label)
                     txt.setDefaultTextColor(col)
                     txt.setFont(QFont("Arial", 11, QFont.Bold))
                     txt.setPos(anno['p2'][0] + 10, anno['p2'][1] + 10)
@@ -922,9 +1066,18 @@ class AnnotationMixin:
                     emask = ((xx - cx) / ax) ** 2 + ((yy - cy) / ay) ** 2 <= 1.0
                     vals = self.volume_hu[z][emask]
                     if vals.size:
-                        area = vals.size * sp[0] * sp[1]  # mm²（sp=行/列像素间距）
-                        stat = (f"{vals.mean():.0f}±{vals.std():.0f} HU\n"
-                                f"[{vals.min():.0f}, {vals.max():.0f}]\n{area:.0f} mm²")
+                        parts = []
+                        if getattr(self, 'hu_calibrated', False):
+                            parts += [f"{vals.mean():.0f}±{vals.std():.0f} HU",
+                                      f"[{vals.min():.0f}, {vals.max():.0f}]"]
+                        else:
+                            parts.append("HU unavailable" if self.is_english else "HU 不可用")
+                        if getattr(self, 'inplane_spacing_valid', False):
+                            area = vals.size * sp[0] * sp[1]
+                            parts.append(f"{area:.0f} mm²")
+                        else:
+                            parts.append("area unavailable" if self.is_english else "面积不可用")
+                        stat = "\n".join(parts)
                         txt = QGraphicsTextItem(stat)
                         txt.setDefaultTextColor(col)
                         txt.setFont(QFont("Arial", 10, QFont.Bold))

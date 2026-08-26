@@ -19,6 +19,7 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox
 import followup
 import mpr_geometry
 import registration
+from dicom_geometry import analyze_series
 
 
 class CompareMixin:
@@ -29,7 +30,11 @@ class CompareMixin:
         if self.compare_mode_active:
             self._exit_compare_mode()
             return
-        if self.volume_hu is None or self.recon_mode_active:
+        if (self.volume_hu is None or self.recon_mode_active
+                or not all((getattr(self, 'hu_calibrated', False),
+                            getattr(self, 'canonical_orientation', False),
+                            getattr(self, 'inplane_spacing_valid', False),
+                            getattr(self, 'uniform_z_geometry_valid', False)))):
             QMessageBox.information(self, "Info", "Load a primary series first (clinical mode)."
                                     if self.is_english else "请先在临床阅片模式加载主序列。")
             return
@@ -48,36 +53,39 @@ class CompareMixin:
     def _read_compare_dir(self, path):
         """读取对比序列，返回 (volume_hu, datasets)。复用主读取逻辑但不破坏当前 self.dicom_datasets。"""
         saved = self.dicom_datasets
+        saved_geometry = self.series_geometry
         try:
             if not self._read_dicom_dir(path):
                 return None, []
+            geometry = self.series_geometry
+            if not all((geometry.hu_calibrated, geometry.canonical_orientation,
+                        geometry.inplane_spacing_valid, geometry.uniform_z_geometry_valid)):
+                return None, []
             dsets = self.dicom_datasets
             vol = np.array([
-                d.pixel_array.astype(np.float32) * self._dcm_float(d, 'RescaleSlope', 1.0) +
-                self._dcm_float(d, 'RescaleIntercept', 0.0) for d in dsets])
+                d.pixel_array.astype(np.float32) * float(d.RescaleSlope) +
+                float(d.RescaleIntercept) for d in dsets])
             return vol, dsets
         except Exception as e:
             print(f"读取对比序列失败: {e}")
             return None, []
         finally:
             self.dicom_datasets = saved   # 恢复主序列，绝不让对比读取污染主数据
+            self.series_geometry = saved_geometry
 
     @staticmethod
     def _zpos_array(datasets):
-        """取各切片的解剖 z 坐标 ImagePositionPatient[2]；任一缺失或非有限则返回 None。
+        """取各切片沿 slice normal 的 patient-space 投影；无法证明则返回 None。
 
-        【NaN 必须和缺失同等对待】float(nan) 不抛异常，所以畸形 DICOM 里一个空的
-        ImagePositionPatient[2] 会安静地进到数组里；随后 nearest_slice 的 np.argmin
-        遇 NaN 会返回那个 NaN 的下标，于是【每一个】主序列层都映射到同一层既往切片，
-        而标题栏仍打「· 配准」，Δ / 绝对差 / RMSE 全部基于错误配对算出——看起来对、
-        数值全错。main.py 的 _slice_spacing 用同一个数组时是显式 np.isfinite 过滤的，
-        说明这条风险早就被认识到了，只是 nearest_slice 这条路没兜住。
+        【NaN 必须和缺失同等对待】patient-space 投影由完整有限 IPP 与逐片合规 IOP
+        共同证明；任一向量畸形都不能流入 nearest_slice 的 np.argmin，否则可能让多个
+        主序列层映射到同一既往切片，而界面仍显示已配准，差值/RMSE 就会基于错误配对。
         返回 None 会让调用方回退到按索引比例配准，那是可见且可解释的降级。
         """
-        try:
-            a = np.array([float(d.ImagePositionPatient[2]) for d in datasets])
-        except Exception:
+        geometry = analyze_series(datasets)
+        if geometry.projected_positions_mm is None:
             return None
+        a = np.asarray(geometry.projected_positions_mm, dtype=float)
         return a if a.size and np.isfinite(a).all() else None
 
     def _enter_compare_mode(self):

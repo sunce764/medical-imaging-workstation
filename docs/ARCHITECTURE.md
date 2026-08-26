@@ -4,7 +4,7 @@ Technical reference for the module layout, the segmentation-model reverse-engine
 
 ## Module layout
 
-The main window is a `MedicalViewer` **God object** decomposed into five UI mixins plus nine Qt-free compute modules that are unit-tested in isolation.
+The main window is a `MedicalViewer` **God object** decomposed into five UI mixins plus ten Qt-free compute modules that are unit-tested in isolation. The packaging inventory is the 19 top-level modules declared by `pyproject.toml`; `constants.py` is Qt-free but is a data table rather than a compute module.
 
 ```
 main.py            MedicalViewer + entry point (--data load, clinical render, W/L, tools, layout, AI scheduling, i18n, keyboard nav)
@@ -21,6 +21,7 @@ recon.py           reconstruction algorithms (Radon / BP / FBP / DFR / DMR / ART
 quantify.py        organ quantification (volume mL + seven HU statistics per organ)
 segmentation.py    classical fallback segmentation (lung connected-components)
 mpr_geometry.py    MPR coordinate mapping + dual-series z-registration
+dicom_geometry.py  classic CT HU-unit proof + patient-space geometry/order/fingerprint contracts
 followup.py        follow-up comparison metrics (HU difference map + per-slice statistics)
 projection.py      slab projection (MIP / MinIP / AIP) across the three planes
 mesh3d.py          organ surface reconstruction (marching cubes), shape features, numpy renderer (drives the drag-to-rotate preview), STL export
@@ -34,7 +35,7 @@ models/organs.onnx segmentation model graph (external weights not committed — 
 
 ### Design: why the compute modules are Qt-free
 
-Anything numerically testable is factored out of the Qt widgets into a pure module (`recon` / `quantify` / `segmentation` / `mpr_geometry` / `followup` / `projection` / `mesh3d` / `registration` / `model_card`), so it can be exercised with synthetic data in the data-independent test subset — no display, no real DICOM, no 119 MB weights. New testable logic follows the same pattern rather than being buried in a Qt- or data-dependent path.
+Anything numerically testable is factored out of the Qt widgets into a pure module (`recon` / `quantify` / `segmentation` / `mpr_geometry` / `dicom_geometry` / `followup` / `projection` / `mesh3d` / `registration` / `model_card`), so it can be exercised with synthetic data in the data-independent test subset — no display, no real DICOM, no 119 MB weights. New testable logic follows the same pattern rather than being buried in a Qt- or data-dependent path.
 
 ## Segmentation model
 
@@ -82,4 +83,4 @@ Inference runs on a background `threading.Thread`. UI updates are delivered to t
 
 ## Persistence
 
-Saving a project writes annotations and the AI mask under `Exported_Lesions/`. The mask cache (`{PatientID}_mask.npz`) is keyed by `PatientID` **and** validated against `SeriesInstanceUID` and shape on reload — a same-patient follow-up series (same 512² shape, different series) is refused rather than silently reused, which would otherwise report the wrong organ volumes.
+Saving a project writes annotations and the AI mask under `Exported_Lesions/`. The mask cache path (`{safe PatientID}_mask.npz`) uses the same filename-safe PatientID transformation as the rest of project persistence. Automatic restoration requires all three provenance checks to match: `SeriesInstanceUID`, mask/volume shape, and a geometry/order fingerprint. That fingerprint binds the ordered `SOPInstanceUID` sequence, IOP/IPP, projected patient-space slice positions, `PixelSpacing`, and volume shape. A same-patient follow-up series, reordered stack, or changed geometry is therefore refused rather than silently reused; legacy cache entries without the fingerprint fail closed.

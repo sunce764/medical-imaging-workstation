@@ -13,9 +13,9 @@
 **软件名称**：医学影像工作站软件（Medical Imaging Workstation Software）
 **软件版本**：V1.0
 **软件简介**：本软件是一款基于 PySide6（Qt6）的桌面端 CT 医学影像工作站，面向影像教学与科研，集成三大部分——**临床阅片工具**、**AI 多器官分割**、以及**CT 断层重建教学实验室**。软件支持 DICOM 影像的加载、多平面重组（MPR）阅片、窗宽窗位调节、测量与标注、AI 自动器官分割与定量、双序列随访对比，以及从投影到重建的完整教学演示。
-**运行环境**：Windows / macOS / Linux 桌面系统，Python 3.10；依赖 PySide6、pydicom、NumPy、SciPy、scikit-image、ONNX Runtime。
+**已验证运行环境**：macOS 本机（Python 3.10）；截至下述 snapshot，远端数据无关测试曾在 GitHub Actions 的 Ubuntu runner 通过。Windows 未在该 snapshot 验证，不能据此声明平台兼容性。依赖 PySide6、pydicom、NumPy、SciPy、scikit-image、ONNX Runtime。
 **开发语言**：Python。
-**软件规模**：应用代码约 6,000 行，划分为 18 个模块；配套 515 项自动化回归测试（其中 424 项不依赖真实数据，随 CI 运行）。
+**软件规模**：应用代码分为 UI mixin 与无 Qt 计算模块；截至 2026-08-26 记录的 pre-commit 本地 freeze-candidate snapshot，本机全套回归为 758 PASS，`SKIP_REAL_DATA=1` 子集为 667 PASS。这些是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。
 **定位声明**：本软件为**影像教学 / 科研工具**，**不是经认证的医疗器械，不得用于临床诊断**；AI 分割与定量结果为自动推断，仅供参考。
 
 ---
@@ -51,13 +51,13 @@ python main.py --data <DICOM目录路径>    # 启动即加载指定 DICOM 目�
 
 ## 四、DICOM 数据加载
 
-单击右侧面板顶部的**「加载 DICOM 目录」**按钮，在弹出的文件夹选择对话框中选择包含 DICOM 切片的目录，软件将：
+单击右侧面板顶部的**「加载 DICOM 目录」**按钮，在弹出的文件夹选择对话框中选择包含 DICOM 切片的目录。当前 loader 的受支持输入是 **classic single-frame CT Image Storage**；non-CT、Enhanced CT 与 multi-frame 输入会在 pixel decode 前拒绝。对于受支持输入，软件将：
 
 - **并行读盘**：多线程读取目录内全部 DICOM 文件，加速大序列加载；
-- **多序列处理**：若目录含多个序列，自动选取切片数最多的序列，并按切片矩阵尺寸过滤，避免混叠；
-- **解剖排序**：优先按 `ImagePositionPatient`（床位 Z 坐标）排序，缺失时回退按 `InstanceNumber` 排序，保证解剖层面顺序正确；
-- **构建三维体数据**：按 DICOM 标准 `HU = 像素值 × RescaleSlope + RescaleIntercept` 逐层转换为 HU 值三维数组；
-- 加载完成后自动跳转到中间层，并在后台启动 AI 分割推理（见第七节）。
+- **多序列处理**：multi-file 输入只在每片都有 `SeriesInstanceUID` 时分组；缺 UID 时 fail closed，避免把未知系列混到一起。组内再按多数切片矩阵尺寸过滤；
+- **空间排序**：当所有切片的 `ImageOrientationPatient` / `ImagePositionPatient` 都有限且方向一致时，按 `dot(IPP, normal)` 的 patient-space 投影排序；无法证明时整列回退 `InstanceNumber`，但不会把这一回退声称为可靠解剖顺序；
+- **强度与单位证明**：每一保留层都必须有有限且非零的 `RescaleSlope`、有限的 `RescaleIntercept`，并满足 explicit `RescaleType=HU`，或满足 classic CT 的标准保证（`ImageType` 为 `ORIGINAL`、非 `LOCALIZER`、非 multi-energy），才按 `HU = stored value × slope + intercept` 构建 HU volume；否则整卷保留 raw stored values，关闭 CT preset、HU 定量、AI 与 HU follow-up，避免混合或虚构 HU。multi-energy CT 本轮明确不支持，但不据此声称其数值本质上一定不是 HU；
+- **能力门控**：valid PixelSpacing、canonical orientation、uniform projected-z geometry 分别独立记录。只有相应契约成立时才开放 mm/mm²、MPR、mL/physical STL、AI 与 follow-up；non-canonical 或缺失 geometry 的输入保留安全的 viewer-only 功能，不显示伪 anatomical labels 或伪物理单位。
 
 ---
 
@@ -182,7 +182,7 @@ python main.py --data <DICOM目录路径>    # 启动即加载指定 DICOM 目�
 
 ## 八、双序列随访对比
 
-单击右侧**「加载对比序列」** 按钮，选择既往检查的 DICOM 目录，软件进入双窗对比模式：左窗（V1）为当前序列，右窗（V2）为既往序列。两序列**按 `ImagePositionPatient` 解剖 Z 坐标配准**（同一解剖层面并排显示），切片与窗位联动；缺位置信息时回退按索引比例映射。再次单击**「退出对比」** 返回。脱敏开启时，对比标题中的既往检查日期会被隐去。
+单击右侧**「加载对比序列」**按钮并选择既往 DICOM 目录后，只有当前与既往序列都满足 HU calibration、canonical orientation、valid in-plane spacing 与 uniform projected-z geometry 契约时才进入双窗对比。切片对应按各自 `dot(IPP, normal)` 的 patient-space 位置建立；缺失或不规则 geometry 会明确拒绝，而不会按索引比例伪装成解剖对应。脱敏开启时，对比标题中的既往检查日期会被隐去。
 
 ### 8.1 差异定量
 
@@ -238,7 +238,7 @@ python main.py --data <DICOM目录路径>    # 启动即加载指定 DICOM 目�
 
 单击**「深度学习重建 (CNN 后处理)」**，用一个自实现的残差 U-Net 去除稀疏角 FBP 的条纹伪影。**V3 显示网络的输入（ramp-FBP）、V4 显示网络输出**，便于直接对比"网络到底改了什么"。
 
-方法与量化结果见[实验说明](../experiments/README.md)与[技术报告](technical_report.md)研究三：在随机模体家族上，RMSE 较最优线性滤波低 3–6 倍，病灶对比度保留率从与视角数无关的 0.87 天花板提升到 0.96–1.00，且实测虚假结构（幻觉）检出率 1.7%（30% 阈值以上为 0%）——以上均在**无噪声投影**下测得，而这正是最不容易产生幻觉的条件，故 1.7% 应视为下界。
+方法与量化结果见[实验说明](../experiments/README.md)与[技术报告](technical_report.md)研究三：在随机模体家族上，RMSE 较最优线性滤波低 3–6 倍，病灶对比度保留率从 0.87 提升到 0.96–1.00。**60 组无噪声 synthetic paired phantoms** 上，20%-of-lesion threshold 的 false-structure rate 为 **1.67%**，30% 与 50% threshold 均为 **0%**。未加入 photon noise，因此 1.67% 对 low-dose CT 既不是上界也不是下界；变化方向和幅度均未测，也不据此声称 low SNR 是 dominant driver。
 
 > **三处限制直接写在界面上，不只写在文档里**：
 > - **模型在 20 视角下训练**。当前视角数与之不符时，V4 标题会明确标注「⚠ 视角不匹配」——用在其他视角下效果会打折，软件不会假装它通用。
@@ -253,7 +253,8 @@ python main.py --data <DICOM目录路径>    # 启动即加载指定 DICOM 目�
 
 ## 十、合规与脱敏
 
-- **脱敏开关**：右侧「显示控制」的「脱敏（De-ID）」复选开启后，一键隐去屏幕显示与导出文件名中的患者身份信息（显示层脱敏）。
+- **脱敏开关**：开启「脱敏（De-ID）」后，屏幕身份固定显示为 `ANON`，显式导出文件名使用本次加载生成的随机 `ANON-…` 别名并在重名时追加 suffix，因此连续导出不会静默覆盖。它不是 DICOM anonymizer：不会改写源 DICOM tags，不会移除 burned-in pixel text；内部 project JSON / mask cache 仍保留用于匹配的 patient/series identifiers 与 geometry fingerprint，保存时界面会再次提示。
+- **工程状态持久化**：AI-pending 的全零 mask 只是 placeholder，不会生成假 cache hit。用户确认执行全局清空后，下一次成功保存会写入带 provenance 的 explicit-empty mask，避免重开时旧非零 cache 复活；保存前 Ctrl+Z 会恢复原非零 mask。逐体素 eraser 最终擦成全零不属于该全局清空语义。
 - **AI 免责声明**：AI 面板常驻显示免责声明，导出的定量 CSV 亦内嵌该声明。
 
 ---

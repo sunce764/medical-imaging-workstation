@@ -24,11 +24,11 @@
 
 ## 只看一节的话，看这三个结果
 
-**缺陷出在评估，不在模型。** 同一份权重得 **0.490 或 0.746** Dice——唯一变化的是推理张量的尺寸，输入体素一个都没动。`InstanceNorm3d` 逐样本在空间维求统计量；HU 归一化后，空气与补零同为一个值，于是放大张量抹掉了 **99.3%** 的预测前景（225,374 → 1,529 体素）。五条针对性对照，各自排除一种竞争解释——是「针对性」而非「统计独立」：它们跑在重叠的病例与同一份权重上，各自瞄准一个竞争解释。
+**一个 model–inference-path interaction。** 同一份学生权重仅改变张量 extent 就得到 **0.490 或 0.746** Dice：fixed-size / no-augmentation 训练与 zero-padding、`InstanceNorm3d` 相互作用，后者会随 padding extent 改变逐样本空间统计量。放大张量抹掉了 **99.3%** 的预测前景（225,374 → 1,529 体素）。五条针对性对照把机制指向 normalization sensitivity，但没有做 normalization replacement，因此既不能认定唯一因果，也不能写成“评估坏、模型没问题”。
 
 **一次改动了产品的消融。** 引擎此前静默跳过了 nnU-Net 强制要求的、重采样到训练 spacing 这一步。先测量、后修复：Dice **0.684 → 0.840**，配对 **20 例全部改善**（Wilcoxon *p* = 1.9×10⁻⁶）；本机那条 RIDER 序列上的推理从 **100s / 8.8GB 降到 37s / 3.0GB**——同时更准、也更省。
 
-**一个没能站住的试跑结果。** 加 z 向重叠这件事，3 例试跑曾给出 **+0.205**；全量测试划分——61 例留出，其中 59 例至少含一个在册器官因而可评——只有 **+0.0133**［+0.0072, +0.0194］。两个数字都留在这个仓库里。跑全样本的意义，正在于拦住离群值成为头条。
+**一个没能站住的试跑结果。** 加 z 向重叠这件事，3 例试跑曾给出 **+0.205**；指定的 61 例 test split 对 student training 留出，但 teacher 很可能训练时见过，且此后已在仓库中多次评估，其中 59 例可评，结果只有 **+0.0133**［+0.0072, +0.0194］。两个数字都留在这个仓库里。跑全样本的意义，正在于拦住离群值成为头条。
 
 Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开去标识研究 CT · **仓库不提交 PHI**。
 
@@ -37,7 +37,7 @@ Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开
 | 文件 | 里面是什么 | 支撑产物 |
 |---|---|---|
 | [`recon.py`](recon.py) | 基于中心切片定理的直接傅里叶重建（含偶数尺寸的半像素修正）、解析 Shepp-Logan 模体，以及 DMR / ART / SIRT 求解器——均按第一性原理自行实现。Radon/FBP 调 scikit-image，下方表格逐项写明哪个是哪个 | [`exp_a_dose_quality.csv`](experiments/results/exp_a_dose_quality.csv)、[`exp_b_filters.csv`](experiments/results/exp_b_filters.csv) |
-| [`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) | 定位评估缺陷的五条针对性对照（针对不同竞争解释，非统计独立），以及让 59 例配对比较得以放进内存的流式 z 融合 | [`_pad.csv`](experiments/results/seg3d_infer_bias_pad.csv)、[`_norm.csv`](experiments/results/seg3d_infer_bias_norm.csv)、[`_bench_A.csv`](experiments/results/seg3d_infer_bias_bench_A.csv) / [`_bench_B.csv`](experiments/results/seg3d_infer_bias_bench_B.csv) |
+| [`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) | 学生模型 tensor extent / padding / normalization interaction 的五条对照；以及独立的产品 teacher z-overlap A/B 和支撑 59 例配对运行的流式融合 | [`_pad.csv`](experiments/results/seg3d_infer_bias_pad.csv)、[`_norm.csv`](experiments/results/seg3d_infer_bias_norm.csv)、[`_bench_A.csv`](experiments/results/seg3d_infer_bias_bench_A.csv) / [`_bench_B.csv`](experiments/results/seg3d_infer_bias_bench_B.csv) |
 | [`seg3d_train.py`](experiments/seg3d_train.py) · [`seg3d_eval.py`](experiments/seg3d_eval.py) | 从零训练的 3D U-Net：患者级划分（`SPLIT_SEED=0` → 207/29/61）、配对评估、bootstrap CI、Wilcoxon | [`seg3d_student_*_zslab.csv`](experiments/results/seg3d_student_ch8d3_33600s_zslab.csv)、[`seg3d_teacher_dice.csv`](experiments/results/seg3d_teacher_dice.csv) |
 | [`recon_dl.py`](experiments/recon_dl.py) | 用于稀疏视角重建的 1.9M 残差 U-Net，测的不只是 RMSE，还有虚构结构率与分布外迁移 | [`recon_dl_matrix.csv`](experiments/results/recon_dl_matrix.csv)、[`recon_dl_hallucination.csv`](experiments/results/recon_dl_hallucination.csv)、[`recon_dl_ood.csv`](experiments/results/recon_dl_ood.csv) |
 
@@ -67,10 +67,10 @@ Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开
 
 | 模块 | 能力 |
 |---|---|
-| **临床阅片** | 解剖排序 DICOM 加载 · 三平面 MPR + 十字线联动 · 6 套窗位预设 + 反色 · 三平面厚层 MIP / MinIP / AIP · 9 个测量和标注工具 · 椭圆 ROI 统计 · 四角 PACS 叠加 · Cine 播放 · 双序列随访对比 |
+| **临床阅片** | classic single-frame CT；仅在 patient-space geometry 可证明时按解剖方向排序；anatomical MPR 只要求 canonical orientation、有效 in-plane spacing 与 uniform z geometry，HU preset / ROI / AI 等 intensity consumer 则独立要求有效 CT calibration；slab projection · 9 种带能力门控的测量与标注工具 · 椭圆 ROI 统计 · PACS 四角信息 · Cine 播放 · follow-up comparison 要求完整 geometry/intensity contract。Enhanced/multi-frame 与 non-CT 输入拒绝；non-canonical 或 geometry 不完整时只保留安全的 viewer 功能 |
 | **AI 分割** | 25 类后台滑窗 ONNX 推理（含 5 个肺叶）· 三平面彩色叠加与可点图例 · 光标 HUD · 器官统计与 CSV 导出 · marching cubes 三维表面预览、形状特征与 STL 导出 · 画笔/橡皮编辑和撤销 · 逐体素置信度 |
 | **重建实验室** | 内置解析 Shepp-Logan 模体 · Radon 投影 · BP / 含 5 种滤波器的 FBP / DFR · 从零实现的 DMR、ART、SIRT · 误差图与 RMSE · 学习式 CNN 后处理，并在界面展示训练视角和输入滤波器限制 |
-| **安全与审阅** | 显示层脱敏 · 常驻 AI 免责声明 · 模型说明卡（实测出处及未测边界）· 中英双语界面 |
+| **安全与审阅** | 屏幕身份固定替换为 `ANON`；显式导出文件名使用每次加载随机 `ANON-…` 别名并以 suffix 防覆盖 · 明示 DICOM tags、内部 project/cache identifiers 与 burned-in pixel text 不会被自动匿名化 · 常驻 AI 免责声明 · 模型说明卡（实测出处及未测边界）· 中英双语界面 |
 
 ## 自己实现的，与调用库的
 
@@ -112,8 +112,8 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 |---|---|---|
 | **研究 I —— 重建剂量-质量** | 误差在 ≈180 视角后趋平——**实测表明那是重建链路自身的离散化地板（圆内 RMSE ≈0.03539;720/1440/2880 视角三者相差 0.02% 以内且不再下降），不是剂量结论**；最优 FBP 滤波器从稀疏角的平滑滤波切换为稠密角的锐利 Ram-Lak。**「ART 最鲁棒」这一结论已撤回**：它出自 1:20 的算力失衡（5 轮对 100 轮），各自取最优时 SIRT 在每一档剂量都优 9–20%。后续对同一批系统矩阵做 SVD 来检验本研究自己对最小二乘失稳的解释，结果**要改的是工具而非结论**：2-范数条件数对其中两个系统根本无定义，但最小二乘实际求逆的那部分谱上的噪声增益，恰在近方阵处取 23–37 倍的尖峰。替代说法刻意只做定性——不声称对该尖峰的任何定量归因。后续另补上了方法集里缺的一块：原先没有 TV 正则化基线，而它是稀疏角重建的标准对照。**ASD-POCS 在本研究的噪声水平下把最优求解器的误差压掉 45.1–54.7%（相对 SIRT 自身最优点），而到 η≈9% 时优势已在 60、90 视角转负（−0.8%、−10.0%），30 视角仍赢 6.4%**——可报告的结论是这条信噪比依赖关系，不是那个头条数字；另跑了一个刻意与 TV 先验作对的模体来试图推翻它，没能推翻。 | 解析二维 Shepp-Logan 模体；矩阵法限制在 ≈64×64；ART/SIRT 迭代次数固定、未逐剂量调优。[预印本稿](docs/preprint_recon.md) · [条件数 CSV](experiments/results/exp_c_conditioning.csv) |
 | **研究 II —— 模型出处与 Dice** | 标签重叠混淆矩阵实测出未文档化模型的标签方案即 TotalSegmentator v2 `class_map_part_organs`——21 个在场器官呈身份对角线——并纠正两处标签错误。被实测的是**标签映射**；由此推断这份权重就是那个上游 release，是很强的推断，但不是密码学意义上的证明。**20 例**患者级平均 Dice **0.909**（95% CI [0.889, 0.927]），单例 0.922 略偏乐观但落在区间内。 | 器官间可靠性差异远大于总体数字所示：肝 0.982、脾 0.976，而右肺上叶 0.773、前列腺 0.554（仅 7 例在场）。[`seg_multi.py`](experiments/seg_multi.py) |
-| **研究 III —— 学习式稀疏角重建** | 自实现 1.9M 参数残差 U-Net 将 RMSE 降低 **3–6 倍**，病灶对比度保留率从 0.87 提升至 **0.96–1.00**；虚假结构率为 1.7%，分布外增益比为 0.81。 | 使用无噪声合成投影；幻觉率只是有利条件下的估计，不是上界或下界；在光子饥饿的低剂量 CT 中方向与幅度均未实测。 |
-| **研究 IV —— 压缩分割模型，以及它暴露出的评估缺陷** | 从零训练的 0.35M 3D U-Net，对照随软件发布的 31.2M 教师。给它打分时暴露出问题出在**评估**而非模型——同一份权重仅因张量尺寸不同即得 **0.490 或 0.746**（见上表）。把同样的怀疑用到产品推理路径上，配对覆盖全部 24 器官、**test 集 61 例中的 59 例**，得到全器官 Dice **+0.0133**［+0.0072, +0.0194］，**59 例中 54 例改善**，代价 1.18× 耗时与 +0.65GB。 | 五条针对性对照各自排除一种竞争解释（针对不同竞争解释，非统计独立）；3 例试跑曾给出的 **+0.205** 没能挺过全样本。在留出的 test 集上、以**同一条推理路径**相比，学生比教师低 **0.4500**［-0.4877, -0.4118］（234 个叶次）——0.35M 在此并未逼近 31.2M。两条推理路径混用，在同一份权重上值 0.33 Dice，故报告脚本拒绝把它们画进同一张图。[`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) · [完整记述](experiments/README.md) |
+| **研究 III —— 学习式稀疏角重建** | 自实现 1.9M 参数残差 U-Net 将 RMSE 降低 **3–6 倍**，病灶对比度保留率从 0.87 提升至 **0.96–1.00**，分布外增益比为 0.81。**60 组无噪声 synthetic paired phantoms** 上，20%-of-lesion threshold 的 false-structure rate 为 **1.67%**，30% 与 50% threshold 均为 **0%**。 | 未加入 photon noise。1.67% 对 low-dose CT 既不是上界也不是下界；方向与幅度均未测，因此不声称 low SNR 是 dominant driver。 |
+| **研究 IV —— 压缩分割模型与 model–inference-path interaction** | 从零训练的 0.35M 3D U-Net 对照 31.2M teacher。学生暴露出 tensor extent / zero-padding × `InstanceNorm3d` × fixed-size/no-augmentation training 的 interaction：同一权重得 **0.490 或 0.746**。对照把机制指向 normalization sensitivity，但未做 normalization replacement，不能认定唯一因果。 | 学生 input-size collapse 与产品 teacher 的 z-overlap/seam A/B 是两件事。后者覆盖全部 24 器官、**test 集 61 例中的 59 例**，得到 Dice **+0.0133**［+0.0072, +0.0194］，代价 1.18× 耗时与 +0.65GB；同为 `zslab` path 时，学生比 teacher 低 **0.4500**［-0.4877, -0.4118］（234 个叶次）。[`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) · [完整记述](experiments/README.md) |
 | **消融 —— spacing 契约** | 引擎此前跳过了 nnU-Net 必需的「重采样到训练 spacing」。先测代价（spacing 偏离一倍时平均 Dice 由 0.9219 掉到 0.7995，小器官最先垮且非单调），再据此实现。**20 例配对**下同一份失配输入由 **0.684 回升到 0.840**，**20/20 例全部改善**（Wilcoxon *p* = 1.9×10⁻⁶）；同一条本机序列的推理由 100s / 8.8GB 降至 **37s / 3.0GB**。 | 32GB 机器只测得到变粗方向，更细一侧是据「属降采样」推断而非实测。蒙版边界现按 1.5mm 网格量化——结构级准确度升、像素级边界精度降。[`seg_spacing.py`](experiments/seg_spacing.py) |
 | **扩展验证 —— 肺叶** | 57 例公开 CT 的五肺叶平均 Dice 为 **0.8867**（95% CI **[0.859, 0.914]**）；右肺上叶为 0.727，而原单例为 0.967。 | 只验证五个肺叶。该结论被独立印证：另一次 20 例运行用不同脚本、不同抽样，把同一个右肺上叶测为 0.773。[`seg3d_teacher.py`](experiments/seg3d_teacher.py) |
 
@@ -129,13 +129,13 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 
 ## 工程与测试
 
-- 原 God-object 已拆分为 **5 个 UI mixin + 9 个无 Qt 计算模块**。
-- 作者机器上全套 **629 项检查**，`SKIP_REAL_DATA=1` 可达 **539 项**。**fresh local clone 实测为 520 项**。最近的日期化远端验证为 **2026-08-25 verified baseline `5c555ef`**：[run `32831264615`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32831264615) 记录 **520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`。它与本地计数的差值不是不稳定，而是那些需要「干净 clone 拿不到的产物」（未分发的 `.onnx.data` 权重与 `.pt` checkpoint）的检查在那里根本不会执行。该 clean-clone 方法历史上也与 CI 一致：提交 `7a09744` 处两者均为 **458**（[run 日志](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32590281440)）。后续远端状态只在绑定 GitHub Actions run 及其精确 `headSha` 时才具有证据力。留在 CI 之外的是需要 RIDER 序列或那些权重的部分——**不是**交互层，交互层由合成 DICOM 与合成鼠标/滚轮事件覆盖。自定义 runner 现也会把 Qt signal/slot 的未捕获异常计为失败，不能再出现“打印 traceback 但 exit 0”的假绿。
+- 原 God-object 已拆分为 **5 个 UI mixin + 10 个无 Qt 计算模块**；完整的 19-module packaging inventory 以 `pyproject.toml` 为准。
+- **截至 2026-08-26 记录的 pre-commit 本地 freeze-candidate snapshot**，本机全套（本地 RIDER 在场）为 **758 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **667 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`；该历史 CI 不覆盖此 pre-commit candidate snapshot。后续远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力，其 run/headSha 应记入仓库外 evidence 或交付摘要，不再制造第二个文档 commit。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
-python tests/test_gui.py                     # 完整回归：本地 629 项；需本地 RIDER 数据
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 本地 539 项；fresh local clone 实测 520 项
+python tests/test_gui.py                     # 2026-08-26 pre-commit snapshot：本机全套 758 项；本地 RIDER 在场
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-26 pre-commit snapshot：本机数据无关子集 667 项
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```
@@ -143,7 +143,7 @@ coverage run tests/test_gui.py && coverage report
 <details>
 <summary><strong>覆盖率详情</strong></summary>
 
-离屏 Qt 覆盖率 **90%**（3438 条语句）。九个无 Qt 模块（`recon` 88%、`quantify` 100%、`segmentation` 92%、`mpr_geometry` 96%、`followup` 90%、`projection` 95%、`mesh3d` 96%、`registration` 98%、`model_card` 87%）均有独立单测；合成鼠标 press/move/release 序列会断言信号载荷（`graphics_view` 91%）。此前无人走过的几层提升明显：重建实验室 UI 调度 `recon_lab` 44% → **89%**，标注/分割编辑 `annotation_lab` 74% → **83%**，鼠标交互调度 `interaction.py` 64% → **98%**、随访对比 `compare_lab` 82% → **95%**。写这些断言的过程挖出三个只读代码发现不了的缺陷：光标移出体积后探针仍显示上一次的读数、模型说明卡遇到截断的 CSV 会崩、数字 id 的标注永远渲染不出也删不掉。因此，CI 全绿只代表数据无关子集通过，不等于所有本地数据交互测试均已运行。
+2026-08-26 pre-commit snapshot 未重算 coverage。截至该 snapshot，上面的最新 exact-SHA 远端 baseline 报告 **81%**；新增 geometry/safety 代码后，其 denominator 与各模块百分比都不能作为该 pre-commit snapshot 的证据。未来应由新的 exact-SHA run 重新发布 coverage，而不是沿用旧数字。
 
 </details>
 
@@ -164,6 +164,8 @@ coverage run tests/test_gui.py && coverage report
 
 - **非临床器械：**无监管认证、临床验证档案、审计追踪或访问控制。
 - **仅做显示层脱敏：**屏幕与导出文件名会隐藏 PHI，但不会清洗底层 DICOM 标签和烧录文字。
+- **HU 单位必须有证据，不能只看 slope/intercept：**每一保留层都必须有 explicit `RescaleType=HU`，或满足 classic CT 的 `ORIGINAL`、非 `LOCALIZER`、非 multi-energy 标准保证，才开放 HU consumer。缺 explicit HU 的 `DERIVED`、未知/非 HU 单位、mixed-unit series 与 multi-energy CT 均只作 raw-value viewer-only。
+- **换序列与 mask 状态 fail-safe：**新序列成功接管后才清旧 HU probe，并用新单位重建 HUD；加载失败则保留旧 readout。AI-pending 全零 placeholder 不会被保存成假 cache hit；只有经确认的全局清空才持久化带 provenance 的 empty mask、作废旧 AI callback，并可在保存前 Ctrl+Z。逐体素 eraser 最终擦成全零尚不归类为 explicit global clear。
 - **AI 泛化仍有未测部分：**肺叶验证 57 例、21 器官验证 20 例，样本量仍小，且全部来自同一个公开数据集（1.5mm 各向同性）；其他扫描协议与设备未经测试，器官间可靠性的差异远大于总体数字（肝 0.98 vs 前列腺 0.55）。spacing 重采样已接入（见证据表），但更细一侧仍属推断而非实测，且扫描范围过大时会被跳过。
 - **重建限于教学范围：**DMR / ART / ASD-POCS 矩阵重建受最小二乘成本限制，实用上限约 64×64。研究 III 使用无噪声合成投影，不能证明低剂量临床表现。
 - **随访为刚性而非形变配准：**平面内配准在测试中将整体平移造成的 MAE 从 321 HU 降至 13 HU，但不会校正呼吸引起的器官形变；差异结果只能作定性参考，不能视为临床变化量。

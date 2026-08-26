@@ -317,6 +317,18 @@ class MedicalGraphicsView(QGraphicsView):
             if item not in keep:
                 self.scene.removeItem(item)
 
+    def cancel_ruler_preview(self):
+        """取消尚未提交的 Ruler 交互，供 spacing capability 失效时安全降级。"""
+        if self.current_tool != TOOL_RULER:
+            return
+        for item in (self.temp_item, self.temp_text):
+            if item is not None and item.scene() is self.scene:
+                self.scene.removeItem(item)
+        self.temp_item = None
+        self.temp_text = None
+        self.start_pos = None
+        self.is_drawing = False
+
     def leaveEvent(self, event):
         """鼠标离开视图时隐藏画笔预览圈。"""
         self.brush_cursor.setVisible(False)

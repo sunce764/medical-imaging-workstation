@@ -46,8 +46,8 @@ class InteractionMixin:
 
         坐标映射规则（三平面共用同一个 3D 光标 [z, y, x]）：
           - Axial 视图   → 鼠标 (px, py) 对应 3D 的 (x=px, y=py)，z 不变
-          - Coronal 视图 → 鼠标 (px, py) 对应 3D 的 (x=px, z=py)，y 不变
-          - Sagittal 视图 → 鼠标 (px, py) 对应 3D 的 (y=px, z=py)，x 不变
+          - Coronal 视图 → 鼠标 (px, py) 对应 3D 的 (x=px, z=Z-1-py)，y 不变
+          - Sagittal 视图 → 鼠标 (px, py) 对应 3D 的 (y=px, z=Z-1-py)，x 不变
         """
         if self.volume_hu is None or self.recon_mode_active or self.compare_mode_active:
             return
@@ -72,13 +72,16 @@ class InteractionMixin:
         for vdata in self.views.values():
             if vdata['container'].isHidden():
                 continue
-            cx, cy = mpr_geometry.voxel_to_crosshair(vdata['plane'], z, y, x)
+            cx, cy = mpr_geometry.voxel_to_crosshair(
+                vdata['plane'], z, y, x, self.volume_hu.shape)
             vdata['view'].draw_crosshair(cx, cy)
 
     def _update_hud(self, z, y, x):
         """更新光标 HUD：显示 (x,y,z) 坐标、该体素 HU 值、以及所在器官（若有分割）。"""
         hu = float(self.volume_hu[z, y, x])
-        txt = f"({x}, {y}, {z})  {hu:.0f} HU"
+        unit = "HU" if getattr(self, 'hu_calibrated', False) else (
+            "stored value" if self.is_english else "原始值")
+        txt = f"({x}, {y}, {z})  {hu:.0f} {unit}"
         if self.volume_mask is not None:
             lid = int(self.volume_mask[z, y, x])
             if lid != 0:
@@ -148,17 +151,24 @@ class InteractionMixin:
         vd = self.views.get(vid)
         if vd is None: return
         c = vd['view'].get_real_coordinates(p); plane = vd['plane']
-        # 三平面各自的 (z,y,x) 索引；plane 不在三者之内时得 None，与越界同样处理
-        idx = None if not c else {
-            AXIAL: (self.current_3d_pos[0], c[1], c[0]),
-            CORONAL: (c[1], self.current_3d_pos[1], c[0]),
-            SAGITTAL: (c[1], c[0], self.current_3d_pos[2]),
-        }.get(plane)
-        if idx is None or not all(0 <= i < n for i, n in zip(idx, self.volume_hu.shape, strict=True)):
+        if not c or plane not in (AXIAL, CORONAL, SAGITTAL):
             self.lbl_hu_value.setText("")   # 读不出就清空，绝不留旧值冒充当前读数
             return
+        px, py = int(c[0]), int(c[1])
+        Z, Y, X = self.volume_hu.shape
+        screen_shape = {AXIAL: (X, Y), CORONAL: (X, Z), SAGITTAL: (Y, Z)}[plane]
+        if not (0 <= px < screen_shape[0] and 0 <= py < screen_shape[1]):
+            self.lbl_hu_value.setText("")
+            return
+        # 与 render/hover/crosshair 共用同一坐标约定：Coronal/Sagittal 上 S / 下 I，
+        # 因而 screen py 必须映射为 volume z=Z-1-py，不能直接把 py 当 z。
+        idx = mpr_geometry.hover_to_voxel(
+            plane, px, py, tuple(self.current_3d_pos), self.volume_hu.shape)
         names = ({AXIAL: "Axial", CORONAL: "Coronal", SAGITTAL: "Sagittal"} if self.is_english
                  else {AXIAL: "横断面", CORONAL: "冠状面", SAGITTAL: "矢状面"})
+        unit = "HU" if getattr(self, 'hu_calibrated', False) else (
+            "stored value" if self.is_english else "原始值")
+        plane_name = names[plane] if getattr(self, 'canonical_orientation', False) else (
+            "Source plane" if self.is_english else "原始体素平面")
         self.lbl_hu_value.setText(
-            f"V{vid} [{names[plane]}] ({c[0]}, {c[1]}) : {float(self.volume_hu[idx]):.1f} HU")
-
+            f"V{vid} [{plane_name}] ({c[0]}, {c[1]}) : {float(self.volume_hu[idx]):.1f} {unit}")

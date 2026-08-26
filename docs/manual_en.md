@@ -13,9 +13,9 @@
 **Software name**: Medical Imaging Workstation Software
 **Software version**: V1.0
 **Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
-**Operating environment**: Windows / macOS / Linux desktop systems, Python 3.10; depends on PySide6, pydicom, NumPy, SciPy, scikit-image, ONNX Runtime.
+**Verified environment**: local macOS with Python 3.10; the data-independent suite had also passed historically on a GitHub Actions Ubuntu runner as of the snapshot below. Windows was not verified in that snapshot and no platform-compatibility claim is made for it. Dependencies include PySide6, pydicom, NumPy, SciPy, scikit-image, and ONNX Runtime.
 **Development language**: Python.
-**Software scale**: application code of about 6,000 lines across 18 modules, accompanied by 515 automated regression checks (424 of which are data-independent and run in CI).
+**Software scale**: application code is split across UI mixins and Qt-free compute modules. The 2026-08-26 pre-commit local freeze-candidate snapshot recorded 758 local full-suite checks and 667 `SKIP_REAL_DATA=1` checks; these are local results, not fresh-clone, coverage, or remote-CI evidence.
 **Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
 
 ---
@@ -51,13 +51,13 @@ The top tabs switch between the two working modes, **Clinical reading** and **Re
 
 ## 4. Loading DICOM Data
 
-Click the **"Load DICOM directory"** button at the top of the right panel, and in the folder-selection dialog that pops up choose a directory containing DICOM slices. The software will:
+Click the **"Load DICOM directory"** button at the top of the right panel and choose a directory containing DICOM slices. The current loader supports **classic single-frame CT Image Storage**; non-CT, Enhanced CT, and multi-frame inputs are rejected before pixel decoding. For supported input, the software will:
 
 - **Parallel disk reading**: read all DICOM files in the directory with multiple threads, speeding up loading of large series;
-- **Multi-series handling**: if the directory contains multiple series, automatically select the series with the most slices and filter by slice matrix size to avoid mixing;
-- **Anatomical sorting**: sort preferentially by `ImagePositionPatient` (couch Z coordinate), falling back to `InstanceNumber` when it is missing, to keep the anatomical slice order correct;
-- **Building the 3-D volume**: convert layer by layer into a 3-D HU array following the DICOM standard `HU = pixel value × RescaleSlope + RescaleIntercept`;
-- After loading completes, automatically jump to the middle slice and start AI segmentation inference in the background (see Section 7).
+- **Multi-series handling**: multi-file input is grouped only when every slice has a `SeriesInstanceUID`; otherwise it fails closed rather than merging unknown series. The selected group is then filtered to the majority matrix shape;
+- **Spatial sorting**: when every slice has finite, consistent `ImageOrientationPatient` and `ImagePositionPatient`, sort by the patient-space projection `dot(IPP, normal)`. If that geometry cannot be proved, fall back for the whole series to `InstanceNumber`, without claiming that this establishes anatomical order;
+- **Intensity and unit proof**: every retained slice must have finite non-zero `RescaleSlope` plus finite `RescaleIntercept`, and must either declare `RescaleType=HU` or satisfy the classic CT standard guarantee (`ImageType` is `ORIGINAL`, not `LOCALIZER`, and not multi-energy). Otherwise the entire volume stays in raw stored values and CT presets, HU quantification, AI, and HU follow-up are disabled rather than mixing or inventing HU units. Multi-energy CT remains unsupported even when some such images may intrinsically represent HU;
+- **Capability gating**: valid PixelSpacing, canonical orientation, and uniform projected-z geometry are tracked independently. mm/mm², MPR, mL/physical STL, AI, and follow-up are enabled only when their contracts are proved. Non-canonical or incomplete geometry remains viewer-only where safe, with no invented anatomical labels or physical units.
 
 ---
 
@@ -182,7 +182,7 @@ Using the "Segmentation brush / Segmentation eraser" tools, you can manually add
 
 ## 8. Dual-series Follow-up Comparison
 
-Click the **"Load comparison series"** button on the right and select the DICOM directory of a prior examination; the software enters dual-view comparison mode: the left view (V1) is the current series, the right view (V2) is the prior series. The two series are **registered by the `ImagePositionPatient` anatomical Z coordinate** (the same anatomical slice is shown side by side), with slices and window level linked; when position information is missing, it falls back to mapping by index ratio. Clicking **"Exit comparison"** returns. When de-identification is enabled, the prior examination date in the comparison title is hidden.
+Click **"Load comparison series"** and select the prior DICOM directory. Dual-view comparison is entered only when both series satisfy HU calibration, canonical orientation, valid in-plane spacing, and uniform projected-z geometry. Slice correspondence uses each series' `dot(IPP, normal)` patient-space positions; missing or irregular geometry is rejected explicitly rather than presented as anatomical correspondence through index-ratio fallback. When de-identification is enabled, the prior examination date in the comparison title is hidden.
 
 ### 8.1 Difference quantification
 
@@ -238,7 +238,7 @@ In the "Direct matrix reconstruction & ART / SIRT" area, select the **image size
 
 Click **"DL Recon (CNN post-processing)"** to remove sparse-view FBP streak artefacts with a self-implemented residual U-Net. **V3 shows the network's input (ramp-FBP) and V4 its output**, so what the network actually changed can be compared directly.
 
-Method and quantitative results are in the [experiments guide](../experiments/README.md) and Study III of the [technical report](technical_report.md): on a random phantom family, RMSE is 3–6× lower than the best linear filter, lesion-contrast retention rises from a view-count-independent 0.87 ceiling to 0.96–1.00, and the measured false-structure (hallucination) rate is 1.7% (0% beyond a 30% threshold) — all under noise-free projections, i.e. the condition least likely to induce hallucination, so treat 1.7% as a lower bound.
+Method and quantitative results are in the [experiments guide](../experiments/README.md) and Study III of the [technical report](technical_report.md): on a random phantom family, RMSE is 3–6× lower than the best linear filter and lesion-contrast retention rises from 0.87 to 0.96–1.00. Across **60 noise-free synthetic paired phantoms**, the false-structure rate is **1.67%** at the 20%-of-lesion threshold and **0%** at 30% and 50%. Photon noise was not applied, so 1.67% is neither an upper nor a lower bound for low-dose CT; both direction and magnitude are unmeasured, and low SNR is not claimed as the dominant driver.
 
 > **Three limitations are stated in the UI itself, not just in the docs:**
 > - **The model was trained at 20 views.** When the current view count differs, the V4 title is tagged "⚠ view mismatch" — results degrade at other view counts, and the software does not pretend otherwise.
@@ -253,7 +253,8 @@ The "Algorithm performance monitoring" area displays in real time the running ti
 
 ## 10. Compliance and De-identification
 
-- **De-identification switch**: after the "De-ID" checkbox in the right "Display control" is enabled, patient identity information in the on-screen display and in export filenames is hidden with one click (display-layer de-identification).
+- **De-identification switch**: after "De-ID" is enabled, on-screen identity is shown as `ANON`; explicit export filenames use a random `ANON-…` alias generated for the current load and add a suffix on collision, so repeated exports do not silently overwrite one another. This is not a DICOM anonymizer: it does not rewrite source DICOM tags or remove burned-in pixel text. Internal project JSON and mask caches retain patient/series identifiers and a geometry fingerprint for matching, and the UI warns again when saving them.
+- **Project-state persistence**: an AI-pending all-zero mask is only a placeholder and does not create a cache hit. Confirming the global clear action records an explicit provenance-bound empty mask on the next successful save, so an older non-zero cache cannot reappear after reopening; Ctrl+Z before saving restores the non-zero mask. Voxel-by-voxel erasing to zero is not treated as this global-clear action.
 - **AI disclaimer**: the AI panel permanently displays a disclaimer, and the exported quantification CSV also embeds that disclaimer.
 
 ---

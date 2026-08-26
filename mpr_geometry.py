@@ -7,8 +7,8 @@
 #
 # 坐标约定（三平面共用同一个 3D 光标 [z, y, x]）：
 #   - Axial    视图 (px,py) → 3D 的 (x=px, y=py)，z 不变
-#   - Coronal  视图 (px,py) → 3D 的 (x=px, z=py)，y 不变
-#   - Sagittal 视图 (px,py) → 3D 的 (y=px, z=py)，x 不变
+#   - Coronal  视图 (px,py) → 3D 的 (x=px, z=Z-1-py)，y 不变（上 S / 下 I）
+#   - Sagittal 视图 (px,py) → 3D 的 (y=px, z=Z-1-py)，x 不变（上 S / 下 I）
 # =============================================================================
 
 from __future__ import annotations
@@ -28,21 +28,22 @@ def hover_to_voxel(plane: int, px: int, py: int,
     if plane == AXIAL:
         x, y = px, py
     elif plane == CORONAL:
-        x, z = px, py
+        x, z = px, Z - 1 - py
     elif plane == SAGITTAL:
-        y, z = px, py
+        y, z = px, Z - 1 - py
     x = max(0, min(x, X - 1))
     y = max(0, min(y, Y - 1))
     z = max(0, min(z, Z - 1))
     return z, y, x
 
 
-def voxel_to_crosshair(plane: int, z: int, y: int, x: int) -> tuple[int, int]:
+def voxel_to_crosshair(plane: int, z: int, y: int, x: int,
+                       shape: tuple[int, int, int]) -> tuple[int, int]:
     """把 3D 光标 (z,y,x) 投影为某平面上十字准线的 2D 坐标 (cx,cy)。"""
     if plane == CORONAL:
-        return x, z
+        return x, shape[0] - 1 - z
     if plane == SAGITTAL:
-        return y, z
+        return y, shape[0] - 1 - z
     return x, y  # AXIAL（含缺省）
 
 

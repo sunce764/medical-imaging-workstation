@@ -27,7 +27,7 @@ from PySide6.QtWidgets import QApplication, QGraphicsTextItem, QGraphicsView, QM
 
 import ai_engine
 import main as m
-from constants import AXIAL, CORONAL, MANUAL_TRACK_LABEL, TOOL_POINTER
+from constants import AXIAL, CORONAL, MANUAL_TRACK_LABEL, TOOL_POINTER, TOOL_RULER
 from graphics_view import ROIGraphicsItem
 
 # 静音弹窗，避免离屏阻塞。三个都必须 stub：question 曾被遗漏，导致触发
@@ -60,6 +60,40 @@ def drain(engine, app, extra=40):
         app.processEvents()
     for _ in range(extra):
         app.processEvents()
+
+
+def _mark_supported_capabilities(viewer, slice_spacing=1.0):
+    """手工 volume fixture 显式声明其测试所需的完整 CT contract。"""
+    from types import SimpleNamespace
+
+    from dicom_geometry import SeriesGeometry
+    viewer.hu_calibrated = True
+    viewer.canonical_orientation = True
+    viewer.inplane_spacing_valid = True
+    viewer.uniform_z_geometry_valid = True
+    viewer.series_geometry = SeriesGeometry(
+        True, True, True, True, None, None, float(slice_spacing))
+    if getattr(viewer, 'dicom_datasets', None):
+        viewer.dicom_datasets = [
+            (SimpleNamespace(PatientID='SYNTH', PatientName='SYNTH', Modality='CT',
+                             SeriesInstanceUID='1.2.3', SOPInstanceUID=f'1.2.3.{i + 1}',
+                             ImageOrientationPatient=(1, 0, 0, 0, 1, 0),
+                             ImagePositionPatient=(0, 0, i * float(slice_spacing)),
+                             PixelSpacing=(1.0, 1.0), RescaleSlope=1,
+                             RescaleIntercept=-1024)
+             if dataset is None else dataset)
+            for i, dataset in enumerate(viewer.dicom_datasets)]
+        for i, dataset in enumerate(viewer.dicom_datasets):
+            defaults = {
+                'PatientID': 'SYNTH', 'PatientName': 'SYNTH', 'Modality': 'CT',
+                'SeriesInstanceUID': '1.2.3', 'SOPInstanceUID': f'1.2.3.{i + 1}',
+                'ImageOrientationPatient': (1, 0, 0, 0, 1, 0),
+                'ImagePositionPatient': (0, 0, i * float(slice_spacing)),
+                'PixelSpacing': (1.0, 1.0), 'RescaleSlope': 1, 'RescaleIntercept': -1024,
+            }
+            for name, value in defaults.items():
+                if not hasattr(dataset, name):
+                    setattr(dataset, name, value)
 
 
 def test_runner_catches_qt_slot_exceptions():
@@ -167,7 +201,9 @@ def test_prior_fixes(v, app):
     # MPR 悬停联动
     v.btn_mpr.setChecked(True); v.views[1]['plane'] = CORONAL
     v.sync_crosshair(QPointF(100, 60), 1)
-    check(v.current_3d_pos[0] == 60 and v.slider_slice.value() == 60, "MPR 悬停同步光标与滑条")
+    expected_z = v.volume_hu.shape[0] - 1 - 60
+    check(v.current_3d_pos[0] == expected_z and v.slider_slice.value() == expected_z,
+          "MPR 上 S / 下 I 悬停同步翻转后的光标与滑条")
     v.btn_mpr.setChecked(False); v.views[1]['plane'] = AXIAL
     # reset 清 HUD / _user_zoomed；load 清 hidden
     v.lbl_hud.setText("x"); v.views[1]['view']._user_zoomed = True
@@ -186,6 +222,11 @@ def test_prior_fixes(v, app):
 
 def test_multiorgan_and_edit(v, app):
     print("[多器官分割 / 手动编辑]")
+    # 本地 RIDER 副本的 ImageType=DERIVED 且无 RescaleType，产品现已正确 viewer-only。
+    # 这里测的是 organ-edit UI 接线，故显式把该测试 fixture 标成具备完整 synthetic contract，
+    # 用完立即恢复真实 series capability；不把这一 override 当作 DICOM HU 证据。
+    saved_geometry = v.series_geometry
+    _mark_supported_capabilities(v, saved_geometry.slice_spacing_mm or 1.0)
     z = v.current_3d_pos[0]
     v.volume_mask = np.zeros(v.volume_hu.shape, np.uint8)
     v.volume_mask[z][50:100, 50:100] = 10
@@ -214,6 +255,8 @@ def test_multiorgan_and_edit(v, app):
                         ("Sagittal", v.volume_mask[:, :, xc], v.volume_hu[:, :, xc])):
         check(msk.shape == hu.shape and int((msk != 0).sum()) > 0,
               f"{nm} 面蒙版切片与影像切片同形 {msk.shape} 且含分割 (得 {int((msk != 0).sum())} 体素)")
+    v.series_geometry = saved_geometry
+    v._apply_series_capabilities(); v._update_organ_stats(); app.processEvents()
 
 
 def test_roi(v, app):
@@ -310,8 +353,26 @@ def test_compare(v, app):
     saved_id = id(v.dicom_datasets)                # 否则污染后续测试的可见视图集合
     # 「配准」只在对比模式下有意义：未加载对比序列时可勾但毫无效果，是误导性控件
     check(not v.chk_register.isEnabled(), "未进对比模式时「配准」禁用")
+    # RIDER 副本是 DERIVED 且无 explicit RescaleType=HU；按新单位 contract 应拒绝作为
+    # HU follow-up。另用标准 classic synthetic CT 证明成功路径，二者都必须恢复主序列对象。
     vol, dsets = v._read_compare_dir(os.path.join(_ROOT, "肺癌"))
-    check(vol is not None and id(v.dicom_datasets) == saved_id, "读取对比序列不污染主序列")
+    check(vol is None and dsets == [] and id(v.dicom_datasets) == saved_id,
+          "DERIVED/无 explicit HU 的 RIDER compare fail closed，且不污染主序列")
+    import shutil
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    compare_dir = tempfile.mkdtemp()
+    try:
+        uid = generate_uid()
+        for i in range(3):
+            _write_min_dcm(os.path.join(compare_dir, f"s{i}.dcm"), (8, 8), uid,
+                           ipp_z=i, inst=i + 1)
+        vol, dsets = v._read_compare_dir(compare_dir)
+        check(vol is not None and len(dsets) == 3 and id(v.dicom_datasets) == saved_id,
+              "标准 classic HU compare 成功，且不污染主序列")
+    finally:
+        shutil.rmtree(compare_dir, ignore_errors=True)
     v.compare_volume = np.zeros((10, 64, 64), np.float32)
     v.compare_datasets = [type('D', (), {'StudyDate': '20200115'})()]
     v.compare_mode_active = True
@@ -409,7 +470,7 @@ def test_compliance(v, app):
     v.views[1]['plane'] = AXIAL; v.update_display(); app.processEvents()
     tl = v.views[1]['view'].overlay_lines.get('tl', [])
     check(any("ANON" in s for s in tl), "脱敏隐去四角叠加身份")
-    check(v._export_tag() == "ANON", "脱敏导出文件名用匿名前缀")
+    check(v._export_tag().startswith("ANON-"), "脱敏导出文件名用 per-load 匿名前缀")
     v.chk_anon.setChecked(False); app.processEvents()
     check(v.info_labels["ID"].text() == real_id, "关闭脱敏恢复真实身份")
     check("非诊断依据" in v.lbl_disclaimer.text(), "AI 面板常驻免责声明")
@@ -457,7 +518,11 @@ def test_edge_cases(v, app):
 
 
 def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_numeric=False,
-                   n_frames=1, truncate=False, pix=100, slope=1, intercept=-1024):
+                   n_frames=1, truncate=False, pix=100, slope=1, intercept=-1024,
+                   ipp=None, iop=(1, 0, 0, 0, 1, 0), modality='CT', sop_class_uid=None,
+                   pixel_spacing=(1.0, 1.0), pixels=None,
+                   image_type=('ORIGINAL', 'PRIMARY', 'AXIAL'), rescale_type=None,
+                   multi_energy=None):
     """写一张最小合规的 CT DICOM，供混合形状加载测试使用。ipp_z=None 则不写 ImagePositionPatient。
     empty_numeric=True 时把 RescaleSlope/Intercept/PixelSpacing/SliceThickness 写成空值（None）。
     n_frames>1 写多帧 DICOM；truncate=True 写截断的 PixelData（pixel_array 解码会抛）。
@@ -465,21 +530,33 @@ def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_n
     import numpy as _np
     from pydicom.dataset import FileDataset, FileMetaDataset
     from pydicom.uid import CTImageStorage, ExplicitVRLittleEndian, generate_uid
+    sop_class_uid = sop_class_uid or CTImageStorage
     rows, cols = shape
     meta = FileMetaDataset()
-    meta.MediaStorageSOPClassUID = CTImageStorage
+    meta.MediaStorageSOPClassUID = sop_class_uid
     meta.MediaStorageSOPInstanceUID = generate_uid()
     meta.TransferSyntaxUID = ExplicitVRLittleEndian
     ds = FileDataset(path, {}, file_meta=meta, preamble=b"\0" * 128)
     ds.PatientID = pid
     ds.SeriesInstanceUID = series_uid
     ds.SOPInstanceUID = meta.MediaStorageSOPInstanceUID
-    ds.SOPClassUID = CTImageStorage
-    ds.Modality = 'CT'
+    ds.SOPClassUID = sop_class_uid
+    ds.Modality = modality
+    if image_type is not None:
+        ds.ImageType = list(image_type)
+    if rescale_type is not None:
+        ds.RescaleType = rescale_type
+    if multi_energy is not None:
+        # DICOM keyword spelling follows pydicom's data dictionary for (0018,9361).
+        ds.MultienergyCTAcquisition = multi_energy
     ds.InstanceNumber = inst
-    if ipp_z is not None:
+    if ipp is not None:
+        ds.ImagePositionPatient = [float(x) for x in ipp]
+    elif ipp_z is not None:
         ds.ImagePositionPatient = [0.0, 0.0, float(ipp_z)]
-    ds.PixelSpacing = None if empty_numeric else [1.0, 1.0]
+    if iop is not None:
+        ds.ImageOrientationPatient = [float(x) for x in iop]
+    ds.PixelSpacing = None if empty_numeric else [float(x) for x in pixel_spacing]
     ds.SliceThickness = None if empty_numeric else 1.0
     ds.RescaleSlope = None if empty_numeric else slope
     ds.RescaleIntercept = None if empty_numeric else intercept
@@ -490,7 +567,12 @@ def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_n
     ds.BitsStored = 16
     ds.HighBit = 15
     ds.PixelRepresentation = 1
-    if n_frames > 1:
+    if pixels is not None:
+        pixel_array = _np.asarray(pixels, dtype=_np.int16)
+        if pixel_array.shape != (rows, cols):
+            raise ValueError(f"pixels shape {pixel_array.shape} != {(rows, cols)}")
+        ds.PixelData = pixel_array.tobytes()
+    elif n_frames > 1:
         ds.NumberOfFrames = n_frames
         ds.PixelData = _np.full((n_frames, rows, cols), pix, dtype=_np.int16).tobytes()
     else:
@@ -499,8 +581,958 @@ def _write_min_dcm(path, shape, series_uid, ipp_z, inst, pid='RID_TEST', empty_n
     ds.save_as(path, write_like_original=False)
 
 
+def test_load_clears_stale_hu_probe(app):
+    """成功换序列清掉旧 probe，并为新序列重建 HUD；失败 load 保留旧状态。"""
+    print("[DICOM load：成功换序列清 stale probe / 失败保留旧 readout]")
+    import shutil
+    import tempfile
+    import unittest.mock as _mock
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtCore import QPointF
+
+    root = tempfile.mkdtemp()
+    persistence_dir = tempfile.mkdtemp()
+    v = None
+    try:
+        valid_a = os.path.join(root, "valid-a")
+        valid_b = os.path.join(root, "valid-b")
+        raw_dir = os.path.join(root, "raw")
+        empty_dir = os.path.join(root, "empty")
+        for directory in (valid_a, valid_b, raw_dir, empty_dir):
+            os.makedirs(directory)
+        for directory, uid, pix, image_type in (
+                (valid_a, generate_uid(), 100, ('ORIGINAL', 'PRIMARY', 'AXIAL')),
+                (valid_b, generate_uid(), 300, ('ORIGINAL', 'PRIMARY', 'AXIAL')),
+                (raw_dir, generate_uid(), 700, ('DERIVED', 'SECONDARY', 'PROCESSED'))):
+            for i in range(3):
+                _write_min_dcm(os.path.join(directory, f"s{i}.dcm"), (8, 8), uid,
+                               ipp_z=i, inst=i + 1, pid="STALE_PROBE", pix=pix,
+                               image_type=image_type)
+
+        v = m.MedicalViewer(); app.processEvents()
+        if v.ai_thread: v.ai_thread.cancel()
+        v.persistence_dir = persistence_dir
+        v._kickoff_ai = lambda: None
+        view_t = type(v.views[1]['view'])
+
+        def leave_real_probe_readout():
+            v.views[1]['plane'] = AXIAL
+            with _mock.patch.object(view_t, 'get_real_coordinates', lambda _s, _p: (3, 3)):
+                v.measure_hu(QPointF(0, 0), 1)
+            v._update_hud(*v.current_3d_pos)
+            check(bool(v.lbl_hu_value.text()) and "HU" in v.lbl_hu_value.text(),
+                  "fixture 通过真实 measure_hu 路径留下旧 HU probe")
+
+        v.load_data(valid_a); app.processEvents()
+        leave_real_probe_readout()
+        v.load_data(raw_dir); app.processEvents()
+        check(v.lbl_hu_value.text() == "",
+              "valid HU → 成功 raw load：无需 mouse move 即清空旧 probe")
+        check(not v.hu_calibrated and "HU" not in v.lbl_hud.text()
+              and ("stored value" in v.lbl_hud.text().lower() or "原始值" in v.lbl_hud.text()),
+              f"成功 raw load 为新序列重建 raw HUD（{v.lbl_hud.text()}）")
+
+        v.load_data(valid_a); app.processEvents()
+        leave_real_probe_readout()
+        v.load_data(valid_b); app.processEvents()
+        check(v.hu_calibrated and v.lbl_hu_value.text() == "",
+              "valid HU → 成功另一 valid load：清空旧 probe")
+
+        leave_real_probe_readout()
+        before_datasets = v.dicom_datasets
+        before_volume = v.volume_hu
+        before_probe = v.lbl_hu_value.text()
+        before_hud = v.lbl_hud.text()
+        v.load_data(empty_dir); app.processEvents()
+        check(v.dicom_datasets is before_datasets and v.volume_hu is before_volume
+              and v.lbl_hu_value.text() == before_probe and v.lbl_hud.text() == before_hud,
+              "空目录 load 失败：保留旧 series、probe 与 HUD")
+    finally:
+        if v is not None:
+            if v.ai_thread: v.ai_thread.cancel()
+            v.close(); app.processEvents()
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(persistence_dir, ignore_errors=True)
+
+
+def test_noncanonical_dicom_gating(app):
+    """Sagittal classic CT 只能进入可辨识的 viewer-only 状态，不能伪装成 canonical axial。
+
+    这是 patient-space contract 的第一条 tracer bullet：IOP 的 normal 沿 patient +x，
+    若产品仍把数组轴当 (S/P, L/R, S/I) canonical volume，静态方位字母、MPR、AI 和
+    mL/STL 都会有确定性的语义错误。单层 HU 仍可由逐片 calibration 正确得到，故不应
+    因 orientation 无效而把已经校准的 2-D window/probe 一并关闭。
+    """
+    print("[DICOM contract：non-canonical sagittal viewer-only gating]")
+    import shutil
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    d = tempfile.mkdtemp()
+    v = None
+    try:
+        sid = generate_uid()
+        # IOP: columns -> Posterior, rows -> Superior, normal -> Left (+x).
+        iop = (0, 1, 0, 0, 0, 1)
+        for i, x in enumerate((4.0, 2.0, 0.0), start=1):
+            _write_min_dcm(os.path.join(d, f"s{i}.dcm"), (8, 10), sid, ipp_z=None,
+                           inst=i, pid=f"SAG_{sid[-8:]}", ipp=(x, 0, 0), iop=iop,
+                           pixel_spacing=(2.0, 3.0), pix=500, slope=2, intercept=-1000)
+        v = m.MedicalViewer(); app.processEvents()
+        kicked = {'n': 0}
+        v._kickoff_ai = lambda: kicked.__setitem__('n', kicked['n'] + 1)
+        v.load_data(d); app.processEvents()
+        flags = tuple(getattr(v, name, None) for name in
+                      ('hu_calibrated', 'canonical_orientation',
+                       'inplane_spacing_valid', 'uniform_z_geometry_valid'))
+        check(v.volume_hu is not None and bool(np.allclose(v.volume_hu, 0.0)),
+              "逐片 slope/intercept 仍得到已校准 HU（500×2−1000=0）")
+        check(flags == (True, False, True, True),
+              f"能力 flags 分轴保存为 HU=True/canonical=False/inplane=True/z=True（得 {flags}）")
+        check(kicked['n'] == 0, "non-canonical orientation 不启动器官 AI")
+        check(not v.btn_mpr.isEnabled(), "non-canonical orientation 禁用 anatomical MPR")
+        first_view = v.views[min(v.views)]
+        check(first_view['view'].orient_labels == {}
+              and any("原始体素平面" in line
+                      for line in first_view['view'].overlay_lines.get('tr', [])),
+              "viewer-only 不显示伪 A/P/L/R/S/I 或 Axial/Coronal/Sagittal 声明")
+        check(all(not vd['cb_plane'].isEnabled() for vd in v.views.values()),
+              "viewer-only 禁用 anatomical plane 切换")
+        check(not v.btn_export_stats.isEnabled() and not v.btn_mesh3d.isEnabled(),
+              "non-canonical orientation 禁用器官定量与 physical 3-D")
+    finally:
+        if v is not None:
+            if v.ai_thread: v.ai_thread.cancel()
+            v.close(); app.processEvents()
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_unsupported_dicom_contract(app):
+    """非 CT、Enhanced CT 与 multi-frame classic CT 必须在 pixel decode 前拒绝。"""
+    print("[DICOM contract：unsupported modality/SOP/multiframe fail closed]")
+    import shutil
+    import tempfile
+
+    from pydicom.uid import EnhancedCTImageStorage, MRImageStorage, generate_uid
+    root = tempfile.mkdtemp()
+    v = m.MedicalViewer(); app.processEvents()
+    try:
+        cases = (
+            ("non_ct", {"modality": "MR", "sop_class_uid": MRImageStorage}),
+            ("enhanced_ct", {"sop_class_uid": EnhancedCTImageStorage, "n_frames": 2}),
+            ("multiframe_classic", {"n_frames": 2}),
+        )
+        for name, kwargs in cases:
+            case_dir = os.path.join(root, name); os.makedirs(case_dir)
+            _write_min_dcm(os.path.join(case_dir, "one.dcm"), (8, 8), generate_uid(),
+                           ipp_z=0, inst=1, **kwargs)
+            accepted = v._read_dicom_dir(case_dir)
+            check(accepted is False,
+                  f"{name} 在 _read_dicom_dir contract 阶段拒绝（pixel_array 尚未访问）")
+    finally:
+        if v.ai_thread: v.ai_thread.cancel()
+        v.close(); app.processEvents()
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_missing_series_uid_contract(app):
+    """无 SeriesInstanceUID 的多文件输入拒绝；单文件无混序风险，允许 viewer-only。"""
+    print("[DICOM contract：missing SeriesInstanceUID]")
+    import shutil
+    import tempfile
+
+    import pydicom
+    from pydicom.uid import generate_uid
+    root = tempfile.mkdtemp()
+    v = m.MedicalViewer(); app.processEvents()
+    try:
+        multi = os.path.join(root, "multi"); os.makedirs(multi)
+        for i in range(2):
+            path = os.path.join(multi, f"s{i}.dcm")
+            _write_min_dcm(path, (8, 8), generate_uid(), ipp_z=i, inst=i + 1)
+            ds = pydicom.dcmread(path); del ds.SeriesInstanceUID; ds.save_as(path)
+        check(v._read_dicom_dir(multi) is False,
+              "缺 SeriesInstanceUID 的 multi-file 输入 fail closed（不按空字符串归组）")
+
+        single = os.path.join(root, "single"); os.makedirs(single)
+        path = os.path.join(single, "one.dcm")
+        _write_min_dcm(path, (8, 8), generate_uid(), ipp_z=0, inst=1)
+        ds = pydicom.dcmread(path); del ds.SeriesInstanceUID; ds.save_as(path)
+        check(v._read_dicom_dir(single) is True and len(v.dicom_datasets) == 1,
+              "单文件缺 SeriesInstanceUID 明确允许（后续因无 z 间距保持 viewer-only）")
+    finally:
+        if v.ai_thread: v.ai_thread.cancel()
+        v.close(); app.processEvents()
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_patient_space_geometry_contract():
+    """纯函数验证 LPS affine、normal 排序、容差边界与 uniform-z fail-closed。"""
+    print("[DICOM geometry：LPS affine / tolerance / z contract]")
+    from types import SimpleNamespace
+
+    import dicom_geometry as dg
+
+    axial = (1, 0, 0, 0, 1, 0)
+
+    def ds(z, iop=axial, ipp=True, slope=1, intercept=-1024):
+        kw = dict(ImageOrientationPatient=iop, PixelSpacing=(2, 3),
+                  RescaleSlope=slope, RescaleIntercept=intercept,
+                  ImageType=('ORIGINAL', 'PRIMARY', 'AXIAL'))
+        if ipp:
+            kw['ImagePositionPatient'] = (0, 0, z)
+        return SimpleNamespace(**kw)
+
+    reversed_series = [ds(4, slope=2), ds(0, intercept=-1000), ds(2, slope=3)]
+    g = dg.analyze_series(reversed_series)
+    check(g.sort_indices == (1, 2, 0) and g.slice_spacing_mm == 2.0,
+          f"按 dot(IPP, normal) 统一排序并推导 2mm gap（得 {g.sort_indices}/{g.slice_spacing_mm}）")
+    check(g.hu_calibrated and g.canonical_orientation and g.inplane_spacing_valid
+          and g.uniform_z_geometry_valid,
+          "逐片不同 slope/intercept 合法，四项能力独立为 True")
+
+    eps_in = dg.CANONICAL_ORIENTATION_ATOL * 0.5
+    eps_out = dg.CANONICAL_ORIENTATION_ATOL * 2.0
+    inside = (1, eps_in, 0, -eps_in, 1, 0)
+    outside = (1, eps_out, 0, -eps_out, 1, 0)
+    check(dg.analyze_series([ds(0, inside), ds(1, inside)]).canonical_orientation,
+          "IOP perturbation 在命名 tolerance 内视为 canonical")
+    check(not dg.analyze_series([ds(0, outside), ds(1, outside)]).canonical_orientation,
+          "IOP perturbation 越过 tolerance 后不再伪称 canonical")
+
+    inconsistent = dg.analyze_series([ds(0), ds(1), ds(2, (0, 1, 0, 0, 0, 1))])
+    duplicate = dg.analyze_series([ds(0), ds(1), ds(1)])
+    irregular = dg.analyze_series([ds(0), ds(1), ds(3)])
+    missing = dg.analyze_series([ds(0), ds(1, ipp=False)])
+    drifted = [ds(0), ds(1), ds(2)]
+    for i, item in enumerate(drifted):
+        item.ImagePositionPatient = (i * 0.25, 0, i)
+    jittered = [ds(0), ds(1), ds(2)]
+    for i, item in enumerate(jittered):
+        item.ImagePositionPatient = (i * dg.POSITION_ATOL_MM * 0.25, 0, i)
+    check(not inconsistent.uniform_z_geometry_valid and not inconsistent.canonical_orientation,
+          "slice IOP 不一致关闭 canonical 与 uniform-z")
+
+    # 第二片的 column direction 只偏 5e-5，仍落在 series consistency tolerance 内；
+    # 若只验证首片的 norm/dot，它会被错误接受，故必须逐片先验正交性。
+    later_nonorthogonal = (1, 0, 0, 5e-5, 1, 0)
+    per_slice_bad = dg.analyze_series([ds(0), ds(1, later_nonorthogonal)])
+    check(not per_slice_bad.canonical_orientation
+          and not per_slice_bad.uniform_z_geometry_valid,
+          "首片合法、后片轻微非正交：逐片 IOP 校验 fail closed")
+    check(not duplicate.uniform_z_geometry_valid and not irregular.uniform_z_geometry_valid
+          and not missing.uniform_z_geometry_valid,
+          "重复、不规则或缺失位置均关闭 uniform-z")
+    check(not dg.analyze_series(drifted).uniform_z_geometry_valid
+          and dg.analyze_series(jittered).uniform_z_geometry_valid,
+          "slice origin 面内漂移 fail closed，容差内数值 jitter 不误伤")
+
+    patient_coordinate = getattr(dg, 'patient_coordinate', None)
+    edge_labels = getattr(dg, 'voxel_plane_edge_labels', None)
+    check(callable(patient_coordinate) and callable(edge_labels),
+          "产品 geometry 模块公开 DICOM array→patient LPS 与 edge derivation")
+    if callable(patient_coordinate) and callable(edge_labels):
+        # 不对称 landmark 位于 array(r=9,c=7)：3mm column direction、2mm row direction。
+        point = patient_coordinate((-10, -20, 30), axial, (2, 3), row=9, column=7)
+        check(np.allclose(point, (11, -2, 30)),
+              f"不对称 landmark 的实际 LPS=(11,-2,30)，即向 Left/Posterior 移动（得 {point}）")
+        check(edge_labels(axial) == {'top': 'A', 'bottom': 'P', 'left': 'R', 'right': 'L'},
+              "由真实 LPS edge 推导 canonical axial 上A/下P/左R/右L")
+
+
+def test_invalid_calibration_raw_gating(app):
+    """任一 slice 无法证明 CT calibration 时，全序列 raw 显示且不产生伪 HU。"""
+    print("[DICOM intensity：invalid calibration raw viewer gating]")
+    import shutil
+    import tempfile
+
+    import pydicom
+    from pydicom.uid import generate_uid
+    d = tempfile.mkdtemp()
+    valid = tempfile.mkdtemp()
+    v = None
+    try:
+        valid_sid = generate_uid()
+        for i in range(3):
+            _write_min_dcm(os.path.join(valid, f"s{i}.dcm"), (8, 8), valid_sid,
+                           ipp_z=i, inst=i + 1)
+        sid = generate_uid()
+        for i in range(3):
+            path = os.path.join(d, f"s{i}.dcm")
+            _write_min_dcm(path, (8, 8), sid, ipp_z=i, inst=i + 1, pix=100,
+                           slope=2, intercept=-1000)
+            if i == 1:
+                ds = pydicom.dcmread(path); del ds.RescaleSlope; ds.save_as(path)
+        v = m.MedicalViewer(); app.processEvents()
+        kicked = {'n': 0}; v._kickoff_ai = lambda: kicked.__setitem__('n', kicked['n'] + 1)
+        v.load_data(valid); app.processEvents()
+        for vdata in v.views.values():
+            vdata['preset'].setCurrentIndex(3)  # Bone/骨窗，模拟上一序列留下 named CT preset
+        kicked['n'] = 0
+        v.load_data(d); app.processEvents()
+        check(not v.hu_calibrated and bool(np.all(v.volume_hu == 100)),
+              "calibration 不完整时整卷保留 raw stored values，不混合伪 HU")
+        v._update_hud(0, 0, 0)
+        check("HU" not in v.lbl_hud.text() and ("stored" in v.lbl_hud.text().lower()
+                                                or "原始值" in v.lbl_hud.text()),
+              f"HUD 明示 raw unit 且不写 HU（{v.lbl_hud.text()}）")
+        check(kicked['n'] == 0 and all(not vd['preset'].isEnabled() for vd in v.views.values()),
+              "raw 序列不启动 AI，禁用 CT window presets")
+        check(all(not button.isEnabled() for button in v.preset_btns),
+              "raw 序列同时禁用右侧六个命名 CT preset 按钮")
+        check(all(vdata['preset'].currentIndex() == 0 for vdata in v.views.values()),
+              "valid HU → invalid HU 时主动清除上一序列的 named CT preset")
+        # 纵深防御：disabled combo 仍可被程序化写入旧文本；renderer 必须独立看 capability。
+        v.slider_ww.setValue(200); v.slider_wl.setValue(100)
+        first = v.views[min(v.views)]
+        first['preset'].setCurrentIndex(3)  # 强制残留 Bone/骨窗
+        v.update_display(); app.processEvents()
+        rendered = first['view'].image_item.pixmap().toImage().pixelColor(0, 0).red()
+        check(abs(rendered - 127) <= 1,
+              f"raw renderer 忽略 disabled named preset，使用 Global 200/100（pixel={rendered}）")
+        check(not v.tool_btns['btn_rec'].isEnabled() and not v.tool_btns['btn_roi'].isEnabled()
+              and not v.tool_btns['btn_trk'].isEnabled() and not v.btn_compare.isEnabled(),
+              "raw 序列关闭 ROI/HU CSV、HU tracking 与 HU follow-up")
+        check(v.tool_btns['btn_rul'].isEnabled() and v.btn_mpr.isEnabled(),
+              "HU 无效不误伤仍有有效 in-plane/z geometry 的测距与 MPR")
+        check(not v.btn_export_stats.isEnabled() and not v.btn_mesh3d.isEnabled(),
+              "raw 序列不产生 organ HU/mL 或 physical STL")
+    finally:
+        if v is not None:
+            if v.ai_thread: v.ai_thread.cancel()
+            v.close(); app.processEvents()
+        shutil.rmtree(d, ignore_errors=True)
+        shutil.rmtree(valid, ignore_errors=True)
+
+
+def test_hu_unit_semantics_gating(app):
+    """标准 HU 必须有逐片单位证据；不支持的 multi-energy 与混合单位整卷 raw。"""
+    print("[DICOM intensity：RescaleType/ImageType/multi-energy unit contract]")
+    import shutil
+    import tempfile
+
+    from pydicom.uid import generate_uid
+
+    root = tempfile.mkdtemp()
+    v = m.MedicalViewer(); app.processEvents()
+
+    def make_series(name, *, image_type=('ORIGINAL', 'PRIMARY', 'AXIAL'),
+                    rescale_type=None, multi_energy=None, mixed_last_type=None):
+        directory = os.path.join(root, name); os.makedirs(directory)
+        sid = generate_uid()
+        for i in range(3):
+            unit = mixed_last_type if i == 2 and mixed_last_type is not None else rescale_type
+            _write_min_dcm(os.path.join(directory, f"s{i}.dcm"), (8, 8), sid,
+                           ipp_z=i, inst=i + 1, pix=100, slope=1, intercept=-1024,
+                           image_type=image_type, rescale_type=unit,
+                           multi_energy=multi_energy)
+        return directory
+
+    try:
+        v._kickoff_ai = lambda: None
+        classic = make_series("classic")
+        explicit_hu = make_series(
+            "explicit_hu", image_type=('DERIVED', 'PRIMARY', 'AXIAL'), rescale_type=' hu ')
+        missing_image_type = make_series("missing_image_type", image_type=None)
+        derived = make_series("derived", image_type=('DERIVED', 'PRIMARY', 'AXIAL'))
+        localizer = make_series("localizer", image_type=('ORIGINAL', 'PRIMARY', 'LOCALIZER'))
+        multi = make_series("multi", rescale_type='HU', multi_energy='YES')
+        mixed = make_series("mixed", mixed_last_type='ED')
+        non_hu = {
+            unit: make_series(f"unit_{unit}", rescale_type=unit)
+            for unit in ('Z_EFF', 'ED', 'EDW', 'MGML', 'HU_MOD', 'PCT', 'US')
+        }
+
+        for label, directory in (("classic missing RescaleType", classic),
+                                 ("explicit normalized HU", explicit_hu)):
+            v.load_data(directory); app.processEvents()
+            check(v.hu_calibrated and float(v.volume_hu[0, 0, 0]) == -924.0,
+                  f"{label}：有标准 HU 证据并应用 slope/intercept")
+
+        rejected = {
+            "missing ImageType": missing_image_type,
+            "DERIVED without explicit HU": derived,
+            "LOCALIZER without explicit HU": localizer,
+            "unsupported multi-energy": multi,
+            "mixed-slice ED": mixed,
+            **{f"RescaleType={unit}": directory for unit, directory in non_hu.items()},
+        }
+        for label, directory in rejected.items():
+            v.load_data(directory); app.processEvents()
+            check(not v.hu_calibrated and bool(np.all(v.volume_hu == 100)),
+                  f"{label}：整卷 raw，不把 stored values 伪称 HU")
+            check(all(not vd['preset'].isEnabled() for vd in v.views.values())
+                  and not v.tool_btns['btn_rec'].isEnabled()
+                  and not v.tool_btns['btn_roi'].isEnabled()
+                  and not v.btn_compare.isEnabled(),
+                  f"{label}：产品路径关闭 CT preset/AI/HU ROI/compare")
+
+        compare_volume, compare_datasets = v._read_compare_dir(non_hu['Z_EFF'])
+        check(compare_volume is None and compare_datasets == [],
+              "compare loader 复用 HU unit contract，拒绝 Z_EFF follow-up")
+    finally:
+        if v.ai_thread: v.ai_thread.cancel()
+        v.close(); app.processEvents()
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_spacing_capability_gating(app):
+    """in-plane 与 z geometry 分轴 gating，overlay 不得填入 1mm/px×3 等伪单位。"""
+    print("[DICOM spacing：independent capability gating / no fake units]")
+    import shutil
+    import tempfile
+
+    import pydicom
+    from pydicom.uid import generate_uid
+    root = tempfile.mkdtemp()
+    v = m.MedicalViewer(); app.processEvents()
+    try:
+        valid = os.path.join(root, "valid"); os.makedirs(valid)
+        valid_sid = generate_uid()
+        for i in range(3):
+            _write_min_dcm(os.path.join(valid, f"s{i}.dcm"), (8, 8), valid_sid,
+                           ipp_z=i * 2, inst=i + 1)
+        v._kickoff_ai = lambda: None
+        v.load_data(valid); app.processEvents()
+        v.tool_btns['btn_rul'].setChecked(True)
+        v.change_active_tool(TOOL_RULER)
+        measure_view = v.views[min(v.views)]['view']
+        measure_view.mousePressEvent(QMouseEvent(
+            QEvent.MouseButtonPress, QPointF(10, 10), Qt.LeftButton,
+            Qt.LeftButton, Qt.NoModifier))
+        measure_view.mouseMoveEvent(QMouseEvent(
+            QEvent.MouseMove, QPointF(30, 10), Qt.NoButton,
+            Qt.LeftButton, Qt.NoModifier))
+        check(measure_view.is_drawing and "mm" in measure_view.temp_text.toPlainText(),
+              "fixture 真实经过 Ruler press→move 并产生 mm preview")
+
+        no_px = os.path.join(root, "no_px"); os.makedirs(no_px)
+        sid = generate_uid()
+        for i in range(3):
+            path = os.path.join(no_px, f"s{i}.dcm")
+            _write_min_dcm(path, (8, 8), sid, ipp_z=i * 2, inst=i + 1)
+            ds = pydicom.dcmread(path); del ds.PixelSpacing; ds.save_as(path)
+        v.load_data(no_px); app.processEvents()
+        br = v.views[min(v.views)]['view'].overlay_lines.get('br', [])
+        check(v.hu_calibrated and v.canonical_orientation
+              and not v.inplane_spacing_valid and v.uniform_z_geometry_valid,
+              "缺 PixelSpacing 只关闭 in-plane capability，不误伤 HU/canonical/z")
+        check(not v.tool_btns['btn_rul'].isEnabled() and not v.tool_btns['btn_roi'].isEnabled()
+              and not v.btn_mpr.isEnabled(),
+              "缺 in-plane spacing 关闭 mm/mm² 与 physical MPR")
+        check(all(not vd['cb_plane'].isEnabled() for vd in v.views.values()),
+              "缺 in-plane spacing 时 plane selector 不能绕过 MPR geometry gate")
+        check(v.active_tool == TOOL_POINTER and v.tool_btns['btn_ptr'].isChecked()
+              and not v.tool_btns['btn_rul'].isChecked()
+              and all(vd['view'].current_tool == TOOL_POINTER for vd in v.views.values()),
+              "valid spacing → invalid spacing 同步撤销 Ruler button/global/view 状态")
+        check(not measure_view.is_drawing
+              and not any(isinstance(item, QGraphicsTextItem) and "mm" in item.toPlainText()
+                          for item in measure_view.scene.items()),
+              "spacing 失效时取消进行中的 measurement preview，不留下伪 mm")
+        check(any("Px unavailable" in x or "像素间距不可用" in x for x in br)
+              and not any("Px 1.00mm" in x for x in br),
+              f"overlay 明示 PixelSpacing unavailable，不伪造 1mm（{br}）")
+
+        irregular = os.path.join(root, "irregular"); os.makedirs(irregular)
+        sid = generate_uid()
+        for i, z in enumerate((0, 1, 3), start=1):
+            _write_min_dcm(os.path.join(irregular, f"s{i}.dcm"), (8, 8), sid,
+                           ipp_z=z, inst=i, pixel_spacing=(0.7, 0.9))
+        v.load_data(irregular); app.processEvents()
+        br = v.views[min(v.views)]['view'].overlay_lines.get('br', [])
+        check(v.inplane_spacing_valid and not v.uniform_z_geometry_valid,
+              "不规则 projected gaps 保留 in-plane，关闭 uniform-z")
+        check(v.tool_btns['btn_rul'].isEnabled() and v.tool_btns['btn_roi'].isEnabled()
+              and not v.btn_mpr.isEnabled(),
+              "不规则 z 仍允许有效 axial mm/mm²/HU，关闭 z-dependent MPR")
+        check(any("Z spacing unavailable" in x or "层间距不可用" in x for x in br)
+              and not any("Thk 2.1mm" in x for x in br),
+              f"overlay 明示 z spacing unavailable，不用 px×3/SliceThickness 伪装（{br}）")
+        check(not v.btn_export_stats.isEnabled() and not v.btn_mesh3d.isEnabled(),
+              "不规则 z 不产生 mL 或 physical STL")
+    finally:
+        if v.ai_thread: v.ai_thread.cancel()
+        v.close(); app.processEvents()
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_compare_dicom_contract(app):
+    """follow-up loader 复用同一 classic CT/geometry/calibration contract，且不污染主序列。"""
+    print("[DICOM compare：same contract / primary state isolation]")
+    import shutil
+    import tempfile
+
+    from pydicom.uid import EnhancedCTImageStorage, generate_uid
+    root = tempfile.mkdtemp()
+    v = m.MedicalViewer(); app.processEvents()
+    try:
+        primary = os.path.join(root, "primary"); os.makedirs(primary)
+        sid = generate_uid()
+        for i in range(3):
+            _write_min_dcm(os.path.join(primary, f"s{i}.dcm"), (8, 8), sid,
+                           ipp_z=i, inst=i + 1)
+        v._kickoff_ai = lambda: None
+        v.load_data(primary); app.processEvents()
+        primary_ids = tuple(ds.SOPInstanceUID for ds in v.dicom_datasets)
+        primary_geometry = v.series_geometry
+
+        enhanced = os.path.join(root, "enhanced"); os.makedirs(enhanced)
+        _write_min_dcm(os.path.join(enhanced, "e.dcm"), (8, 8), generate_uid(),
+                       ipp_z=0, inst=1, n_frames=2, sop_class_uid=EnhancedCTImageStorage)
+        vol, dsets = v._read_compare_dir(enhanced)
+        check(vol is None and dsets == [], "compare 在 decode 前同样拒绝 Enhanced/multiframe")
+
+        irregular = os.path.join(root, "irregular"); os.makedirs(irregular)
+        sid = generate_uid()
+        for i, z in enumerate((0, 1, 3), start=1):
+            _write_min_dcm(os.path.join(irregular, f"s{i}.dcm"), (8, 8), sid,
+                           ipp_z=z, inst=i)
+        vol, dsets = v._read_compare_dir(irregular)
+        check(vol is None and dsets == [],
+              "compare 拒绝无法满足 anatomical follow-up 的 irregular-z series")
+        check(tuple(ds.SOPInstanceUID for ds in v.dicom_datasets) == primary_ids
+              and v.series_geometry == primary_geometry,
+              "失败的 compare load 不污染主序列 datasets/geometry contract")
+
+        valid = os.path.join(root, "valid"); os.makedirs(valid)
+        sid = generate_uid()
+        for inst, z, slope, intercept, _want in ((1, 2, 1, -1000, -900),
+                                                 (2, 0, 2, -1000, -800),
+                                                 (3, 1, 3, -1000, -700)):
+            _write_min_dcm(os.path.join(valid, f"s{inst}.dcm"), (8, 8), sid,
+                           ipp_z=z, inst=inst, pix=100, slope=slope, intercept=intercept)
+        vol, dsets = v._read_compare_dir(valid)
+        check(vol is not None and tuple(float(x) for x in vol[:, 0, 0]) == (-800, -700, -900),
+              "valid compare 按 patient-space 顺序并逐 slice 应用 calibration")
+        check(tuple(ds.SOPInstanceUID for ds in v.dicom_datasets) == primary_ids
+              and v.series_geometry == primary_geometry,
+              "成功的 compare load 也恢复主序列 datasets/geometry contract")
+
+        from types import SimpleNamespace
+        sagittal = [SimpleNamespace(ImageOrientationPatient=(0, 1, 0, 0, 0, 1),
+                                    ImagePositionPatient=(x, 9, 11))
+                    for x in (5, 7)]
+        check(np.array_equal(v._zpos_array(sagittal), np.array((5.0, 7.0))),
+              "compare 配准坐标使用 dot(IPP, normal)，不写死 IPP[2]")
+    finally:
+        if v.ai_thread: v.ai_thread.cancel()
+        v.close(); app.processEvents()
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_deid_export_and_persistence_contract(app):
+    """匿名显式导出用 per-load nonce 且不覆盖；内部缓存另行警告仍含 identifiers。"""
+    print("[De-ID：per-load nonce / unique export / persistence warning]")
+    import shutil
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtWidgets import QMessageBox
+    root = tempfile.mkdtemp(); out = tempfile.mkdtemp(); internal = tempfile.mkdtemp()
+    v = m.MedicalViewer(); app.processEvents()
+    saved_warning = QMessageBox.warning
+    warnings = []
+    try:
+        dirs = []
+        for tag in ("a", "b"):
+            d = os.path.join(root, tag); os.makedirs(d); dirs.append(d)
+            sid = generate_uid()
+            for i in range(3):
+                _write_min_dcm(os.path.join(d, f"s{i}.dcm"), (8, 8), sid,
+                               ipp_z=i, inst=i + 1, pid="SECRET_PATIENT")
+        v._kickoff_ai = lambda: None
+        v.load_data(dirs[0]); app.processEvents(); v._toggle_anonymize(True)
+        tag_a1, tag_a2 = v._export_tag(), v._export_tag()
+        uid_a = str(v.dicom_datasets[0].SeriesInstanceUID)
+        v.load_data(dirs[1]); app.processEvents()
+        tag_b = v._export_tag()
+        check(tag_a1 == tag_a2 and tag_a1.startswith("ANON-") and tag_a1 != tag_b,
+              f"匿名 nonce 同 load 稳定、跨 load 改变（{tag_a1} → {tag_b}）")
+        check("SECRET" not in tag_a1 and uid_a not in tag_a1,
+              "匿名 tag 不含 PatientID、原始 UID 或其裸露片段")
+
+        v.export_dir = out
+        v._organ_stats = [{
+            'id': 5, 'name_zh': '肝', 'name_en': 'Liver', 'voxels': 8,
+            'volume_ml': 1.0, 'mean_hu': 50.0, 'sd_hu': 2.0, 'median_hu': 50.0,
+            'p5_hu': 47.0, 'p95_hu': 53.0, 'min_hu': 45.0, 'max_hu': 55.0,
+        }]
+        v.export_organ_stats(); v.export_organ_stats()
+        verts = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], np.float32)
+        faces = np.array([[0, 1, 2]], np.int32)
+        v._export_stl("Liver", verts, faces); v._export_stl("Liver", verts, faces)
+        names = sorted(os.listdir(out))
+        check(len(names) == 4 and len(set(names)) == 4,
+              f"连续同类型匿名导出生成 4 个唯一文件，不静默覆盖（{names}）")
+        check(all(name.startswith(tag_b) and "SECRET" not in name and uid_a not in name
+                  for name in names),
+              "quantification CSV/STL 文件名均使用当前 session nonce，不含身份/UID")
+
+        QMessageBox.warning = staticmethod(lambda _p, title, msg, *a, **k: warnings.append((title, msg)))
+        v.persistence_dir = internal
+        v.global_annotations = {'all': []}
+        v.volume_mask = np.ones_like(v.volume_hu, np.uint8)
+        v.save_project()
+        check(bool(warnings) and any("identifier" in msg.lower() or "标识" in msg
+                                     for _title, msg in warnings),
+              "De-ID 开启时 save_project 明示内部 JSON/NPZ 仍含身份/序列标识")
+        tip = v.chk_anon.toolTip().lower()
+        check("burned-in" in tip or "烧录" in tip,
+              "De-ID UI 保留 burned-in pixel text 不会自动清除的提示")
+    finally:
+        QMessageBox.warning = saved_warning
+        if v.ai_thread: v.ai_thread.cancel()
+        v.close(); app.processEvents()
+        shutil.rmtree(root, ignore_errors=True)
+        shutil.rmtree(out, ignore_errors=True)
+        shutil.rmtree(internal, ignore_errors=True)
+
+
+def test_save_project_atomic_contract(app):
+    """save_project 的 precondition 与 per-target atomicity 只在临时目录验证。"""
+    print("[Project persistence：fingerprint precondition / atomic targets]")
+    import json
+    import shutil
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtWidgets import QMessageBox
+
+    import annotation_lab
+
+    dicom_dir = tempfile.mkdtemp()
+    persistence_dir = tempfile.mkdtemp()
+    v = None
+    saved_information = QMessageBox.information
+    saved_warning = QMessageBox.warning
+    saved_question = QMessageBox.question
+    extra_viewers = []
+    infos, warnings = [], []
+    try:
+        sid = generate_uid()
+        for i in range(3):
+            _write_min_dcm(os.path.join(dicom_dir, f"s{i}.dcm"), (8, 8), sid,
+                           ipp_z=i, inst=i + 1, pid="SAVE_ATOMIC")
+        v = m.MedicalViewer(); app.processEvents()
+        v._kickoff_ai = lambda: None
+        v.load_data(dicom_dir); app.processEvents()
+        v.persistence_dir = persistence_dir
+        v.global_annotations = {'all': []}
+        v.volume_mask = np.ones_like(v.volume_hu, dtype=np.uint8)
+
+        json_path = os.path.join(persistence_dir, "SAVE_ATOMIC_annotations.json")
+        npz_path = os.path.join(persistence_dir, "SAVE_ATOMIC_mask.npz")
+        json_sentinel = b"SENTINEL-JSON"
+        npz_sentinel = b"SENTINEL-NPZ"
+        with open(json_path, "wb") as f:
+            f.write(json_sentinel)
+        with open(npz_path, "wb") as f:
+            f.write(npz_sentinel)
+
+        QMessageBox.information = staticmethod(
+            lambda _p, title, msg, *a, **k: infos.append((title, msg)))
+        QMessageBox.warning = staticmethod(
+            lambda _p, title, msg, *a, **k: warnings.append((title, msg)))
+        actual_uid = v._current_series_uid()
+        actual_fingerprint = v._current_geometry_fingerprint()
+
+        v._current_geometry_fingerprint = lambda: ""
+        result = v.save_project()
+        check(result is False
+              and open(json_path, "rb").read() == json_sentinel
+              and open(npz_path, "rb").read() == npz_sentinel,
+              "empty fingerprint fail closed，既有 JSON/NPZ sentinel bytes 不变")
+        check(not infos and bool(warnings),
+              "precondition failure 不显示 Project saved，并给出明确 warning")
+
+        # UID 与 fingerprint 都是恢复缓存所需的身份/几何 provenance；任一为空均不得覆盖。
+        infos.clear(); warnings.clear()
+        v._current_geometry_fingerprint = lambda: actual_fingerprint
+        v._current_series_uid = lambda: ""
+        result = v.save_project()
+        check(result is False
+              and open(json_path, "rb").read() == json_sentinel
+              and open(npz_path, "rb").read() == npz_sentinel
+              and not infos and bool(warnings),
+              "empty SeriesInstanceUID fail closed，既有目标不变且无 success")
+
+        v._current_series_uid = lambda: actual_uid
+
+        # JSON 序列化先写同目录临时文件；失败不得截断既有 JSON，也不得提前替换 NPZ。
+        infos.clear(); warnings.clear()
+        saved_json_dump = annotation_lab.json.dump
+        annotation_lab.json.dump = lambda *a, **k: (_ for _ in ()).throw(
+            OSError("injected JSON serialization failure"))
+        try:
+            result = v.save_project()
+        finally:
+            annotation_lab.json.dump = saved_json_dump
+        leftovers = [name for name in os.listdir(persistence_dir)
+                     if name.startswith(".SAVE_ATOMIC_")]
+        check(result is False
+              and open(json_path, "rb").read() == json_sentinel
+              and open(npz_path, "rb").read() == npz_sentinel
+              and not leftovers,
+              "JSON serialization failure 保留两份 sentinel，并清理临时文件")
+        check(not infos and bool(warnings),
+              "JSON failure 返回 False、不给 success、给出 warning")
+
+        # NPZ 写入也发生在任何 replace 之前；故第二目标写失败时 JSON 目标仍不变。
+        infos.clear(); warnings.clear()
+        saved_savez = annotation_lab.np.savez_compressed
+        annotation_lab.np.savez_compressed = lambda *a, **k: (_ for _ in ()).throw(
+            OSError("injected NPZ write failure"))
+        try:
+            result = v.save_project()
+        finally:
+            annotation_lab.np.savez_compressed = saved_savez
+        leftovers = [name for name in os.listdir(persistence_dir)
+                     if name.startswith(".SAVE_ATOMIC_")]
+        check(result is False
+              and open(json_path, "rb").read() == json_sentinel
+              and open(npz_path, "rb").read() == npz_sentinel
+              and not leftovers,
+              "NPZ write failure 发生在 replace 前，两份 sentinel 均不变")
+        check(not infos and bool(warnings),
+              "NPZ failure 返回 False、不给 success、给出 warning")
+
+        infos.clear(); warnings.clear()
+        result = v.save_project()
+        with open(json_path, encoding="utf-8") as f:
+            saved_json = json.load(f)
+        with np.load(npz_path) as saved_npz:
+            saved_mask = saved_npz["mask"]
+            saved_uid = str(saved_npz["series_uid"].item())
+            saved_fingerprint = str(saved_npz["geometry_fingerprint"].item())
+        check(result is True and bool(infos) and not warnings,
+              "成功路径仅在 JSON/NPZ 均替换后返回 True 并显示 success")
+        check(saved_json["__meta__"]["series_uid"] == actual_uid
+              and saved_json["__meta__"]["geometry_fingerprint"] == actual_fingerprint
+              and saved_uid == actual_uid and saved_fingerprint == actual_fingerprint
+              and np.array_equal(saved_mask, v.volume_mask),
+              "成功落盘的 JSON/NPZ 同时绑定当前 UID、fingerprint 与 mask bytes")
+
+        # 两个 os.replace 不是跨文件事务：第二个失败时必须准确报告已替换/未替换目标，
+        # 返回 False 且不显示完整成功；不得把 partial completion 冒充 Project saved。
+        with open(json_path, "wb") as f:
+            f.write(json_sentinel)
+        with open(npz_path, "wb") as f:
+            f.write(npz_sentinel)
+        infos.clear(); warnings.clear()
+        saved_replace = annotation_lab.os.replace
+
+        def fail_npz_replace(src, dst):
+            if dst == npz_path:
+                raise OSError("injected second-target replace failure")
+            return saved_replace(src, dst)
+
+        annotation_lab.os.replace = fail_npz_replace
+        try:
+            result = v.save_project()
+        finally:
+            annotation_lab.os.replace = saved_replace
+        warning_text = "\n".join(msg for _title, msg in warnings)
+        check(result is False and not infos
+              and open(json_path, "rb").read() != json_sentinel
+              and open(npz_path, "rb").read() == npz_sentinel,
+              "第二个 replace 失败：JSON 已替换、NPZ 保持 sentinel、整体返回 False")
+        check(os.path.basename(json_path) in warning_text
+              and os.path.basename(npz_path) in warning_text
+              and ("cross-file" in warning_text or "跨文件" in warning_text),
+              "partial replace warning 明列成功/失败目标并声明无跨文件原子性")
+
+        # fresh placeholder zero 只是 AI pending 的占位，不得落成可命中的全零 cache。
+        for target in (json_path, npz_path):
+            if os.path.exists(target):
+                os.unlink(target)
+        infos.clear(); warnings.clear()
+        v.volume_mask = np.zeros_like(v.volume_hu, dtype=np.uint8)
+        v._ai_state = 'running'
+        result = v.save_project()
+        check(result is True and os.path.exists(json_path) and not os.path.exists(npz_path),
+              "fresh placeholder zero + AI running：只保存 annotations，不制造零 NPZ")
+        placeholder_kickoffs = {'n': 0}
+        vp = m.MedicalViewer(); extra_viewers.append(vp); app.processEvents()
+        if vp.ai_thread: vp.ai_thread.cancel()
+        vp.persistence_dir = persistence_dir
+        vp._kickoff_ai = lambda: placeholder_kickoffs.__setitem__('n',
+                                                                  placeholder_kickoffs['n'] + 1)
+        vp.load_data(dicom_dir); app.processEvents()
+        check(placeholder_kickoffs['n'] == 1 and not getattr(
+                  vp, '_mask_cache_clear_requested', False),
+              "placeholder zero 重开仍 cache miss，不跳过 AI kickoff")
+
+        # 先持久化一份真实非零 cache，再由新 viewer 恢复，并通过真实清空入口确认 empty。
+        v.volume_mask = np.zeros_like(v.volume_hu, dtype=np.uint8)
+        v.volume_mask[0, 1:3, 1:3] = 5
+        infos.clear(); warnings.clear()
+        check(v.save_project() is True, "fixture 保存匹配当前 geometry 的非零 cache")
+        restored_kickoffs = {'n': 0}
+        vc = m.MedicalViewer(); extra_viewers.append(vc); app.processEvents()
+        if vc.ai_thread: vc.ai_thread.cancel()
+        vc.persistence_dir = persistence_dir
+        vc._kickoff_ai = lambda: restored_kickoffs.__setitem__('n', restored_kickoffs['n'] + 1)
+        vc.load_data(dicom_dir); app.processEvents()
+        check(bool(vc.volume_mask.any()) and restored_kickoffs['n'] == 0
+              and not getattr(vc, '_mask_cache_clear_requested', False),
+              "匹配的非零 cache 恢复成功，且恢复状态不是 pending clear")
+
+        class _RunningAI:
+            def __init__(self):
+                self.cancelled = False
+                self.resampled_from = None
+                self.used_fallback = False
+                self.confidence = None
+            def isRunning(self): return True
+            def cancel(self): self.cancelled = True
+
+        QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.Yes)
+        running = _RunningAI()
+        vc.ai_thread = running
+        vc._ai_state = 'running'
+        old_generation = vc._ai_generation
+        vc.clear_mask_and_annotations(); app.processEvents()
+        check(not vc.volume_mask.any()
+              and getattr(vc, '_mask_cache_clear_requested', False),
+              "真实全局清空入口把已有非零 mask 标为 explicit empty")
+        check(running.cancelled and vc._ai_generation > old_generation,
+              "explicit clear 取消并作废仍可能回调的旧 AI generation")
+        stale_mask = np.full_like(vc.volume_mask, 9, dtype=np.uint8)
+        vc.on_auto_ai_finished(stale_mask, 1.0, old_generation); app.processEvents()
+        check(not vc.volume_mask.any(), "explicit clear 后旧 AI callback 不能覆盖 empty mask")
+        vc.volume_mask.fill(0)  # 保持后续断言独立；正确实现上这是 no-op。
+
+        # load 失败不得清掉尚未持久化的 explicit-empty intent。
+        empty_dir = os.path.join(persistence_dir, "empty-load")
+        os.makedirs(empty_dir, exist_ok=True)
+        vc.load_data(empty_dir); app.processEvents()
+        check(getattr(vc, '_mask_cache_clear_requested', False),
+              "explicit clear 后 load 失败：pending clear intent 保留")
+
+        infos.clear(); warnings.clear()
+        result = vc.save_project()
+        with np.load(npz_path) as explicit_npz:
+            explicit_mask = explicit_npz['mask']
+            explicit_uid = str(explicit_npz['series_uid'].item())
+            explicit_fingerprint = str(explicit_npz['geometry_fingerprint'].item())
+        check(result is True and not explicit_mask.any()
+              and explicit_uid == actual_uid and explicit_fingerprint == actual_fingerprint,
+              "explicit empty 保存全零 NPZ，并绑定当前 UID/fingerprint")
+        check(not getattr(vc, '_mask_cache_clear_requested', True),
+              "explicit-empty 成功保存后清除 pending intent")
+
+        zero_kickoffs = {'n': 0}
+        vr = m.MedicalViewer(); extra_viewers.append(vr); app.processEvents()
+        if vr.ai_thread: vr.ai_thread.cancel()
+        vr.persistence_dir = persistence_dir
+        vr._kickoff_ai = lambda: zero_kickoffs.__setitem__('n', zero_kickoffs['n'] + 1)
+        vr.load_data(dicom_dir); app.processEvents()
+        check(not vr.volume_mask.any() and zero_kickoffs['n'] == 0,
+              "重载 explicit-empty cache 仍为全零，旧标签不复活且不重跑 AI")
+
+        # clear → Ctrl+Z 撤销恢复非零时，不能再把本次保存当作 explicit empty。
+        vr.volume_mask[1, 2:4, 2:4] = 7
+        undo_expected = vr.volume_mask.copy()
+        vr.clear_mask_and_annotations(); app.processEvents()
+        check(getattr(vr, '_mask_cache_clear_requested', False),
+              "再次 explicit clear 建立 pending intent")
+        vr._undo_mask_edit(); app.processEvents()
+        check(np.array_equal(vr.volume_mask, undo_expected)
+              and not getattr(vr, '_mask_cache_clear_requested', True),
+              "clear → Ctrl+Z 恢复非零 mask，并撤销 pending clear intent")
+        infos.clear(); warnings.clear()
+        check(vr.save_project() is True, "undo 后非零 mask 正常保存")
+        with np.load(npz_path) as undo_npz:
+            check(np.array_equal(undo_npz['mask'], undo_expected),
+                  "undo 后保存的是恢复的非零 mask，不是 explicit empty")
+
+        # None 与 fresh zero 都不是 explicit clear；wrong-shape zero 也必须先 fail closed。
+        none_dir = os.path.join(persistence_dir, "none-mask")
+        os.makedirs(none_dir, exist_ok=True)
+        v.persistence_dir = none_dir
+        v.volume_mask = None
+        infos.clear(); warnings.clear()
+        check(v.save_project() is True
+              and not os.path.exists(os.path.join(none_dir, "SAVE_ATOMIC_mask.npz")),
+              "volume_mask is None：只保存 annotations，不创建零 NPZ")
+
+        wrong_dir = os.path.join(persistence_dir, "wrong-shape")
+        os.makedirs(wrong_dir, exist_ok=True)
+        wrong_json = os.path.join(wrong_dir, "SAVE_ATOMIC_annotations.json")
+        wrong_npz = os.path.join(wrong_dir, "SAVE_ATOMIC_mask.npz")
+        with open(wrong_json, 'wb') as f: f.write(json_sentinel)
+        with open(wrong_npz, 'wb') as f: f.write(npz_sentinel)
+        v.persistence_dir = wrong_dir
+        v.volume_mask = np.zeros((1, 1, 1), dtype=np.uint8)
+        infos.clear(); warnings.clear()
+        result = v.save_project()
+        check(result is False and not infos and bool(warnings)
+              and open(wrong_json, 'rb').read() == json_sentinel
+              and open(wrong_npz, 'rb').read() == npz_sentinel,
+              "wrong-shape zero fail closed，既有 JSON/NPZ bytes 不变")
+
+        # explicit-empty 的 NPZ 序列化与最终替换失败都必须保留 intent，供用户重试。
+        failure_dir = os.path.join(persistence_dir, "explicit-failure")
+        os.makedirs(failure_dir, exist_ok=True)
+        failure_json = os.path.join(failure_dir, "SAVE_ATOMIC_annotations.json")
+        failure_npz = os.path.join(failure_dir, "SAVE_ATOMIC_mask.npz")
+        vr.persistence_dir = failure_dir
+        vr.volume_mask = undo_expected.copy()
+        vr.clear_mask_and_annotations(); app.processEvents()
+        with open(failure_json, 'wb') as f: f.write(json_sentinel)
+        with open(failure_npz, 'wb') as f: f.write(npz_sentinel)
+        infos.clear(); warnings.clear()
+        saved_savez = annotation_lab.np.savez_compressed
+        annotation_lab.np.savez_compressed = lambda *a, **k: (_ for _ in ()).throw(
+            OSError("injected explicit-empty NPZ serialization failure"))
+        try:
+            result = vr.save_project()
+        finally:
+            annotation_lab.np.savez_compressed = saved_savez
+        check(result is False and not infos and bool(warnings)
+              and open(failure_json, 'rb').read() == json_sentinel
+              and open(failure_npz, 'rb').read() == npz_sentinel
+              and getattr(vr, '_mask_cache_clear_requested', False),
+              "explicit-empty NPZ serialization failure：目标不变、无 success、intent 保留")
+
+        with open(failure_json, 'wb') as f: f.write(json_sentinel)
+        with open(failure_npz, 'wb') as f: f.write(npz_sentinel)
+        infos.clear(); warnings.clear()
+        saved_replace = annotation_lab.os.replace
+
+        def fail_explicit_npz_replace(src, dst):
+            if dst == failure_npz:
+                raise OSError("injected explicit-empty NPZ replace failure")
+            return saved_replace(src, dst)
+
+        annotation_lab.os.replace = fail_explicit_npz_replace
+        try:
+            result = vr.save_project()
+        finally:
+            annotation_lab.os.replace = saved_replace
+        check(result is False and not infos and bool(warnings)
+              and open(failure_json, 'rb').read() != json_sentinel
+              and open(failure_npz, 'rb').read() == npz_sentinel
+              and getattr(vr, '_mask_cache_clear_requested', False),
+              "explicit-empty NPZ replace failure：准确 partial failure、intent 保留")
+    finally:
+        QMessageBox.information = saved_information
+        QMessageBox.warning = saved_warning
+        QMessageBox.question = saved_question
+        for extra in extra_viewers:
+            if extra.ai_thread: extra.ai_thread.cancel()
+            extra.close()
+        if v is not None:
+            if v.ai_thread: v.ai_thread.cancel()
+            v.close(); app.processEvents()
+        shutil.rmtree(dicom_dir, ignore_errors=True)
+        shutil.rmtree(persistence_dir, ignore_errors=True)
+
+
 def test_mixed_shape_dicom(app):
-    """加载同序列/无 SeriesUID 但切片形状不一致的目录，不得崩溃（形状一致性过滤）。"""
+    """同一有效 SeriesUID 内切片形状不一致时，保留多数尺寸且不崩。"""
     print("[混合形状 DICOM 加载防护]")
     import shutil
     import tempfile
@@ -511,8 +1543,8 @@ def test_mixed_shape_dicom(app):
         v2.ai_thread.cancel()
     sid = generate_uid()
     cases = [
-        ("同序列混合形状", [((512, 512), sid), ((512, 512), sid), ((512, 512), sid), ((256, 256), sid)], (512, 512), 3),
-        ("SeriesUID全空混合形状", [((256, 256), ''), ((256, 256), ''), ((256, 256), ''), ((64, 64), '')], (256, 256), 3),
+        ("同序列混合形状", [((512, 512), sid), ((512, 512), sid),
+                            ((512, 512), sid), ((256, 256), sid)], (512, 512), 3),
     ]
     for label, spec, exp_yx, exp_n in cases:
         d = tempfile.mkdtemp()
@@ -954,11 +1986,13 @@ def test_malformed_annotations(v, app):
             break
     check(not crashed, "渲染畸形标注逐条兜底不崩")
 
-    # 2) 加载层过滤：真实 JSON 落盘 -> _load_annotations_json 只留合规条目
-    ED = os.path.join(_ROOT, "Exported_Lesions"); os.makedirs(ED, exist_ok=True)
+    # 2) 加载层过滤：临时 JSON 落盘 -> _load_annotations_json 只留合规条目
+    import tempfile
+    ED = tempfile.mkdtemp(); v.persistence_dir = ED
     pid = "ANNOFILTER_TEST"
     fp = os.path.join(ED, f"{pid}_annotations.json")
-    data = {"all": [
+    data = {"__meta__": {"series_uid": v._current_series_uid(),
+                          "geometry_fingerprint": v._current_geometry_fingerprint()}, "all": [
         {'id': 'g1', 'type': 'ruler', 'p1': [1, 1], 'p2': [9, 9]},
         {'id': 'b1', 'type': 'ruler', 'p1': [1, 1]},
         {'id': 'g2', 'type': 'roi', 'rect': [3, 3, 10, 10]},
@@ -975,8 +2009,8 @@ def test_malformed_annotations(v, app):
         ok = ids == ['g1', 'g2'] and v.global_annotations.get(7) == []
         check(ok, f"加载期过滤畸形标注 -> 保留 {ids}")
     finally:
-        if os.path.exists(fp):
-            os.remove(fp)
+        import shutil
+        shutil.rmtree(ED, ignore_errors=True)
         v.global_annotations = saved
 
 
@@ -1061,8 +2095,8 @@ def test_close_cancels_ai(app):
 
 
 def test_malformed_pixels(app):
-    """多帧 DICOM 展开为切片；坏片跳过不带崩整卷；全坏则优雅中止并恢复原序列（状态一致）。"""
-    print("[多帧 / 坏片 / 全坏防护]")
+    """multiframe fail closed；坏片跳过；全坏优雅中止并恢复原序列。"""
+    print("[multiframe fail-closed / 坏片 / 全坏防护]")
     import shutil
     import tempfile
 
@@ -1071,7 +2105,7 @@ def test_malformed_pixels(app):
     if vm.ai_thread:
         vm.ai_thread.cancel()
 
-    # 1) 多帧单文件 -> 展开为 N 层
+    # 1) multi-frame classic CT 在 pixel decode 前拒绝，不再“展开即支持”
     d1 = tempfile.mkdtemp()
     try:
         _write_min_dcm(os.path.join(d1, "mf.dcm"), (16, 16), generate_uid(), ipp_z=0, inst=1, n_frames=5)
@@ -1082,8 +2116,8 @@ def test_malformed_pixels(app):
                 vm.ai_thread.cancel()
         except Exception:
             crashed = True
-        check(not crashed and vm.volume_hu.ndim == 3 and vm.volume_hu.shape[0] == 5,
-              f"多帧 DICOM 展开为 5 层 -> {None if crashed else vm.volume_hu.shape}")
+        check(not crashed and vm.volume_hu is None,
+              "multi-frame classic CT fail closed，未构建伪 3-D volume")
     finally:
         shutil.rmtree(d1, ignore_errors=True)
 
@@ -1107,8 +2141,31 @@ def test_malformed_pixels(app):
     finally:
         shutil.rmtree(d2, ignore_errors=True)
 
-    # 3) 全坏目录：优雅中止，保留上一次成功加载的序列，且 datasets 与 volume 一致
+    # 3) decode 后必须按实际保留切片重算 geometry。若坏片恰在规则栈的中间，
+    # pre-decode 的 0/1/2/3 mm 看似 uniform；跳过 z=1 后实际是 0/2/3 mm，
+    # 不重算会让 MPR/mL/STL/AI 继续把缺层体积伪装成 1 mm 等距栈。
+    d_gap = tempfile.mkdtemp()
+    try:
+        sid = generate_uid()
+        for i in (0, 2, 3):
+            _write_min_dcm(os.path.join(d_gap, f"g{i}.dcm"), (16, 16), sid,
+                           ipp_z=i, inst=i)
+        _write_min_dcm(os.path.join(d_gap, "bad_middle.dcm"), (16, 16), sid,
+                       ipp_z=1, inst=1, truncate=True)
+        vm.load_data(d_gap); app.processEvents()
+        if vm.ai_thread:
+            vm.ai_thread.cancel()
+        check(vm.volume_hu.shape[0] == 3
+              and not vm.uniform_z_geometry_valid
+              and vm._slice_spacing() == 0.0
+              and not vm.btn_mpr.isEnabled(),
+              "坏片位于中间时按 decode 后实际切片重算 z geometry，关闭伪等距物理功能")
+    finally:
+        shutil.rmtree(d_gap, ignore_errors=True)
+
+    # 4) 全坏目录：优雅中止，保留上一次成功加载的序列，且 datasets 与 volume 一致
     prev_shape = vm.volume_hu.shape
+    prev_geometry = vm.series_geometry
     d3 = tempfile.mkdtemp()
     try:
         _write_min_dcm(os.path.join(d3, "b.dcm"), (16, 16), generate_uid(), ipp_z=0, inst=1, truncate=True)
@@ -1126,8 +2183,9 @@ def test_malformed_pixels(app):
             vm.on_slice_changed(vm.slider_slice.maximum()); app.processEvents()
         except Exception:
             nav_ok = False
-        check(not crashed and vm.volume_hu.shape == prev_shape and consistent and nav_ok,
-              "全坏目录优雅中止并恢复原序列（状态一致、可导航）")
+        check(not crashed and vm.volume_hu.shape == prev_shape and consistent and nav_ok
+              and vm.series_geometry == prev_geometry,
+              "全坏目录优雅中止并恢复原序列（datasets/volume/geometry 一致、可导航）")
     finally:
         shutil.rmtree(d3, ignore_errors=True)
         if vm.ai_thread:
@@ -1165,7 +2223,7 @@ def test_nonfinite_dicom_tags(app):
           and vn._dcm_float(ds_ok, 'PixelSpacing', 1.0, idx=0) == 0.7,
           "正常有限值仍原样返回（防护未误伤）")
 
-    # 2) 端到端：写一份 RescaleSlope=NaN 的序列，加载后 HU 必须全有限
+    # 2) 端到端：RescaleSlope=NaN 不能证明 HU，整卷须降级为有限 raw stored values。
     d = tempfile.mkdtemp()
     try:
         for i in range(4):
@@ -1173,7 +2231,8 @@ def test_nonfinite_dicom_tags(app):
                            ipp_z=i, inst=i, slope=float('nan'))
         vn._read_dicom_dir(d); vn._build_volume_hu(); app.processEvents()
         finite = bool(np.isfinite(vn.volume_hu).all())
-        check(finite, f"RescaleSlope=NaN 的序列加载后 HU 全有限（得 {finite}）")
+        check(finite and not vn.series_geometry.hu_calibrated,
+              f"RescaleSlope=NaN 的序列降级为有限 raw values 且 HU disabled（finite={finite}）")
     finally:
         shutil.rmtree(d, ignore_errors=True)
         if vn.ai_thread: vn.ai_thread.cancel()
@@ -1195,7 +2254,7 @@ def test_nonfinite_dicom_tags(app):
 
 def test_empty_dicom_tags(app):
     """RescaleSlope/Intercept/PixelSpacing/SliceThickness 存在但为空(None)时，
-    加载/定量不得因 float(None) 崩溃。"""
+    加载不得因 float(None) 崩溃，HU/physical quantification 必须安全关闭。"""
     print("[空数值标签 DICOM 防护]")
     import shutil
     import tempfile
@@ -1209,17 +2268,19 @@ def test_empty_dicom_tags(app):
     try:
         for i in range(3):
             _write_min_dcm(os.path.join(d, f"e{i}.dcm"), (16, 16), sid, ipp_z=i, inst=i, empty_numeric=True)
-        crashed = False
+        crashed = False; stats = None
         try:
             ve.load_data(d); app.processEvents()
             if ve.ai_thread:
                 ve.ai_thread.cancel()
             ve.volume_mask = np.ones(ve.volume_hu.shape, np.uint8)
-            ve._compute_organ_stats()   # 用到 PixelSpacing/SliceThickness
+            stats = ve._compute_organ_stats()   # 无可信单位/spacing 时应安全返回空结果
         except Exception as ex:
             crashed = True
             print("   ", type(ex).__name__, ex)
-        check(not crashed and ve.volume_hu is not None, "空数值标签 DICOM 可正常加载并定量")
+        check(not crashed and ve.volume_hu is not None and not ve.hu_calibrated
+              and not ve.inplane_spacing_valid and stats == [],
+              "空数值标签 DICOM 可阅片，但 HU/physical quantification fail closed")
     finally:
         shutil.rmtree(d, ignore_errors=True)
         if ve.ai_thread:
@@ -1230,57 +2291,67 @@ def test_export_path_safety(app):
     """PatientID 含 '/' 或 '..' 时：不得路径穿越写到导出目录之外；净化后存取仍往返一致。"""
     print("[导出文件名路径安全]")
     import glob
-    ED = os.path.join(_ROOT, "Exported_Lesions")
+    import shutil
+    import tempfile
+
+    from PySide6.QtWidgets import QMessageBox
+    ED = tempfile.mkdtemp()
     # 净化器单元：普通 ID 不变（不破坏既有文件），危险字符被中和
     su = m.MedicalViewer._safe_name
     check(su("12345") == "12345" and su("RIDER-1234") == "RIDER-1234", "普通 PatientID 不被改动")
     check("/" not in su("A/B") and su("..") == "Unknown" and su("") == "Unknown", "斜杠/纯点/空被中和")
 
     vp = m.MedicalViewer(); app.processEvents()
+    vp.persistence_dir = ED; vp.export_dir = ED
     if vp.ai_thread:
         vp.ai_thread.cancel()
 
     class _DS:
         # SeriesInstanceUID 在真实 DICOM 中是 Type 1 必填；蒙版缓存据它校验序列身份
         # （防止把同患者另一序列的蒙版张冠李戴），故此桩必须带上才具代表性。
-        def __init__(self, pid, uid="1.2.826.0.1.3680043.2.1125.1.PATHSAFE"):
+        def __init__(self, pid, index,
+                     uid="1.2.826.0.1.3680043.2.1125.1.314159"):
             self.PatientID = pid; self.PatientName = pid; self.SeriesInstanceUID = uid
+            self.SOPInstanceUID = f"{uid}.{index + 1}"
+            self.ImageOrientationPatient = (1, 0, 0, 0, 1, 0)
+            self.ImagePositionPatient = (0, 0, index)
+            self.PixelSpacing = (1, 1)
+
+    def datasets(pid):
+        return [_DS(pid, index) for index in range(3)]
 
     made = []
+    saved_information = QMessageBox.information
+    saved_warning = QMessageBox.warning
     try:
+        QMessageBox.information = staticmethod(lambda *a, **k: None)
+        QMessageBox.warning = staticmethod(lambda *a, **k: None)
         # 1) 路径穿越封堵
         esc = os.path.abspath(os.path.join(ED, "..", "PWNED_annotations.json"))
         before = os.path.exists(esc)
-        vp.dicom_datasets = [_DS("../PWNED")]
+        vp.dicom_datasets = datasets("../PWNED")
+        vp.volume_hu = np.zeros((3, 8, 8), np.float32)
         vp.global_annotations = {'all': [{'id': 'x', 'type': 'ruler', 'p1': (1, 1), 'p2': (2, 2)}]}
         vp.volume_mask = np.ones((3, 8, 8), np.uint8)
-        vp.save_project()
+        saved = vp.save_project()
         made += glob.glob(os.path.join(ED, "_PWNED_*"))
-        check(not (os.path.exists(esc) and not before), "路径穿越被封堵（未写到 Exported_Lesions 之外）")
+        check(saved and not (os.path.exists(esc) and not before),
+              "路径穿越被封堵，且有效 project 写入安全目录")
 
-        # 2) 斜杠 PatientID 存取往返一致
-        vp.dicom_datasets = [_DS("PID/WITH/SLASH")]
+        # 2) 斜杠 PatientID 始终映射到安全的同一 basename（往返由专门 cache test 覆盖）
+        vp.dicom_datasets = datasets("PID/WITH/SLASH")
         vp.volume_hu = np.zeros((3, 8, 8), np.float32)
         vp.global_annotations = {'all': [{'id': 'rt', 'type': 'ruler', 'p1': (1, 1), 'p2': (5, 5)}]}
         vp.volume_mask = np.ones((3, 8, 8), np.uint8) * 7
-        vp.save_project()
+        saved = vp.save_project()
         made += glob.glob(os.path.join(ED, "PID_WITH_SLASH_*"))
-        vp.global_annotations = {'all': []}
-        vp._load_annotations_json("PID/WITH/SLASH")
-        anno_ok = vp.global_annotations.get('all') and vp.global_annotations['all'][0]['id'] == 'rt'
-        mask_ok = vp._load_saved_mask("PID/WITH/SLASH") and int(vp.volume_mask.max()) == 7
-        check(bool(anno_ok) and bool(mask_ok), "斜杠 PatientID 净化后存取往返一致")
+        check(saved and any(os.path.basename(f).startswith("PID_WITH_SLASH_") for f in made),
+              "斜杠 PatientID 只在临时目录生成净化后的安全 basename")
     finally:
-        for f in made:
-            try:
-                os.remove(f)
-            except OSError:
-                pass
-        for f in glob.glob(os.path.abspath(os.path.join(ED, "..", "PWNED_*"))):
-            try:
-                os.remove(f)
-            except OSError:
-                pass
+        QMessageBox.information = saved_information
+        QMessageBox.warning = saved_warning
+        shutil.rmtree(ED, ignore_errors=True)
+        vp.close(); app.processEvents()
 
 
 def test_dicom_sort_consistency(app):
@@ -1374,6 +2445,7 @@ def test_dialog_i18n_coverage(app):
         if vi.ai_thread: vi.ai_thread.cancel()
         vi.volume_hu = np.zeros((4, 32, 32), np.float32)
         vi.dicom_datasets = [None] * 4
+        _mark_supported_capabilities(vi)
         vi.views[1]['plane'] = CORONAL          # 触发「3D 追踪仅支持 Axial」提示
         cjk = _re.compile(r'[一-鿿]')
         for en in (False, True):
@@ -1897,6 +2969,9 @@ def test_anisotropic_pixel_spacing(app):
             v.update_display(); app.processEvents()
             got = tuple(round(float(t), 3) for t in v.views[vid]['view'].pixel_spacing)
             check(got == exp, f"  plane={pl} 的 (垂直,水平) mm/px = {exp}（得 {got}）")
+        br = v.views[vid]['view'].overlay_lines.get('br', [])
+        check(any("Px 0.50×1.50mm" in line for line in br),
+              f"  overlay 同时呈现 anisotropic row×column spacing（{br}）")
         v.close()
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -1918,15 +2993,72 @@ def test_mpr_geometry():
     shape = (40, 200, 300)   # (Z, Y, X)
     cur = (10, 20, 30)       # (z, y, x)
     check(g.hover_to_voxel(AXIAL, 50, 60, cur, shape) == (10, 60, 50), "Axial 悬停 (px,py)->(x,y)，z 不变")
-    check(g.hover_to_voxel(CORONAL, 50, 15, cur, shape) == (15, 20, 50), "Coronal 悬停 (px,py)->(x,z)，y 不变")
-    check(g.hover_to_voxel(SAGITTAL, 70, 15, cur, shape) == (15, 70, 30), "Sagittal 悬停 (px,py)->(y,z)，x 不变")
+    check(g.hover_to_voxel(CORONAL, 50, 15, cur, shape) == (24, 20, 50),
+          "Coronal 上方从 superior slice 映射：z=Z-1-py")
+    check(g.hover_to_voxel(SAGITTAL, 70, 15, cur, shape) == (24, 70, 30),
+          "Sagittal 上方从 superior slice 映射：z=Z-1-py")
     check(g.hover_to_voxel(AXIAL, 999, 999, cur, shape) == (10, 199, 299), "越界裁剪到体积上界")
     check(g.hover_to_voxel(AXIAL, -5, -5, cur, shape) == (10, 0, 0), "负坐标裁剪到 0")
-    check(g.voxel_to_crosshair(AXIAL, 10, 20, 30) == (30, 20), "Axial 十字线 (x,y)")
-    check(g.voxel_to_crosshair(CORONAL, 10, 20, 30) == (30, 10), "Coronal 十字线 (x,z)")
-    check(g.voxel_to_crosshair(SAGITTAL, 10, 20, 30) == (20, 10), "Sagittal 十字线 (y,z)")
+    check(g.voxel_to_crosshair(AXIAL, 10, 20, 30, shape) == (30, 20), "Axial 十字线 (x,y)")
+    check(g.voxel_to_crosshair(CORONAL, 10, 20, 30, shape) == (30, 29),
+          "Coronal 十字线 z 映射到上 S / 下 I 的 screen y")
+    check(g.voxel_to_crosshair(SAGITTAL, 10, 20, 30, shape) == (20, 29),
+          "Sagittal 十字线 z 映射到上 S / 下 I 的 screen y")
     check(g.nearest_slice([0, 5, 10, 15, 20], 12) == 2, "最近解剖切片 = 索引2 (z=10)")
     check(g.nearest_slice([0, 5, 10, 15, 20], 100) == 4, "超出范围取最末切片")
+
+
+def test_dicom_landmark_orientation(app):
+    """不对称亮点必须穿过 synthetic DICOM loader 与真实 render path 验证六向。"""
+    print("[DICOM landmark：loader/render 的 A/P/L/R/S/I 闭环]")
+    import shutil
+    import tempfile
+
+    from pydicom.uid import generate_uid
+
+    from constants import AXIAL, CORONAL, SAGITTAL
+
+    root = tempfile.mkdtemp()
+    v = None
+    try:
+        sid = generate_uid()
+        rows, cols = 6, 10
+        for z in range(3):
+            pixels = np.zeros((rows, cols), dtype=np.int16)
+            if z == 2:
+                pixels[1, 8] = 1000  # superior + anterior + patient-left 的不对称 landmark
+            _write_min_dcm(os.path.join(root, f"s{z}.dcm"), (rows, cols), sid,
+                           ipp_z=z, inst=z + 1, slope=1, intercept=0, pixels=pixels)
+        v = m.MedicalViewer(); app.processEvents()
+        v._kickoff_ai = lambda: None
+        v.load_data(root); app.processEvents()
+        vid = min(v.views)
+        view = v.views[vid]['view']
+        v.current_3d_pos = [2, 1, 8]
+        v.slider_slice.setValue(2)
+
+        def brightest_xy():
+            image = view.image_item.pixmap().toImage()
+            samples = [((x, y), image.pixelColor(x, y).red())
+                       for y in range(image.height()) for x in range(image.width())]
+            return max(samples, key=lambda item: item[1])[0]
+
+        expected = {
+            AXIAL: ((8, 1), {'top': 'A', 'bottom': 'P', 'left': 'R', 'right': 'L'}),
+            CORONAL: ((8, 0), {'top': 'S', 'bottom': 'I', 'left': 'R', 'right': 'L'}),
+            SAGITTAL: ((1, 0), {'top': 'S', 'bottom': 'I', 'left': 'A', 'right': 'P'}),
+        }
+        for plane, (xy, labels) in expected.items():
+            v.views[vid]['plane'] = plane
+            v.update_display(); app.processEvents()
+            check(brightest_xy() == xy and view.orient_labels == labels,
+                  f"plane={plane} landmark={xy} 且 edge labels={labels}"
+                  f"（得 {brightest_xy()} / {view.orient_labels}）")
+    finally:
+        if v is not None:
+            if v.ai_thread: v.ai_thread.cancel()
+            v.close(); app.processEvents()
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_mouse_interaction(app):
@@ -2076,6 +3208,8 @@ def test_mesh3d_ui(v, app):
 
     import mesh3d as M
     saved_mask = v.volume_mask
+    saved_geometry = v.series_geometry
+    _mark_supported_capabilities(v, saved_geometry.slice_spacing_mm or 1.0)
     saved_exec = QDialog.exec
     dlgs = []
     QDialog.exec = lambda self: dlgs.append(self)   # 不阻塞在模态窗，同时留下弹窗以便检查
@@ -2124,6 +3258,8 @@ def test_mesh3d_ui(v, app):
     finally:
         QDialog.exec = saved_exec
         v.volume_mask = saved_mask
+        v.series_geometry = saved_geometry
+        v._apply_series_capabilities()
         v._update_organ_stats(); app.processEvents()
 
 
@@ -2265,21 +3401,64 @@ def test_mask_cache_guard():
     """分割蒙版磁盘缓存的恢复守卫纯函数直接单测——无 Qt / 真实数据。
 
     缓存按 PatientID 命名，只比 shape 会把同一患者另一序列（随访/复扫，常同为 512²）
-    的蒙版静默套到当前序列上，器官定量随之给出错误体积。故必须 UID+shape 双匹配。"""
+    的蒙版静默套到当前序列上，器官定量随之给出错误体积。故必须同时匹配 UID、shape 和
+    geometry/order fingerprint；legacy cache 缺 fingerprint 时 fail closed。"""
     print("[分割蒙版缓存守卫纯函数 annotation_lab.mask_cache_matches]")
     import annotation_lab as al
-    shp = (233, 512, 512)
-    ok, why = al.mask_cache_matches("1.2.840.A", shp, "1.2.840.A", shp)
-    check(ok and why == "", "同一序列（UID 与 shape 皆同）→ 恢复缓存")
-    ok, why = al.mask_cache_matches("1.2.840.A", shp, "1.2.840.B", shp)
-    check(not ok and "SeriesInstanceUID" in why,
-          "同患者另一序列（shape 相同、UID 不同）→ 拒绝套用（核心回归：防串序列）")
-    ok, why = al.mask_cache_matches("1.2.840.A", (233, 512, 512), "1.2.840.A", (200, 512, 512))
-    check(not ok and "shape" in why, "shape 不匹配 → 拒绝")
-    ok, why = al.mask_cache_matches("", shp, "1.2.840.A", shp)
-    check(not ok, "缓存缺 UID（旧版本产物）→ 拒绝，宁可重跑 AI")
-    ok, why = al.mask_cache_matches("1.2.840.A", shp, "", shp)
-    check(not ok, "当前序列缺 UID → 拒绝")
+    shp, fp_a, fp_b = (233, 512, 512), "a" * 64, "b" * 64
+    try:
+        ok, why = al.mask_cache_matches("1.2.840.A", shp, fp_a,
+                                        "1.2.840.A", shp, fp_a)
+    except TypeError:
+        ok, why = False, "旧接口尚未接收 fingerprint"
+    check(ok and why == "", "同 UID/shape/fingerprint → 恢复缓存")
+    if ok:
+        ok, why = al.mask_cache_matches("1.2.840.A", shp, fp_a,
+                                        "1.2.840.A", shp, fp_b)
+        check(not ok and "fingerprint" in why.lower(),
+              "同 UID/shape 但 slice-order fingerprint 不同 → 拒绝")
+        ok, why = al.mask_cache_matches("1.2.840.A", shp, "",
+                                        "1.2.840.A", shp, fp_a)
+        check(not ok and "fingerprint" in why.lower(),
+              "legacy cache 缺 fingerprint → 默认拒绝，不凭用户确认猜测")
+        ok, why = al.mask_cache_matches("1.2.840.A", shp, fp_a,
+                                        "1.2.840.B", shp, fp_a)
+        check(not ok and "SeriesInstanceUID" in why,
+              "同患者另一序列（shape 相同、UID 不同）→ 拒绝")
+        ok, why = al.mask_cache_matches("1.2.840.A", (233, 512, 512), fp_a,
+                                        "1.2.840.A", (200, 512, 512), fp_a)
+        check(not ok and "shape" in why, "shape 不匹配 → 拒绝")
+
+
+def test_geometry_fingerprint_contract():
+    """cache/annotation fingerprint 必须稳定绑定有序 SOP、geometry 与 volume shape。"""
+    print("[cache geometry/order fingerprint：deterministic SHA-256]")
+    from types import SimpleNamespace
+
+    import dicom_geometry as dg
+
+    def one(sop, z):
+        return SimpleNamespace(
+            SOPInstanceUID=sop,
+            SeriesInstanceUID="1.2.3",
+            ImageOrientationPatient=(1, 0, 0, 0, 1, 0),
+            ImagePositionPatient=(0, 0, z),
+            PixelSpacing=(0.7, 0.9),
+        )
+
+    fn = getattr(dg, 'series_fingerprint', None)
+    check(callable(fn), "geometry 模块提供 deterministic series_fingerprint")
+    if callable(fn):
+        a = [one("1.2.3.1", 0), one("1.2.3.2", 1), one("1.2.3.3", 2)]
+        same = [one("1.2.3.1", 0), one("1.2.3.2", 1), one("1.2.3.3", 2)]
+        reordered_identity = [one("1.2.3.2", 0), one("1.2.3.1", 1), one("1.2.3.3", 2)]
+        fp = fn(a, (3, 8, 9))
+        check(fp == fn(same, (3, 8, 9)) and len(fp) == 64
+              and all(c in "0123456789abcdef" for c in fp),
+              "相同输入跨对象得到同一 64-char SHA-256")
+        check(fp != fn(reordered_identity, (3, 8, 9)),
+              "同 UID/shape 但 SOP→slice 绑定改变时 fingerprint 改变")
+        check(fp != fn(a, (3, 9, 8)), "volume shape 改变时 fingerprint 改变")
 
 
 def test_mpr_linkage(app):
@@ -2328,8 +3507,9 @@ def test_mpr_linkage(app):
               f"Axial 上悬停 (20,10) → 光标 y=10 x=20（得 {vi.current_3d_pos}）")
         vi.views[2]['plane'] = CORONAL
         vi.sync_crosshair(QPointF(20, 3), 2); app.processEvents()
-        check(vi.current_3d_pos[0] == 3, f"Coronal 上悬停 → z 跟着走（得 {vi.current_3d_pos}）")
-        check(vi.slider_slice.value() == 3, "切片滑条同步到新 z，不与光标脱节")
+        check(vi.current_3d_pos[0] == 6,
+              f"Coronal 上 S / 下 I 显示中 py=3 → z=Z-1-py（得 {vi.current_3d_pos}）")
+        check(vi.slider_slice.value() == 6, "切片滑条同步到翻转后的新 z，不与光标脱节")
 
         # HUD 报出坐标、HU 与所在器官
         vi.volume_mask = np.zeros((Z, H, W), np.uint8); vi.volume_mask[5, 10, 20] = 5
@@ -2380,6 +3560,7 @@ def test_panel_scroll(app):
         vi.dicom_datasets = [type('D', (), {'PatientID': 'X', 'SeriesInstanceUID': '1',
                                             'StudyDate': '20240101', 'PixelSpacing': [1.5, 1.5],
                                             'SliceThickness': 1.5})() for _ in range(Z)]
+        _mark_supported_capabilities(vi, 1.5)
         vi.slider_slice.setRange(0, Z - 1); vi.current_3d_pos = [15, 64, 64]
         mk = np.zeros((Z, H, W), np.uint8)
         for i, lab in enumerate([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 20]):
@@ -2544,6 +3725,7 @@ def test_crop_and_legend(app):
         vi.dicom_datasets = [type('D', (), {'PatientID': 'CROPTEST', 'SeriesInstanceUID': '9.9',
                                             'StudyDate': '20240101', 'PixelSpacing': [1.0, 1.0],
                                             'SliceThickness': 1.0})() for _ in range(Z)]
+        _mark_supported_capabilities(vi)
         vi.current_3d_pos = [2, 20, 20]
         vi.views[1]['plane'] = AXIAL
         poly = [(12, 12), (28, 12), (28, 28), (12, 28)]
@@ -2773,6 +3955,7 @@ def test_probe_hu(app):
         Z, H, W = 8, 32, 32
         vi.volume_hu = np.arange(Z * H * W, dtype=np.float32).reshape(Z, H, W)
         vi.dicom_datasets = [None] * Z
+        _mark_supported_capabilities(vi)
         vi.current_3d_pos = [4, 16, 16]
         vi.active_tool = TOOL_POINTER
         view_t = type(vi.views[1]['view'])
@@ -2785,8 +3968,8 @@ def test_probe_hu(app):
 
         # 鼠标 (cx,cy)=(20,5)：三平面各自的 (z,y,x) 映射，与 mpr_geometry 同一套约定
         for pl, nm, exp in ((AXIAL, 'Axial', (4, 5, 20)),
-                            (CORONAL, 'Coronal', (5, 16, 20)),
-                            (SAGITTAL, 'Sagittal', (5, 20, 16))):
+                            (CORONAL, 'Coronal', (2, 16, 20)),
+                            (SAGITTAL, 'Sagittal', (2, 20, 16))):
             txt = probe((20, 5), pl)
             want = float(vi.volume_hu[exp])
             check(f"{want:.1f} HU" in txt, f"{nm} 读到体素 {exp} = {want:.1f}（得「{txt}」）")
@@ -3252,23 +4435,7 @@ def test_zero_grade_guards(app, m):
           f"AI 结果落地后撤销栈被清空（剩 {len(v._mask_undo)} 条）")
     check(bool(v.volume_mask.any()), "AI 蒙版确实落地了（前一条不是因为没跑到）")
 
-    # ③ DICOM 排序守卫必须显式查有限性：float('nan') 不抛异常，
-    #    NaN 会安静通过 try，整列按 NaN 排序后解剖顺序彻底乱掉。
-    class _DS:
-        def __init__(self, z):
-            self.ImagePositionPatient = [0.0, 0.0, z]
-
-    for val, want, tag in ((1.0, True, '有限值'), (float('nan'), False, 'NaN'),
-                           (float('inf'), False, '+Inf'), (None, False, 'None')):
-        check(m.has_finite_ipp(_DS(val)) is want,
-              f"has_finite_ipp({tag}) = {m.has_finite_ipp(_DS(val))}（期望 {want}）")
-    check(m.has_finite_ipp(type('X', (), {})()) is False, "缺 IPP 标签 → False")
-    # 序列级统一：只要有一层不可用，整列就必须回退 InstanceNumber
-    mixed = [_DS(2.0), _DS(float('nan')), _DS(1.0)]
-    check(not all(m.has_finite_ipp(d) for d in mixed),
-          "混入一层 NaN 即整列判为不可按解剖 z 排序（防逐切片混排）")
-
-    # ④ 非 Axial 平面的标注必须被拒绝，而不是按 axial 层号错存。
+    # ③ 非 Axial 平面的标注必须被拒绝，而不是按 axial 层号错存。
     # 保持 synthetic volume / DICOM 列表长度一致；旧 fixture 留空列表，使下面合法的
     # Axial 标注在 update_display 中抛 IndexError，却被 Qt signal/slot 静默吞掉。
     v.dicom_datasets = [None] * 3
@@ -3616,22 +4783,63 @@ def test_doc_code_consistency():
            if 'recon_dl' in ln and ('seed-fixed' in ln or '种子固定' in ln)]
     check(not bad, f"能力表未把研究三标成 seed-fixed（违规 {len(bad)} 行）")
 
-    # ④ 主 README 声称的 Qt-free 模块数，必须与 ARCHITECTURE 清单实际条目一致。
+    # ④ packaging inventory、root 产品模块、实际 local imports 与公开架构清单同源核对。
+    #    不锁 LOC：行数随正常维护频繁变化，不能让每加一行都迫使公开文档改动。
+    pyproject = rd('pyproject.toml')
+    module_block = re.search(r'py-modules\s*=\s*\[(.*?)\]', pyproject, re.S)
+    declared = set(re.findall(r'"([a-z_0-9]+)"', module_block.group(1))) if module_block else set()
+    actual = {os.path.splitext(name)[0] for name in os.listdir(_ROOT)
+              if re.fullmatch(r'[a-z_0-9]+\.py', name)}
+
+    local_imports = set()
+    qt_importers = set()
+    for module in actual:
+        tree = ast.parse(rd(f'{module}.py'))
+        roots = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                roots.update(alias.name.split('.')[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                roots.add(node.module.split('.')[0])
+        local_imports.update(roots & actual)
+        if 'PySide6' in roots:
+            qt_importers.add(module)
+
+    # constants.py 无 Qt，但属于常量表，不计入“compute modules”。
+    qt_free_compute = actual - qt_importers - {'constants'}
     arch = rd('docs/ARCHITECTURE.md')
-    # 必须用带 —— 前缀的分隔行定位：短语 "Qt-free compute modules" 在上方那句声称里
-    # 也出现，按它切会切到声称处，[1] 落进 UI mixins 清单而不是模块清单——本测试
-    # 初版就是这么写的，于是拿 8 个 mixin 去比 9，报了一个并不存在的缺陷。
     block = arch.split('—— Qt-free compute modules')[1]
     block = block.split('\n', 1)[1].split('——')[0]   # 跳过分隔行自身（它首尾都有 ——）
     listed = re.findall(r'^([a-z_0-9]+)\.py\s{2,}', block, re.M)
     listed = [m for m in listed if m != 'constants']          # 常量表不算计算模块
-    # 解析自检：清单空了几乎必然是这段定位写错，而不是文档真的一个模块都不列。
-    # 少了这一条，解析 bug 会伪装成「文档数目对不上」，把人引去改本来正确的文档。
     check(len(listed) >= 5, f"模块清单解析出 {len(listed)} 条（<5 说明是本测试的定位写错了）")
-    words = {'eight': 8, 'nine': 9, 'ten': 10}
+    words = {'eight': 8, 'nine': 9, 'ten': 10, 'eleven': 11}
     claimed = next((v for w, v in words.items() if f'{w} Qt-free' in arch), None)
-    check(claimed == len(listed),
-          f"ARCHITECTURE 声称 {claimed} 个 Qt-free 模块，清单实有 {len(listed)} 个 {listed}")
+
+    def inventory_errors(declared_modules, listed_modules, claimed_count):
+        errors = []
+        if declared_modules != actual:
+            errors.append(f"pyproject delta={sorted(declared_modules ^ actual)}")
+        missing_imports = local_imports - declared_modules
+        if missing_imports:
+            errors.append(f"local imports absent from wheel={sorted(missing_imports)}")
+        if set(listed_modules) != qt_free_compute:
+            errors.append(f"ARCHITECTURE delta={sorted(set(listed_modules) ^ qt_free_compute)}")
+        if claimed_count != len(qt_free_compute):
+            errors.append(f"claimed={claimed_count}, actual Qt-free compute={len(qt_free_compute)}")
+        return errors
+
+    inventory_bad = inventory_errors(declared, listed, claimed)
+    check(not inventory_bad,
+          f"pyproject/root imports/ARCHITECTURE inventory 一致（问题: {inventory_bad or '无'}）")
+    check(len(declared) == 19 and len(qt_free_compute) == 10,
+          f"当前 candidate inventory：{len(declared)} top-level modules / "
+          f"{len(qt_free_compute)} Qt-free compute modules")
+
+    # known-bad 自检只改 synthetic set；不触碰 tracked pyproject/Markdown。
+    mutated_errors = inventory_errors(declared - {'dicom_geometry'}, listed, claimed)
+    check(any('dicom_geometry' in error for error in mutated_errors),
+          "known-bad inventory：synthetic 移除 dicom_geometry 会被 checker 拒绝")
 
 
 def test_model_card():
@@ -3831,6 +5039,7 @@ def test_mask_nondestructive(app):
         vol[3:7, 12:28, 12:28] = 60.0        # 一团均质组织，供区域增长追出连通域
         vi.volume_hu = vol
         vi.dicom_datasets = [None] * Z
+        _mark_supported_capabilities(vi)
         vi.volume_mask = np.zeros((Z, H, W), np.uint8)
         vi.volume_mask[2:5, 30:40, 30:40] = 5     # 肝
         vi.volume_mask[5:8, 30:40, 5:15] = 2      # 右肾
@@ -3875,14 +5084,14 @@ def test_mask_nondestructive(app):
 
 
 def test_mask_cache_roundtrip(app):
-    """蒙版缓存 save→reload 往返：同序列恢复、同患者另一序列拒绝（合成 DICOM，无真实数据）。"""
-    print("[蒙版缓存 save→reload 往返]")
+    """mask/annotation 只在 geometry fingerprint 一致时恢复，所有 I/O 位于临时目录。"""
+    print("[mask/annotation cache fingerprint save→reload]")
     import glob
     import shutil
     import tempfile
 
     from pydicom.uid import generate_uid
-    ed = os.path.join(_ROOT, "Exported_Lesions")
+    ed = tempfile.mkdtemp()
     pid = "RID_CACHE_TEST"
     made = []
 
@@ -3893,9 +5102,11 @@ def test_mask_cache_roundtrip(app):
         return d
 
     uid_a, uid_b = generate_uid(), generate_uid()
-    da, db = _mkdir_series(uid_a), _mkdir_series(uid_b)
+    da, db, dc = _mkdir_series(uid_a), _mkdir_series(uid_b), _mkdir_series(uid_a)
     try:
         vc = m.MedicalViewer(); app.processEvents()
+        vc.persistence_dir = ed
+        vc._kickoff_ai = lambda: None
         if vc.ai_thread:
             vc.ai_thread.cancel()
         # 序列 A：造一个非空蒙版并保存
@@ -3904,15 +5115,30 @@ def test_mask_cache_roundtrip(app):
             vc.ai_thread.cancel()
         vc.volume_mask = np.zeros_like(vc.volume_hu, dtype=np.uint8)
         vc.volume_mask[0, :4, :4] = 5          # 标记为器官5，便于区分
+        vc.global_annotations = {0: [{'id': 'a0', 'type': 'ruler',
+                                      'p1': [1, 1], 'p2': [4, 4]}], 'all': []}
         vc.save_project()
         made = glob.glob(os.path.join(ed, f"{pid}_*"))
-        check(any(f.endswith("_mask.npz") for f in made), "save_project 落盘 _mask.npz")
+        check(any(f.endswith("_mask.npz") for f in made)
+              and any(f.endswith("_annotations.json") for f in made),
+              "save_project 仅在临时 persistence_dir 落盘 mask + annotation")
 
         # 重开序列 A（同 UID 同 shape）→ 应恢复
         vc.volume_mask = None
         restored_a = vc._load_saved_mask(pid)
         check(restored_a and vc.volume_mask is not None and int(vc.volume_mask[0, 0, 0]) == 5,
-              "重开同一序列 → 缓存被恢复（省掉 ~100s 重算）")
+              "同 UID/shape/fingerprint → mask 恢复")
+        vc.global_annotations = {'all': []}; vc._load_annotations_json(pid)
+        check(vc.global_annotations.get(0, [{}])[0].get('id') == 'a0',
+              "同 UID/shape/fingerprint → slice-indexed annotation 恢复")
+
+        # 同 UID/shape，但 SOP→slice identity 不同：必须由 fingerprint 拒绝。
+        vc.load_data(dc); app.processEvents()
+        vc.volume_mask = None; vc.global_annotations = {'all': []}
+        check(not vc._load_saved_mask(pid), "同 UID/shape、不同 ordered SOP fingerprint → mask 拒绝")
+        vc._load_annotations_json(pid)
+        check(vc.global_annotations == {'all': []},
+              "同 UID/shape、不同 ordered SOP fingerprint → annotation 拒绝")
 
         # 切到序列 B（同 PatientID、同 shape、不同 SeriesInstanceUID）→ 必须拒绝
         vc.load_data(db); app.processEvents()
@@ -3922,13 +5148,22 @@ def test_mask_cache_roundtrip(app):
         restored_b = vc._load_saved_mask(pid)
         check(not restored_b and vc.volume_mask is None,
               "切到同患者另一序列（同 shape 不同 UID）→ 拒绝套用旧蒙版（核心回归）")
+
+        # legacy 无 fingerprint：mask 与 annotation 都默认拒绝，不猜测旧顺序。
+        np.savez_compressed(os.path.join(ed, f"{pid}_mask.npz"),
+                            mask=np.ones((3, 16, 16), np.uint8), series_uid=np.array(uid_b))
+        with open(os.path.join(ed, f"{pid}_annotations.json"), 'w', encoding='utf-8') as f:
+            import json as _json
+            _json.dump({'__meta__': {'series_uid': uid_b},
+                        '0': [{'id': 'legacy', 'type': 'ruler', 'p1': [1, 1], 'p2': [2, 2]}]}, f)
+        vc.volume_mask = None; vc.global_annotations = {'all': []}
+        check(not vc._load_saved_mask(pid), "legacy mask 缺 fingerprint → 默认拒绝")
+        vc._load_annotations_json(pid)
+        check(vc.global_annotations == {'all': []}, "legacy annotation 缺 fingerprint → 默认拒绝")
     finally:
-        for f in made:
-            try:
-                os.remove(f)
-            except OSError:
-                pass
+        shutil.rmtree(ed, ignore_errors=True)
         shutil.rmtree(da, ignore_errors=True); shutil.rmtree(db, ignore_errors=True)
+        shutil.rmtree(dc, ignore_errors=True)
 
 
 def test_hu_conversion(app):
@@ -3975,7 +5210,14 @@ def main_run():
     if not has_data:
         print("WARN: 无 ../肺癌 真实数据（或 SKIP_REAL_DATA=1），仅运行数据无关的自包含测试")
         # 这些测试自建合成 DICOM / 用 /nonexistent.onnx 走数学降级，不依赖真实数据或 119MB 权重
-        for t in (test_ai_engine, test_mixed_shape_dicom, test_recon_finite,
+        for t in (test_ai_engine, test_noncanonical_dicom_gating,
+                  test_unsupported_dicom_contract, test_missing_series_uid_contract,
+                  test_load_clears_stale_hu_probe,
+                  test_invalid_calibration_raw_gating, test_hu_unit_semantics_gating,
+                  test_spacing_capability_gating,
+                  test_compare_dicom_contract, test_deid_export_and_persistence_contract,
+                  test_save_project_atomic_contract,
+                  test_mixed_shape_dicom, test_recon_finite,
                   test_close_cancels_ai, test_malformed_pixels, test_empty_dicom_tags,
                   test_export_path_safety, test_dicom_sort_consistency, test_i18n_persistent,
                   test_nonfinite_dicom_tags, test_dialog_i18n_coverage,
@@ -3986,6 +5228,7 @@ def main_run():
                   test_mpr_linkage):
             t(app)
         test_spacing_resample()  # 假 session，不加载权重
+        test_patient_space_geometry_contract()
         test_phantom()        # 纯解析生成，无需 app
         test_confidence_map() # 手工 logits，不加载模型
         test_model_card()     # 纯字符串组装，无需 app / 真实数据
@@ -4003,7 +5246,9 @@ def main_run():
         test_stale_ai_cannot_overwrite_restored_mask()
         test_anisotropic_pixel_spacing(app)
         test_mpr_geometry()
+        test_dicom_landmark_orientation(app)
         test_mask_cache_guard()
+        test_geometry_fingerprint_contract()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
         test_asdpocs_numerics()        # ASD-POCS/TV 正则化：合成小系统，无 Qt / 真实数据
         test_dl_recon_guard()
@@ -4031,6 +5276,16 @@ def main_run():
         test_cine_keyboard(v, app)
         test_compliance(v, app)
         test_edge_cases(v, app)
+        test_noncanonical_dicom_gating(app)
+        test_unsupported_dicom_contract(app)
+        test_missing_series_uid_contract(app)
+        test_load_clears_stale_hu_probe(app)
+        test_invalid_calibration_raw_gating(app)
+        test_hu_unit_semantics_gating(app)
+        test_spacing_capability_gating(app)
+        test_compare_dicom_contract(app)
+        test_deid_export_and_persistence_contract(app)
+        test_save_project_atomic_contract(app)
         test_mixed_shape_dicom(app)
         test_legend_consistency(v, app)
         test_recon_finite(app)
@@ -4064,6 +5319,7 @@ def main_run():
         test_panel_scroll(app)
         test_mpr_linkage(app)
         test_spacing_resample()
+        test_patient_space_geometry_contract()
         test_phantom()
         test_phantom_recon_flow(app)
         test_quantify()
@@ -4078,7 +5334,9 @@ def main_run():
         test_stale_ai_cannot_overwrite_restored_mask()
         test_anisotropic_pixel_spacing(app)
         test_mpr_geometry()
+        test_dicom_landmark_orientation(app)
         test_mask_cache_guard()
+        test_geometry_fingerprint_contract()
         test_recon_numerics()          # 重建数值正确性：解析模体，无 Qt / 真实数据
         test_asdpocs_numerics()        # ASD-POCS/TV 正则化：合成小系统，无 Qt / 真实数据
         test_dl_recon_guard()

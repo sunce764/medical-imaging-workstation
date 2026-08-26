@@ -50,7 +50,7 @@ RMSE falls monotonically from **0.222** at 15 views to **0.035** at 360 views; S
 | 180 (dense) | **0.037** | 0.040 | 0.048 | 0.054 | 0.055 |
 
 **Key conclusion: there is no single "best" filter; the optimal choice depends on dose.**
-At low dose / sparse angles, apodisation filters (hann/hamming) that suppress high-frequency noise win; as dose increases, the sharp Ram-Lak overtakes them on fidelity. **The crossover is at ≈45–60 views.**
+At low dose / sparse angles, apodisation filters (hann/hamming) that suppress high-frequency noise win; as dose increases, the sharp Ram-Lak overtakes them on fidelity. Two thresholds must not be conflated: **ramp crosses hann between 45 and 60 views, while ramp becomes the global best of all five filters between 60 and 90 views.**
 
 ### C — Analytic vs iterative under photon noise (64×64, I0=3×10⁴)
 `exp_c_analytic_vs_iterative.png` · `exp_c_gallery.png`
@@ -230,9 +230,9 @@ Extra dependency: `torch` (see `requirements-experiments.txt`). **The App does n
 | FBP at the lesion-free site | +0.0017 |
 | **network at the lesion-free site** | **+0.0028** |
 | network at the true-lesion site | +0.3427 (**99% recovered**) |
-| false-structure rate (> 20% / 30% / 50% of a true lesion) | **1.7% / 0% / 0%** |
+| false-structure rate (> 20% / 30% / 50% of a true lesion), 60 paired phantoms | **1.67% / 0% / 0%** |
 
-The network's signal where nothing exists is the same order as FBP's own fluctuation. **On these phantoms, at these thresholds, it did not invent structure** — which is a measured negative result on noise-free synthetic data, not a guarantee that it never will. This has to be measured with paired phantoms: the matrix's "background streak std" is a whole-background statistic, in which one isolated fake lesion is diluted by tens of thousands of pixels and cannot be seen at all.
+The network's signal where nothing exists is the same order as FBP's own fluctuation. **On these phantoms it crossed the 20%-of-lesion threshold in 1 of 60 pairs, and crossed neither the 30% nor 50% threshold** — a bounded result on noise-free synthetic data, not a guarantee that it never invents structure. This has to be measured with paired phantoms: the matrix's "background streak std" is a whole-background statistic, in which one isolated fake lesion is diluted by tens of thousands of pixels and cannot be seen at all.
 
 ### C — Out-of-distribution: is it generic de-streaking, or memorised shapes?
 
@@ -279,14 +279,14 @@ Judge by **|CTF − 1|**, not by "higher CTF is better": ramp overshoots at shar
 
 ## Limitations (stated, not buried)
 
-- **Everything here is noise-free — and that is exactly where hallucination is least likely.** `forward_fbp` runs `make_theta → compute_sinogram → compute_fbp` with no photon-noise model at all, while Study I's `recon_study.py` does have `add_poisson_noise`. Sparse views and low dose are two faces of the same clinical problem, and the low SNR of photon starvation is a material untested condition. **The 1.7% false-structure rate is a favourable-condition estimate, not a mathematical lower bound**: neither the direction nor the magnitude of the change under photon noise was measured. Note also that where this study says "dose" it means *view count only*; the mAs axis is untouched.
+- **Everything here is noise-free.** `forward_fbp` runs `make_theta → compute_sinogram → compute_fbp` with no photon-noise model at all, while Study I's `recon_study.py` does have `add_poisson_noise`. Realistic photon noise is a material untested condition. **The 1.67% false-structure rate is neither an upper nor a lower bound for low-dose CT**: neither the direction nor the magnitude of change was measured, and low SNR is not claimed as the dominant driver. Where this study says "dose" it means *view count only*; the mAs axis is untouched.
 - **ART/SIRT are not in the matrix.** They need an explicit system matrix, and `lstsq` cost caps the usable size at about 64² — not comparable with this study's 128². Putting them in the same table would manufacture a false equivalence.
 - **Phantoms, not anatomy.** The phantom family is richer than a single Shepp-Logan and the OOD sets probe shapes never trained on, but none of this is real CT. The transfer to clinical images is untested here.
 - **One network size, one loss.** 1.9 M parameters trained with plain MSE. Whether a different capacity or a perceptual/adversarial loss would move the hallucination rate is not measured.
 - **The 24.1% on gratings is a real weakness**, not a rounding artefact: at the sampling limit a post-processor cannot restore information the sparse projections never carried.
 
 ## Reconstruction-DL study — one-sentence summary
-A 1.9 M-parameter self-implemented post-processor cuts sparse-view RMSE by **3–6×** versus the best linear filter and lifts lesion-contrast retention from a view-count-independent **0.87 ceiling to 0.96–1.00** — and, measured rather than assumed, it did **not invent structure on the phantoms tested** (false-structure rate 1.7% at the loosest threshold, 0% beyond) and its gain did **not depend on the three out-of-distribution shape families tested** (gain ratio 0.81), with the sharpest limit it hit being the sampling frequency. Every one of those is a bound on what was measured, not a general property: **all of it under noise-free projections, which is the condition least likely to induce hallucination**, on synthetic phantoms only.
+A 1.9 M-parameter self-implemented post-processor cuts sparse-view RMSE by **3–6×** versus the best linear filter and lifts lesion-contrast retention from a view-count-independent **0.87 ceiling to 0.96–1.00**. Across **60 noise-free synthetic paired phantoms**, its false-structure rate is **1.67%** at the 20%-of-lesion threshold and **0%** at 30% and 50%; its gain survives the three out-of-distribution shape families tested (gain ratio 0.81). These are measurements on those phantoms, not general guarantees. Photon-noise direction and magnitude are unmeasured, so 1.67% is neither an upper nor a lower bound for low-dose CT.
 
 ---
 
@@ -331,7 +331,7 @@ python experiments/seg3d_bench.py           # inference cost + provider comparis
 python experiments/seg3d_train.py --ch 8 --depth 3 --epochs 10 --steps 120    # line C, ~20 min
 python experiments/seg3d_train.py --ch 8 --depth 3 --epochs 280 --steps 120  # line D, ~8.4 h
 python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt              # line C, failure mode
-python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt --infer zslab  # the defective path
+python experiments/seg3d_diag.py --ckpt results/seg3d_w8d3.pt --infer zslab  # full-plane path under study
 
 python experiments/seg3d_infer_bias.py all                     # line E, five controls, ~25 min
 python experiments/seg3d_infer_bias.py grid --yes               # 2x2 pilot, 3 cases (exploratory)
@@ -407,7 +407,7 @@ Cost is set by model FLOPs times input voxels, and is independent of how much da
 
 ### C — The student learns "lung", and never learns "which lobe"
 
-> **Superseded by lines D and E — read those before trusting anything here.** Everything below was measured at **1,200 optimiser steps** *and* through an inference path that was later found to be defective. Line D shows 28× the budget takes the same architecture from 0.062 to 0.490; line E shows the evaluation itself was suppressing the foreground, and fixing it takes the *same weights* to 0.746. The causal explanation offered at the end of this section — a receptive-field ceiling — **is wrong**. So is the headline observation that three lobes are never predicted: line E's padding experiment wipes out 99.3 % of predicted foreground without changing a single input voxel, which is the same phenomenon. The section is kept verbatim because the reasoning that produced the wrong conclusion is part of the result.
+> **Superseded by lines D and E — read those before trusting anything here.** Everything below was measured at **1,200 optimiser steps** and through a full-plane inference path whose tensor extent interacts strongly with this fixed-size/no-augmentation student. Line D shows 28× the budget takes the same architecture from 0.062 to 0.490; line E shows that switching to training-size sliding windows takes the *same weights* to 0.746. The causal explanation offered at the end of this section — a receptive-field ceiling — **is wrong**. So is the headline observation that three lobes are never predicted: line E's padding experiment wipes out 99.3% of predicted foreground without changing one content voxel. The section is retained because the failed reasoning is part of the audit trail.
 
 A compact 3D U-Net trained from scratch on the 207-case training split (labels are ground truth, **not** teacher predictions — distilling from the teacher would measure imitation, not accuracy) reaches a five-lobe Dice of **0.062** [0.044, 0.079] on 24 validation cases. Three controls locate why.
 
@@ -438,7 +438,7 @@ This is consistent with what the task requires. The five lobes are nearly identi
 
 The decisive scale is not the patch but the **effective receptive field**: **42 mm** at `depth=2`, **78 mm** at `depth=3`, against a largest-lobe z-extent of **108 mm**. The model is asked a global question through a window smaller than the structure it must name. The teacher processes the full in-plane extent at every step — measured across all 297 cases, a median of **380 mm** (range 120–748 mm), against the student's 192 mm patch. (An earlier draft of this section put the teacher's field at 768 mm by assuming 512² inputs; this dataset's in-plane median is 253 voxels, so that figure was wrong by a factor of two. The numbers in the figure are now read from `seg3d_geom.json` rather than written into the plotting code.)
 
-*(The paragraph above is the wrong explanation, kept as written. Two independent things falsify it: the same 78 mm receptive field reaches 0.490 once trained longer (line D), and 0.746 once the evaluation is fixed (line E). Neither required touching the architecture.)*
+*(The paragraph above is the wrong explanation, kept as written. Two observations falsify it: the same 78 mm receptive field reaches 0.490 once trained longer (line D), and 0.746 on the training-size sliding path (line E). Neither required changing the architecture.)*
 
 ### D — The budget was the cause
 
@@ -461,9 +461,9 @@ Three lobes that had received zero voxels in **every** case they appeared in are
 
 Cost, for anyone reproducing: 280 epochs × 120 steps took **8.4 hours** on this Mac's MPS backend. Matching nnU-Net's 250,000 steps extrapolates to roughly **63 hours**.
 
-*(Every number in this section is measured through `zslab_infer`, the same defective path line E dissects. They remain internally comparable — both budgets used it — but both are depressed. The 1,200-step weights were lost before the defect was found, so the two budgets cannot be re-compared under the corrected path. How much of the 0.062→0.490 gain is training and how much is unrelated to it is therefore settled; how much of the *remaining* gap to 0.746 belongs to each is not.)*
+*(Every number in this section is measured through `zslab_infer`, the same tensor-extent-sensitive path line E dissects. They remain internally comparable because both budgets used it, but they do not measure the sliding-window operating point. The 1,200-step weights were lost before the interaction was found, so the two budgets cannot be re-compared on the sliding path. How much of the 0.062→0.490 gain is training is internally measured on `zslab`; how much of the remaining gap to 0.746 belongs to budget, path, or their interaction is not.)*
 
-### E — The evaluation was suppressing the foreground
+### E — A student model–inference-path interaction suppresses foreground
 
 `val patch-Dice` at the best epoch was **0.8186**, while whole-volume scoring gave **0.4903**. A gap of 0.33 between the training metric and the evaluation metric is itself a signal; it was not chased at the time.
 
@@ -471,14 +471,14 @@ Switching inference from `zslab_infer` (full in-plane extent, z-blocked — chos
 
 > **That subgroup is post-hoc, and this is the only place it is defined.** No script produces it and no artefact records it; "lobes occupy a normal volume" was a description, not a rule. The five cases dropped are **`s0073`, `s0098`, `s0179`, `s0246`, `s0330`** — the five smallest by total lobe volume, with the cut falling in an empty stretch of the data between 70k and 127k voxels. A threshold placed after seeing the data is a weaker thing than a pre-registered one, and it matters here: four of those five are also among the seven worst cases by full-sample Dice (0.000, 0.005, 0.005, 0.156, 0.158), so dropping them removes most of the tail. It is not simply "drop the worst" — `s0218` (0.015) and `s0014` (0.120) score worse than two of the dropped cases and were kept — but the overlap is large enough that the subgroup figure should be read as illustrative. **The full-sample 0.4903 → 0.7457 above is the result**; both are recomputable from `seg3d_diag_ch8d3_33600s_{zslab,sliding}.csv`.
 
-Five targeted controls, each removing a different competing explanation. "Targeted" rather than "independent": they run on overlapping cases with the same weights, so they are not statistically independent tests — each is aimed at one rival account and removes it.
+Five targeted controls probe different competing explanations. "Targeted" does not mean statistically independent: they share cases and weights, and the controls narrow the mechanism without uniquely identifying it.
 
-| control | what it rules out | result |
+| control | interpretation tested | result |
 |---|---|---|
 | A/B with negative controls | "overlap-blending does the work" | cases with W ≤ 128 move by +0.006 / −0.039; W = 265 moves by **+0.727** |
 | dose–response on window size | "sliding inflates Dice", "z-overlap does the work" | monotone decline as block xy grows, z held fixed |
 | **zero-padding, content held identical** | every content-based explanation | see below |
-| forward hooks on the norm layers | leaves the finding at correlation | first layer's std ratio **0.59×**, mean −1.03 → −0.35 |
+| forward hooks on the norm layers | tests whether normalisation activations shift | first layer's std ratio **0.59×**, mean −1.03 → −0.35; correlational only |
 | training-set control | "the model just does not generalise" | seen cases move +0.35 / +0.35 / +0.57; small seen cases do not move |
 
 The padding control is the decisive one. Take `s0084`, whose in-plane extent **is** 128 — enlarging the tensor introduces no new content at all, only zeros in the corner:
@@ -493,15 +493,15 @@ The padding control is the decisive one. Take `s0084`, whose in-plane extent **i
 
 **99.3 % of the foreground disappears without one input voxel changing.**
 
-The mechanism is `InstanceNorm3d`, which normalises per sample over the spatial dims. After clipping to [−1000, 400] and rescaling, air is exactly 0 — and so is padding. The larger the tensor, the larger the near-zero fraction, the further the statistics drift, and the more the foreground is flattened into background. Training saw 32×128×128 of real voxels every step; inference was handed the full plane plus padding. The student has **no data augmentation of any kind**, so nothing ever taught it scale invariance.
+The evidence points toward an interaction among `InstanceNorm3d`, tensor extent / zero-padding, and fixed-size/no-augmentation training. `InstanceNorm3d` normalises per sample over the spatial dimensions; after clipping to [−1000, 400] and rescaling, air and padding are both 0, and the observed activations shift as the near-zero fraction grows. Training saw 32×128×128 patches while `zslab_infer` supplied the full plane plus padding. However, no replacement-normalisation model was trained, so this is a supported mechanism, **not a uniquely established cause**.
 
-This also explains line C's headline: lobes were not "never learned", they were normalised away.
+This falsifies line C's claim that the lobes were simply "never learned"; it does not prove that normalisation alone accounts for the entire gap.
 
-Cost of the fix: sliding inference measures **2.54×** the wall-clock of `zslab_infer` (same 24 cases, same machine; the absolute seconds are machine-bound and not quoted) — so accuracy and cost figures in this study come from *different* inference paths and must not be paired into a single operating point.
+Cost of the path change: sliding inference measures **2.54×** the wall-clock of `zslab_infer` (same 24 cases, same machine; the absolute seconds are machine-bound and not quoted) — so accuracy and cost figures in this study come from *different* inference paths and must not be paired into a single operating point.
 
-### F — Does the same defect reach the shipped product? (test split, 24 organs)
+### F — Separate product-teacher z-seam A/B (test split, 24 organs)
 
-The teacher is also nnU-Net v2 with InstanceNorm, and `ai_engine._run_onnx_multiorgan` feeds it the full plane in z-blocks of 32 with no overlap and a per-block `argmax` — the same shape of decision. Two configurations over the whole test split, every organ present, paired:
+This experiment is **not** a replication of the student's input-size collapse. It asks a separate product question: `ai_engine._run_onnx_multiorgan` feeds the teacher full planes in z-blocks of 32 with no overlap and a per-block `argmax`; does adding z-overlap/logit accumulation reduce seam error? Two configurations are paired over the whole test split and every organ present:
 
 The test split holds 61 cases; **`s0099` and `s0340` contain none of the 24 organs in scope** and therefore produce no rows, leaving 59 evaluable and paired.
 
@@ -524,13 +524,15 @@ Cost: **1.18×** wall-clock, peak memory **8.44 → 9.09 GB** (+0.65 GB). For co
 
 A 2×2 grid separating the two factors (in-plane size × z-blocking) on three cases had suggested z-overlap was worth up to **+0.205**. Over the full split it is worth **+0.013**. That three-case figure was an outlier, and stating it here is the point: the honest version of this line is "a cheap marginal improvement", not "a defect costing 20 % accuracy". The full-split measurement exists to stop the outlier from becoming the headline.
 
-The student and the teacher fail differently, and the difference is instructive: the student, trained without augmentation on fixed 128² patches, collapses when the tensor grows. The teacher, trained with nnU-Net's scaling augmentation, barely notices — its residual loss comes from the *z* seams, not from in-plane size.
+The student and the teacher respond differently in the measured controls: the student, trained without augmentation on fixed 128² patches, collapses when the tensor grows. The teacher, trained with nnU-Net's scaling augmentation, is much less sensitive to that in-plane-size change. A separate teacher A/B measures a small gain from z overlap, but these controls do not decompose all remaining teacher error or prove that seams are its exclusive source.
 
 ### G — The student on the held-out test split
 
-Every student figure up to this point is validation-set. The test split had been kept untouched
-so that the diagnostic work in lines C–E could not contaminate it. Scored now, once, on all 57
-test cases carrying lung lobes (234 lobe instances):
+Every student figure up to this point is validation-set. The test split was not used for student
+training or for validation-stage architecture, budget, checkpoint, or inference-path selection.
+The repository subsequently evaluates that split through the teacher baseline, the product A/B,
+and the student `zslab` and `sliding` paths. The table covers all 57 test cases carrying lung lobes
+(234 lobe instances):
 
 | | inference path | five-lobe Dice | 95% CI | µs/voxel | peak |
 |---|---|---|---|---|---|
@@ -556,14 +558,14 @@ inference path, paired over all 234 instances: **−0.4500** [−0.4877, −0.41
 *p* = 3.7×10⁻³⁹. A 0.35 M student does not approach a 31.2 M teacher on this task, and the
 89:1 parameter ratio buys a 2.20× speed-up while costing 1.79× peak memory — but that memory ratio **divides a max by a mean** and should not be read as a like-for-like figure. The student artefact carries `peak_gb_max` (8.75) while `seg3d_teacher_summary.json` carries only `peak_gb_mean` (4.89), and `seg3d_report.py` silently fell back to the mean for the teacher. Compared mean-to-mean the ratio is **1.55×** (7.60 / 4.89). Both numbers are `ru_maxrss`, whose caveats are in the box at line 341; the speed-up carries the in-loop-session caveat from the same box. The silent fallback is now an explicit warning in the code, but the committed `seg3d_tradeoff.csv` predates that and still mixes the two statistics in one `peak_gb` column.
 
-**The 0.7667 is the student's own ceiling, not a comparison.** It is what the architecture reaches
-once the evaluation defect of line E is removed — but the teacher was never re-scored under a
+**The 0.7667 is the student's own sliding-path result, not a comparison.** It is what the same weights reach
+when evaluated at the training patch size — but the teacher was never re-scored under a
 matched sliding window **on the test split**, so *no* row here licenses "the student approaches the
 teacher". The one measurement that exists is 3 cases on the *validation* split
 (`results/seg3d_infer_bias_teacher.csv`, whose `xy128` column runs `_teacher_sliding` at
 `(32, 128, 128)` with overlap 0.25 — the student's exact `PATCH` and overlap), and it points the
 other way: the teacher gains **+0.0133** there (0.8594 → 0.8727) while the same three cases take
-the student from 0.5153 to 0.8707, **+0.3554**. Path brittleness is the student's own defect, not a
+the student from 0.5153 to 0.8707, **+0.3554**. Path brittleness is observed in the student, not a
 handicap the two share — and it happens to fire on the path the product actually runs
 (`ai_engine.py:311-335`). That measurement is not licensed as a number either: it is 3 cases, on a
 different split, from a code path the box at line 341 flags as never cross-checked. Quoting
@@ -580,15 +582,15 @@ be read as an improvement.)*
 
 ## Limitations (stated, not buried)
 
-- **Two of line C's three controls are retracted, and one of them is now unmeasurable.** Both ran at 1,200 steps *and* through the defective path, so neither "widening does not help" nor "deepening does not help" measured what it was designed to. The `depth=2` arm has not been rerun, so "does capacity matter" has **no valid measurement** rather than a negative one. Worse, the 1,200-step weights were deleted before line E was found, so that budget can never be re-scored under the corrected path — the training-versus-evaluation split of the original 0.062 is permanently unrecoverable.
+- **Two of line C's three controls are retracted, and one of them is now unmeasurable.** Both ran at 1,200 steps *and* through the tensor-extent-sensitive path, so neither "widening does not help" nor "deepening does not help" measured what it was designed to. The `depth=2` arm has not been rerun, so "does capacity matter" has **no valid measurement** rather than a negative one. Worse, the 1,200-step weights were deleted before line E was found, so that budget can never be re-scored on the sliding path; the budget-versus-path decomposition of the original 0.062 is permanently unrecoverable.
 - **The student's own numbers are still 13.4 % of the standard budget and not converged.** 33,600 steps against nnU-Net's 250,000; best epoch 216 of 280, with the curve still rising.
-- **The student has no data augmentation at all.** No scaling, no rotation, no intensity jitter. Line E shows what that costs: total defencelessness against an input-size shift. Any comparison against nnU-Net-trained weights is partly a comparison of augmentation pipelines, not of architectures.
+- **The student has no data augmentation at all.** No scaling, no rotation, no intensity jitter. Line E measures severe sensitivity to an input-size shift under this training/inference combination; it does not isolate the causal contribution of augmentation. Any comparison against nnU-Net-trained weights is partly a comparison of augmentation pipelines, not of architectures.
 - **Accuracy and cost come from different inference paths.** Student accuracy is now sliding-window; student cost (1.62 µs/voxel, line B) is `zslab`. Sliding costs 2.54× more. The two must not be read as one operating point.
 - **Line F changes one factor, not the strategy space.** B was chosen because it is the minimal change to the shipped path. A configuration that also blocks the plane (256² with overlap) scored higher on 3 cases but was not run over the full split — its 5–6 h cost was not judged worth a likely sub-0.03 gain, and that judgement is an assumption, not a measurement.
 - **The teacher very likely trained on these test cases.** `organs.onnx` was trained on the full TotalSegmentator dataset, of which this Lite subset is a part. The teacher is scored on data it has probably seen; the student on a genuine hold-out. Any teacher-student gap is inflated by this and cannot be attributed to capacity.
 - **Teacher and student do not solve the same task.** 25 classes versus 5, and full TotalSegmentator versus 207 cases. Three factors — capacity, task breadth, training-set size — move together, so no single number here isolates "the cost of compression".
-- **The test split has now been scored once, and only once (line G).** It was deliberately untouched while lines C–E did their diagnostic work, so it is a genuine hold-out. It has not been used to select anything — no architecture, no budget, no inference path — and should not be re-scored casually, since each look costs some of that independence.
+- **The test split was not used for student training or validation-stage selection.** Architecture, budget, checkpoint, and inference path were chosen without it. It has nevertheless been evaluated multiple times in this repository: teacher baseline, product A/B, student `zslab`, and student `sliding`. It remains a held-out training split, but not a once-viewed test set.
 - **Scanner diversity exists in the source but is unmeasurable here.** The images are clinical-routine CT from University Hospital Basel, and the upstream dataset documents its collection as spanning many scanners, sequences and institutions (Zenodo record 10047292, TotalSegmentator v2.0.1, CC-BY-4.0). But the Lite derivative ships no per-case acquisition metadata, and the NIfTI headers carry none either — `descrip` and `aux_file` are empty, the DICOM vendor tags having been dropped at conversion. So **nothing here is stratified by device**. On top of that, all 297 volumes are resampled to exactly (1.5, 1.5, 1.5) mm — read from the headers, not assumed — which erases acquisition geometry. Cross-scanner and cross-protocol behaviour is therefore **unmeasured, not excluded**; claiming either direction would be unsupported.
 
 ## Study IV — one-sentence summary
-The shipped 31.2 M-parameter teacher segments five lung lobes at Dice **0.8867** [0.859, 0.914] for 1.62 µs/voxel — a cost **CoreML makes 8.5 % worse rather than better** — while a 0.35 M student first scored **0.062**, emitting nothing at all for three of the five lobes; that failure looked like a receptive-field ceiling and was neither, because 28× the training steps took it to 0.490 and then a defect in the *evaluation* accounted for most of the rest: enlarging the input tensor with **pure zero padding, not one voxel of new content, destroys 99.3 % of predicted foreground**, since `InstanceNorm3d` reads padding and air as the same value — fixing that alone takes the same weights to **0.746**. The same class of defect reaches the shipped product, and the honest measurement of it is the deflating one: **+0.013 all-organ Dice over the 59 evaluable test cases** for 1.18× time and +0.65 GB, not the +0.205 that three cases had advertised — and on the untouched test split, scored at last on a matched inference path, the 0.35 M student lands **0.4500 below** the teacher [−0.4877, −0.4118], which is the number that would have been flattered by quoting its 0.7667 against the teacher's 0.8867 across two different paths.
+The shipped 31.2 M-parameter teacher segments five lung lobes at Dice **0.8867** [0.859, 0.914] for 1.62 µs/voxel — a cost **CoreML makes 8.5% worse rather than better** — while the 0.35 M student exposes a model–inference-path interaction: 28× more training reaches 0.490 on `zslab`, and training-size sliding reaches **0.746** with the same weights; pure zero-padding alone removes 99.3% of foreground. The evidence points to tensor extent / padding × `InstanceNorm3d` × fixed-size/no-augmentation training, but normalization replacement was not tested and the cause is not unique. Separately, the product-teacher z-seam A/B yields **+0.013 all-organ Dice over 59 evaluable test cases** for 1.18× time and +0.65 GB, not the +0.205 suggested by three cases. The test split was not used for training or validation-stage selection, but it was subsequently evaluated through teacher baseline, product A/B, and both student paths. On the matched `zslab` path, the student remains **0.4500 below** the teacher [−0.4877, −0.4118].

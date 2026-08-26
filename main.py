@@ -14,11 +14,13 @@ import json
 import math
 import os
 import re
+import secrets
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pydicom  # 读取 DICOM 医学影像文件格式
+from pydicom.uid import CTImageStorage
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox
@@ -40,26 +42,10 @@ from constants import (
     SAGITTAL,
     TOOL_POINTER,
 )
+from dicom_geometry import SeriesGeometry, analyze_series, voxel_plane_edge_labels
 from interaction import InteractionMixin
 from recon_lab import ReconLabMixin
 from ui_builder import UiBuilderMixin
-
-
-def has_finite_ipp(ds) -> bool:
-    """该 dataset 是否带有【有限的】ImagePositionPatient[2]（DICOM 排序键的可用性判据）。
-
-    必须显式查有限性：`float('nan')` 不抛异常，NaN 会安静地通过 try/except，
-    于是整列按 NaN 排序——而 NaN 与任何数比较均为 False，排序结果彻底乱掉，
-    解剖顺序错乱且无任何告警。compare_lab._zpos_array 已按同一理由加了 isfinite，
-    排序这条路当时漏了。
-
-    排序键必须【序列级统一】：全部 dataset 都有有限 z 才按解剖 z 排，
-    否则整列回退 InstanceNumber，绝不逐切片混排。
-    """
-    try:
-        return math.isfinite(float(ds.ImagePositionPatient[2]))
-    except Exception:
-        return False
 
 
 def _int_tag(ds, name, default=0):
@@ -76,6 +62,21 @@ def _int_tag(ds, name, default=0):
         return default if v is None else int(v)
     except (TypeError, ValueError):
         return default
+
+
+def is_supported_classic_ct(ds) -> bool:
+    """本轮明确支持的入口：classic single-frame CT Image Storage。"""
+    try:
+        frames = int(getattr(ds, 'NumberOfFrames', 1) or 1)
+    except (TypeError, ValueError):
+        return False
+    return (
+        str(getattr(ds, 'Modality', '')).upper() == 'CT'
+        and str(getattr(ds, 'SOPClassUID', '')) == str(CTImageStorage)
+        and frames == 1
+        and not hasattr(ds, 'SharedFunctionalGroupsSequence')
+        and not hasattr(ds, 'PerFrameFunctionalGroupsSequence')
+    )
 
 
 # AutoAIEngineThread → 已移至 ai_engine.py
@@ -114,6 +115,12 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
 
         # --- 3D 体数据 ---
         self.volume_hu = None             # 完整 HU 值体素数组 shape=(Z, H, W)，float32
+        # 四项能力必须分别由 DICOM contract 证明；不能由“数组能堆叠”推断解剖/物理语义。
+        self.hu_calibrated = False
+        self.canonical_orientation = False
+        self.inplane_spacing_valid = False
+        self.uniform_z_geometry_valid = False
+        self.series_geometry = SeriesGeometry(False, False, False, False, None, None, None)
         self.volume_mask = None           # AI 多器官标签图，shape=(Z,H,W) uint8：0=背景,1-24=器官,255=手动追踪
         self._ai_resampled = None         # 本次推理是否做过 spacing 重采样 (原shape, 送入shape)
         self.volume_conf = None           # 逐体素置信度 uint8（255=1.0）；仅 ONNX 路径产出，数学降级时为 None
@@ -121,8 +128,16 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self._organ_stats = []            # 最近一次器官定量结果，供面板显示与 CSV 导出
         self._hidden_organs = set()       # 被用户在图例中点隐的器官类别，渲染时跳过
         self._mask_undo = []              # 分割编辑撤销栈：[(切片号, 编辑前蒙版切片)]，上限 20
+        # 只有用户确认清空已有非零 mask 后才为 True；普通全零 placeholder 不能落成 cache hit。
+        self._mask_cache_clear_requested = False
         self.is_english = False           # 界面语言，False=中文，True=英文
         self.anonymize = False            # 脱敏模式：显示层隐去患者身份信息（不改底层 DICOM）
+        self._anon_session_nonce = ''     # 每次成功 load 后随机生成；匿名导出同 load 内稳定
+        default_output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "Exported_Lesions")
+        # 内部工程缓存与用户显式 export 分开建模；测试可分别重定向到临时目录。
+        self.persistence_dir = default_output_dir
+        self.export_dir = default_output_dir
         self.current_3d_pos = [0, 0, 0]  # [z, y, x]，MPR 联动的三维光标位置
 
         # --- 双序列随访对比状态（轻量版：独立模式，不改单体数据模型）---
@@ -303,6 +318,11 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         }
         for key, (tip_en, tip_cn) in _tips.items():
             self.tool_btns[key].setToolTip(tip_en if e else tip_cn)
+        self.chk_anon.setToolTip(
+            "Display/export-filename de-identification only. DICOM tags, internal project "
+            "cache identifiers, and burned-in pixel text are not removed."
+            if e else
+            "仅隐藏屏幕与显式导出文件名；不会清除 DICOM 标签、内部工程缓存标识或像素烧录文字。")
 
         self.tabs.setTabText(0, "Clinical Mode" if e else "临床阅片")
         self.tabs.setTabText(1, "Recon Lab" if e else "重建实验室")
@@ -549,6 +569,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # 记住加载前状态：若新目录无法解码，恢复原序列而非留下 dicom_datasets 与 volume_hu
         # 不一致的半更新状态（否则后续按 idx 取切片会越界崩溃）。
         prev_datasets, prev_volume = self.dicom_datasets, self.volume_hu
+        prev_geometry = self.series_geometry
         if not self._read_dicom_dir(path):
             # 【失败必须可见】此前这里直接 return：选了空文件夹或放错的目录时，界面
             # 一切不变、也没有任何提示，用户无从判断是加载失败还是加载了但没显示。
@@ -561,15 +582,28 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         pid = self._build_volume_hu()
         if pid is None:
             self.dicom_datasets, self.volume_hu = prev_datasets, prev_volume
+            self.series_geometry = prev_geometry
             QMessageBox.warning(self, "Load Failed" if self.is_english else "加载失败",
                                 "No decodable image slices in this series."
                                 if self.is_english else "该序列没有可解码的图像切片。")
             return
+        # 只有 volume 已成功构建、确认新序列成为当前序列后才清旧 readout；读目录或
+        # decode 失败的路径在上方返回，必须保留旧序列及其 probe/HUD，不能在 load 开始时清。
+        self.lbl_hu_value.setText("")
+        self.lbl_hud.setText("")
+        # 匿名 token 只与本次成功 load session 绑定，不由 PatientID/UID/hash 推导。
+        self._anon_session_nonce = secrets.token_hex(6)
+        self._apply_series_capabilities()
         self._load_annotations_json(pid)
-        mask_restored = self._load_saved_mask(pid)  # 在首次显示前恢复上次的分割
+        ai_semantics_valid = all((self.hu_calibrated, self.canonical_orientation,
+                                  self.inplane_spacing_valid, self.uniform_z_geometry_valid))
+        mask_restored = self._load_saved_mask(pid) if ai_semantics_valid else False
 
         z = self.volume_hu.shape[0]
         self.on_slice_changed(z // 2)
+        # 无需等待下一次 mouse move：用新序列中心体素和新 capability 立即重建 HUD；
+        # probe 则保持空白，直到用户在新序列上真实探测。
+        self._update_hud(*self.current_3d_pos)
         for b in [self.btn_dmr, self.btn_art]:
             b.setEnabled(True)
         for vd in self.views.values():
@@ -588,18 +622,79 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             self.lbl_ai_status.setStyleSheet("color: #00FF00; font-weight: bold;")
             self.lbl_ai_status.setText(self._ai_done_text())
             self._update_organ_stats()
-        else:
+        elif ai_semantics_valid:
             self._kickoff_ai()
+        else:
+            # viewer-only 仍显示可解码像素，但不得把未知/非 canonical 几何送入器官 AI。
+            self._invalidate_running_ai()
+            self._ai_state = 'standby'
+            self.lbl_ai_status.setStyleSheet("color: #F1C40F; font-weight: bold;")
+            if not self.hu_calibrated:
+                msg = ("Viewer only — raw stored values; HU unavailable" if self.is_english
+                       else "仅阅片 — 原始存储值；HU 不可用")
+            else:
+                msg = ("Viewer only — DICOM geometry is not AI-compatible" if self.is_english
+                       else "仅阅片 — DICOM 几何不满足 AI 条件")
+            self.lbl_ai_status.setText(msg)
+            self.btn_export_stats.setEnabled(False)
+            self.btn_mesh3d.setEnabled(False)
+
+    def _apply_series_capabilities(self):
+        """把纯 geometry contract 映射为本次序列可用的产品能力。"""
+        geometry = self.series_geometry
+        self.hu_calibrated = geometry.hu_calibrated
+        self.canonical_orientation = geometry.canonical_orientation
+        self.inplane_spacing_valid = geometry.inplane_spacing_valid
+        self.uniform_z_geometry_valid = geometry.uniform_z_geometry_valid
+        anatomical_mpr = (self.canonical_orientation and self.inplane_spacing_valid
+                          and self.uniform_z_geometry_valid)
+        self.btn_mpr.setEnabled(anatomical_mpr)
+        for vdata in self.views.values():
+            # 非 canonical 输入只显示 acquisition/source voxel plane；数组轴不能改名为
+            # Axial/Coronal/Sagittal，也不能让下拉框进入伪解剖重切面。
+            vdata['cb_plane'].setEnabled(anatomical_mpr)
+            vdata['cb_plane'].setVisible(self.canonical_orientation)
+            vdata['preset'].setEnabled(self.hu_calibrated)
+            if not self.hu_calibrated:
+                # disabled 只阻止新交互，不会清掉上一序列已选中的 Lung/Bone 等文本；
+                # 必须主动回到 Global，避免 raw stored values 继续套用 CT-specific WW/WL。
+                vdata['preset'].blockSignals(True)
+                vdata['preset'].setCurrentIndex(0)
+                vdata['preset'].blockSignals(False)
+            if not anatomical_mpr:
+                vdata['plane'] = AXIAL
+                vdata['cb_plane'].setCurrentIndex(AXIAL)
+        for button in self.preset_btns:
+            button.setEnabled(self.hu_calibrated)
+        if not anatomical_mpr:
+            self.btn_mpr.setChecked(False)
+        self.tool_btns['btn_rul'].setEnabled(self.inplane_spacing_valid)
+        if not self.inplane_spacing_valid:
+            # disabled 按钮不会撤销已经激活的工具；旧 Ruler 会继续让各 view 用显示用
+            # (1,1) unitless spacing 计算并标成 mm，因此必须同步回到 Pointer。
+            for vdata in self.views.values():
+                vdata['view'].cancel_ruler_preview()
+            self.tool_btns['btn_ptr'].setChecked(True)
+            self.change_active_tool(TOOL_POINTER)
+        for key in ('btn_rec', 'btn_roi'):
+            self.tool_btns[key].setEnabled(self.hu_calibrated and self.inplane_spacing_valid)
+        self.tool_btns['btn_trk'].setEnabled(all((self.hu_calibrated,
+                                                 self.canonical_orientation,
+                                                 self.inplane_spacing_valid,
+                                                 self.uniform_z_geometry_valid)))
+        self.btn_compare.setEnabled(all((self.hu_calibrated, self.canonical_orientation,
+                                         self.inplane_spacing_valid,
+                                         self.uniform_z_geometry_valid)))
 
     def _read_dicom_dir(self, path):
-        """递归扫描目录并并行读取所有 DICOM 文件，按 Z 物理位置排序。
+        """递归扫描目录并并行读取 DICOM，按 patient-space 投影排序。
 
         并行策略：用线程池 dcmread 各文件——pydicom 内部 IO + 大量 numpy 解码会释放 GIL，
         线程池在 SSD 上对千张切片可获 4–8× 加速。读盘失败的单个文件静默跳过，
-        最终顺序与单线程版本严格一致（统一在所有线程完成后按 Z 物理位置排序）。
+        最终顺序与单线程版本严格一致（统一在所有线程完成后排序）。
 
         DICOM 排序策略：
-          优先使用 ImagePositionPatient[2]（床位 Z 坐标，单位 mm，物理精确）；
+          优先使用 dot(ImagePositionPatient, slice normal)（单位 mm）；
           若缺失该 tag，回退到 InstanceNumber（序列编号，精度较低但通用）。
         """
         # 第一阶段：列出所有候选文件（跳过 macOS 隐藏文件）
@@ -619,9 +714,16 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         with ThreadPoolExecutor(max_workers=min(16, (os.cpu_count() or 4) * 2)) as ex:
             results = list(ex.map(_safe_read, file_paths))
 
-        # 过滤掉读取失败及不含像素数据的文件（DICOMDIR / RTSTRUCT 等）
-        datasets = [ds for ds in results if ds is not None and 'PixelData' in ds]
+        # 只让明确支持的 classic single-frame CT 进入 pixel decode。Enhanced CT、
+        # multi-frame 与非 CT 不能靠“有 PixelData”伪装成 HU/三维 CT 序列。
+        datasets = [ds for ds in results
+                    if ds is not None and 'PixelData' in ds and is_supported_classic_ct(ds)]
         if not datasets:
+            return False
+        if len(datasets) > 1 and any(not str(getattr(ds, 'SeriesInstanceUID', '')).strip()
+                                     for ds in datasets):
+            # 多文件没有 Series UID 时无法证明它们属于同一 acquisition；不发明按目录、
+            # shape 或空字符串归组的 heuristic。单文件没有混序风险，可继续 viewer-only。
             return False
 
         # 多序列目录：按 SeriesInstanceUID 分组，只保留切片最多的序列，
@@ -652,33 +754,31 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             datasets = max(shape_groups.values(), key=len)
             r0, c0 = getattr(datasets[0], 'Rows', '?'), getattr(datasets[0], 'Columns', '?')
             print(f"检测到 {len(shape_groups)} 种切片尺寸，选用数量最多的（{len(datasets)} 张 {r0}×{c0}）")
-        self.dicom_datasets = datasets
+        self.series_geometry = analyze_series(datasets)
 
-        # 排序键必须在整个序列内保持一致：z 物理坐标(mm)与 InstanceNumber(序号)是不同量纲，
-        # 逐切片回退（部分切片缺 ImagePositionPatient）会把缺位置信息的层按序号插进有位置
-        # 信息的层之间，打乱解剖顺序。因此先做序列级判定——所有切片都含 z 坐标才按 z 排序，
-        # 否则整列统一回退 InstanceNumber（序列内单调的采集序号）。
-        if all(has_finite_ipp(ds) for ds in self.dicom_datasets):
-            self.dicom_datasets.sort(key=lambda ds: float(ds.ImagePositionPatient[2]))
+        # patient-space 投影可用时沿 slice normal 排序；它对 axial/coronal/sagittal 都成立。
+        # 几何无法证明时才整列统一回退 InstanceNumber，绝不逐切片混合不同量纲的键。
+        if self.series_geometry.sort_indices is not None:
+            self.dicom_datasets = [datasets[i] for i in self.series_geometry.sort_indices]
         else:
-            self.dicom_datasets.sort(key=lambda ds: _int_tag(ds, 'InstanceNumber'))
+            self.dicom_datasets = sorted(datasets, key=lambda ds: _int_tag(ds, 'InstanceNumber'))
         return True
 
     def _build_volume_hu(self):
-        """从 dicom_datasets 构建 3D HU 数组，初始化蒙版、3D 光标、切片滑动条。
+        """从 dicom_datasets 构建 3D 强度数组，初始化蒙版、3D 光标、切片滑动条。
         成功返回 PatientID；无任何可解码切片时返回 None（由 load_data 提示并中止）。
 
-        HU 值转换公式（DICOM 标准）：
+        只有逐片单位 contract 证明为标准 HU 时才应用 DICOM 线性变换：
           HU = pixel_value × RescaleSlope + RescaleIntercept
-          典型值：Slope=1, Intercept=-1024（GE 扫描仪常见），使得空气≈-1000 HU
+        否则整卷保留 raw stored values，且所有 HU consumer 保持关闭。
         """
         ds = self.dicom_datasets[0]
         pid = str(getattr(ds, 'PatientID', 'N/A'))
 
-        # 逐片解码并转 HU，防御式处理畸形数据（一张坏片不带崩整卷）：
+        # 逐片解码 raw stored values，防御式处理畸形数据（一张坏片不带崩整卷）：
         #   - pixel_array 解码失败（PixelData 截断 / 压缩语法缺编解码器 / group 0028 非法）→ 跳过该片；
-        #   - 多帧文件（pixel_array 为 3D，NumberOfFrames>1）→ 展开为多个 2D 帧，共用该文件元数据。
-        # dicom_datasets 随之同步为实际保留/展开后的切片，保证按 idx 取元数据与体积层一一对应。
+        #   - classic CT contract 只接受 2-D single-frame；异常维度同样跳过。
+        # decode 后再按实际保留切片重算 geometry，不能让一张已跳过的坏片继续证明 z spacing。
         frames, kept = [], []
         for d in self.dicom_datasets:
             try:
@@ -686,14 +786,9 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             except Exception as e:
                 print(f"跳过无法解码的切片: {e}")
                 continue
-            hu = (arr.astype(np.float32) * self._dcm_float(d, 'RescaleSlope', 1.0)
-                  + self._dcm_float(d, 'RescaleIntercept', 0.0))
-            if hu.ndim == 2:
-                frames.append(hu); kept.append(d)
-            elif hu.ndim == 3:              # 多帧：逐帧展开为切片
-                for fr in hu:
-                    frames.append(fr); kept.append(d)
-            # 其余维度（异常数据）忽略
+            raw = arr.astype(np.float32)
+            if raw.ndim == 2:
+                frames.append(raw); kept.append(d)
         if not frames:
             return None   # 无任何可解码切片
         # 兜底：万一帧尺寸仍不齐（多帧与单帧混合的极端情形），保留数量最多的尺寸
@@ -702,10 +797,22 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             shape_count[f.shape] = shape_count.get(f.shape, 0) + 1
         dom = max(shape_count, key=shape_count.get)
         pairs = [(f, k) for f, k in zip(frames, kept, strict=False) if f.shape == dom]
+        postdecode = analyze_series([k for _, k in pairs])
+        if postdecode.sort_indices is not None:
+            pairs = [pairs[i] for i in postdecode.sort_indices]
+            postdecode = analyze_series([k for _, k in pairs])
+        self.series_geometry = postdecode
         self.dicom_datasets = [k for _, k in pairs]
         self._refresh_patient_info()   # 按脱敏状态填患者面板
-        self.volume_hu = np.array([f for f, _ in pairs])
+        # calibration 是 decode 后实际序列的单位合约：任一保留层无法证明时，整卷 raw；
+        # 全部有效时才逐 slice 应用各自 slope/intercept，绝不构造混合单位 volume。
+        self.volume_hu = np.array([
+            raw * float(d.RescaleSlope) + float(d.RescaleIntercept)
+            if postdecode.hu_calibrated else raw
+            for raw, d in pairs
+        ])
         self.volume_mask = np.zeros_like(self.volume_hu, dtype=np.uint8)
+        self._mask_cache_clear_requested = False  # 新序列的全零 mask 只是 AI placeholder
         # 换序列必须一并作废置信度：两个序列 shape 常常相同（都是 512²），
         # quantify 的 shape 校验挡不住，旧序列的置信度会被安到新序列头上
         self.volume_conf = None
@@ -746,6 +853,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         并作废上一个仍在运行的推理线程，避免多个 ~8.8GB 推理并发叠加导致内存翻倍/OOM。
         """
         gen = self._invalidate_running_ai()
+        self._mask_cache_clear_requested = False  # AI pending 的全零 mask 不是用户 explicit empty
         self._ai_state = 'running'
         self.lbl_ai_status.setStyleSheet("color: #F1C40F; font-weight: bold;")
         self.lbl_ai_status.setText("Processing AI Pipeline..." if self.is_english else "状态: AI 引擎自动运算中...")
@@ -770,26 +878,15 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.ai_thread.start()
 
     def _slice_spacing(self):
-        """层间距(mm)：优先由相邻层的解剖 z 坐标实测，其次 SpacingBetweenSlices，最后 SliceThickness。
+        """返回由 patient-space 相邻位置证明的 uniform slice spacing；否则 0。
 
-        **不能直接用 SliceThickness**：它是探测器准直厚度，而重采样需要的是层与层的
-        实际间隔。二者在重叠重建下可以相差一倍（如层厚 1.25mm、重建间隔 0.625mm），
-        照 SliceThickness 缩放会把 z 轴的物理尺度算错一倍。RIDER 这一例恰好两者相等
-        （实测均为 1.25mm），正因如此这个错误不会在本地数据上暴露出来。
-
-        取中位数而非均值：序列中偶有缺层或错位时，中位数不受个别异常间隔影响。
+        ``SliceThickness`` 是准直厚度，``SpacingBetweenSlices`` 也不能替代本次有序
+        栈的实测几何。未知、重复或不规则位置必须保持 unavailable，不能填默认单位。
         """
-        z = self._zpos_array(self.dicom_datasets)
-        if z is not None and len(z) >= 2:
-            gaps = np.abs(np.diff(np.sort(z)))
-            gaps = gaps[np.isfinite(gaps) & (gaps > 0)]
-            if gaps.size:
-                return float(np.median(gaps))
-        ds0 = self.dicom_datasets[0] if self.dicom_datasets else None
-        if ds0 is None:
+        geometry = getattr(self, 'series_geometry', None)
+        if geometry is None or not geometry.uniform_z_geometry_valid:
             return 0.0
-        sbs = self._dcm_float(ds0, 'SpacingBetweenSlices', 0.0)
-        return sbs if sbs > 0 else self._dcm_float(ds0, 'SliceThickness', 0.0)
+        return float(geometry.slice_spacing_mm or 0.0)
 
     def _on_ai_progress(self, done, total, generation):
         """AI 滑窗推理进度回调（经 Qt 信号 QueuedConnection 投递到主线程）。仅更新当前代的进度显示。"""
@@ -861,6 +958,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             return  # 数据已重置或维度不匹配，安全退出
         self._ai_state = 'done'
         self._ai_time_ms = time_ms
+        self._mask_cache_clear_requested = False
         self.volume_mask = final_mask
         # 整卷换蒙版必须同时清撤销栈：栈里存的是【推理开始前】那一版的切片快照，
         # 推理期间用户完全可以画笔编辑（无任何守卫阻止）。不清的话，AI 回来后
@@ -930,9 +1028,9 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         ps_row = self._dcm_float(ds, 'PixelSpacing', 1.0, idx=0)   # 行间距 → 垂直/Y
         ps_col = self._dcm_float(ds, 'PixelSpacing', ps_row, idx=1)  # 列间距 → 水平/X
         px_sp = ps_row      # 单值代表：仅用于层间距估算与四角叠加的 "Px" 一栏
-        # 冠/矢状面的垂直方向是 z，其物理尺度是**层间距**而非层厚——重叠重建下二者
-        # 可差一倍，用错会让 MPR 的解剖比例失真。缺失时估算为 px_sp×3（典型螺旋 CT 值）。
-        slice_thick = self._slice_spacing() or (px_sp * 3)
+        # 只有 uniform patient-space gaps 才是物理 z scale。viewer-only 的显示布局可以
+        # 使用 1.0 像素比例，但 UI/测量不得把这个显示比例冒充成 mm。
+        slice_thick = self._slice_spacing() or 1.0
 
         for vdata in self.views.values():
             if vdata['container'].isHidden():
@@ -1016,9 +1114,22 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
     def _export_tag(self):
         """导出文件名用的患者标识；脱敏时返回匿名前缀，防止文件名泄露姓名。"""
         if self.anonymize or not self.dicom_datasets:
-            return "ANON"
+            nonce = self._anon_session_nonce or secrets.token_hex(6)
+            self._anon_session_nonce = nonce
+            return f"ANON-{nonce}"
         name = str(getattr(self.dicom_datasets[0], 'PatientName', 'P')).replace('^', '_')
         return self._safe_name(name, fallback="P")
+
+    @staticmethod
+    def _unique_export_path(directory, filename):
+        """返回不会静默覆盖已有文件的安全路径（name, name_2, ...）。"""
+        stem, ext = os.path.splitext(filename)
+        candidate = os.path.join(directory, filename)
+        n = 2
+        while os.path.exists(candidate):
+            candidate = os.path.join(directory, f"{stem}_{n}{ext}")
+            n += 1
+        return candidate
 
     def _toggle_overlay(self, on):
         """切换所有视图的 DICOM 信息叠加显隐。"""
@@ -1026,28 +1137,43 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             vd['view'].show_overlay = on
             vd['view'].viewport().update()
 
-    def _apply_dicom_overlay(self, vdata, plane, z, y, x, ww, wl, px_sp, slice_thick):
+    def _apply_dicom_overlay(self, vdata, plane, z, y, x, ww, wl, px_sp, slice_thick,
+                             ps_row=None, ps_col=None):
         """构建并下发 PACS 风格的四角信息叠加与解剖方位字母。"""
         e = self.is_english
         ds0 = self.dicom_datasets[0]
         Z_MAX, Y_MAX, X_MAX = self.volume_hu.shape
         idx, tot = {AXIAL: (z, Z_MAX), CORONAL: (y, Y_MAX), SAGITTAL: (x, X_MAX)}[plane]
-        pname = ({AXIAL: "Axial", CORONAL: "Coronal", SAGITTAL: "Sagittal"} if e else
-                 {AXIAL: "横断面", CORONAL: "冠状面", SAGITTAL: "矢状面"})[plane]
+        if self.canonical_orientation:
+            pname = ({AXIAL: "Axial", CORONAL: "Coronal", SAGITTAL: "Sagittal"} if e else
+                     {AXIAL: "横断面", CORONAL: "冠状面", SAGITTAL: "矢状面"})[plane]
+        else:
+            pname = "Source voxel plane" if e else "原始体素平面"
         zoom = vdata['view'].transform().m11() * 100
         pid, pt_name, age = self._patient_display()   # 脱敏时隐去真实身份
         tl = [f"ID: {pid}", pt_name] + ([f"Age: {age}"] if age else [])
+        z_text = (f"Z spacing {slice_thick:.2f}mm" if e else f"层间距 {slice_thick:.2f}mm") \
+            if self.uniform_z_geometry_valid else ("Z spacing unavailable" if e else "层间距不可用")
+        if self.inplane_spacing_valid:
+            row = px_sp if ps_row is None else ps_row
+            column = row if ps_col is None else ps_col
+            px_text = (f"Px {row:.2f}mm" if np.isclose(row, column)
+                       else f"Px {row:.2f}×{column:.2f}mm")
+        else:
+            px_text = "Px unavailable" if e else "像素间距不可用"
         corners = {
             'tl': tl,
             'tr': [f"{getattr(ds0, 'Modality', 'CT')}  ·  V{vdata['view'].view_id}", pname],
             'bl': [f"W: {int(ww)}  L: {int(wl)}", f"Zoom: {zoom:.0f}%"],
-            'br': [f"{'Slice' if e else '层'} {idx + 1}/{tot}",
-                   f"Thk {slice_thick:.1f}mm", f"Px {px_sp:.2f}mm"],
+            'br': [f"{'Slice' if e else '层'} {idx + 1}/{tot}", z_text, px_text],
         }
         # 解剖方位字母：Axial 图像左=解剖右(R)；冠/矢状面上=头(S)下=足(I)
-        orient = {AXIAL:    {'top': 'A', 'bottom': 'P', 'left': 'R', 'right': 'L'},
-                  CORONAL:  {'top': 'S', 'bottom': 'I', 'left': 'R', 'right': 'L'},
-                  SAGITTAL: {'top': 'S', 'bottom': 'I', 'left': 'A', 'right': 'P'}}[plane]
+        if self.canonical_orientation:
+            orient = ({AXIAL: voxel_plane_edge_labels(ds0.ImageOrientationPatient),
+                       CORONAL: {'top': 'S', 'bottom': 'I', 'left': 'R', 'right': 'L'},
+                       SAGITTAL: {'top': 'S', 'bottom': 'I', 'left': 'A', 'right': 'P'}}[plane])
+        else:
+            orient = {}
         vdata['view'].set_overlay(corners, orient)
 
     def _render_clinical_plane(self, vdata, z, y, x, ww_m, wl_m, px_sp, slice_thick,
@@ -1057,7 +1183,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         pre = vdata['preset'].currentText()
 
         # 窗宽/窗位来源：优先使用各视图独立预设，否则跟随全局滑动条
-        if pre in ["Global", "跟随"]:
+        if not self.hu_calibrated or pre in ["Global", "跟随"]:
             ww, wl = ww_m, wl_m
         else:
             ww, wl = self._WW_PRESETS.get(pre, ww_m), self._WL_PRESETS.get(pre, wl_m)
@@ -1078,6 +1204,10 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             hu = self.volume_hu[:, y, :]     # (Z, X)：垂直=Z→SliceThickness，水平=X→PixelSpacing
         else:                                # SAGITTAL
             hu = self.volume_hu[:, :, x]     # (Z, Y)：垂直=Z→SliceThickness，水平=Y→PixelSpacing
+        if plane != AXIAL:
+            # volume z 随 patient S 方向递增；显示需将 superior 放在 screen top，
+            # 与 overlay 的上 S / 下 I 以及 hover/crosshair 坐标约定保持一致。
+            hu = np.flipud(hu)
         # sp = (垂直/Y 的 mm 每像素, 水平/X 的 mm 每像素)，见 graphics_view 的卡尺换算。
         #   Axial    垂直=行→ps_row，水平=列→ps_col
         #   Coronal  垂直=Z→层间距，水平=X(列)→ps_col
@@ -1105,6 +1235,8 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
                 sm = self.volume_mask[:, y, :]
             else:                                  # SAGITTAL
                 sm = self.volume_mask[:, :, x]
+            if plane != AXIAL:
+                sm = np.flipud(sm)
             present = np.unique(sm)
             present = present[present != 0]  # 剔除背景，得到本切片出现的器官类别
             if present.size:  # 性能优化：无器官时跳过 QImage 构建
@@ -1118,7 +1250,8 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             # 图例统一在 update_display 末尾按全局状态刷新（此处不再各视图分别刷，避免多视图相互覆盖）
 
         vdata['view'].set_image(QPixmap.fromImage(qimg), mq, sp)
-        self._apply_dicom_overlay(vdata, plane, z, y, x, ww, wl, px_sp, slice_thick)
+        self._apply_dicom_overlay(vdata, plane, z, y, x, ww, wl, px_sp, slice_thick,
+                                  ps_row=ps_row, ps_col=ps_col)
         vdata['view'].clear_annotations()  # 清除上一帧的标注图元，防止重影
 
         if plane == AXIAL and vdata['chk_anno'].isChecked():
@@ -1126,7 +1259,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
 
         # MPR 十字准线：联动开启时各平面投影不同的坐标轴对
         if self.btn_mpr.isChecked():
-            cx, cy = mpr_geometry.voxel_to_crosshair(plane, z, y, x)
+            cx, cy = mpr_geometry.voxel_to_crosshair(plane, z, y, x, self.volume_hu.shape)
             vdata['view'].draw_crosshair(cx, cy)
         else:
             vdata['view'].draw_crosshair(0, 0, show=False)
