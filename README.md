@@ -61,6 +61,18 @@ Most figures above are recomputable from the committed CSVs — but not all, so 
 
 The **built-in Shepp-Logan phantom** makes the whole reconstruction pipeline usable with nothing imported — V3 is unfiltered back-projection (a blur), V4 the filtered version resolving the same phantom down to its smallest lesions. Because the phantom's ground truth is known analytically, the error view measures distance to the truth rather than to another reconstruction. The **model card** states how the model's identity was established by measurement, how far it has been validated, and what remains unmeasured; every measured figure on it is read live from `experiments/results/`, so re-running an experiment updates the card.
 
+| Organ quantification with per-organ HU | ROI density readout |
+|:---:|:---:|
+| ![Organ quantification](docs/img/gui_organ_quantification.png) | ![ROI density](docs/img/gui_roi_tool.png) |
+
+**Left/right is verifiable by eye.** In the abdominal window the liver sits on the `R` side and the stomach and spleen on `L`, which is what the orientation contract in `ai_engine` is there to guarantee — the labels are checked against CT-Lite's own ground truth, not just rendered. The **ROI** reports mean±SD, range and area in physical units; those units appear only when the series proves its spacing and HU calibration, otherwise the readout says so instead of inventing a number.
+
+| Thick-slab MIP over 20 slices | 3D surface reconstruction |
+|:---:|:---:|
+| ![Slab MIP](docs/img/gui_slab_mip.png) | ![3D mesh](docs/img/gui_mesh3d.png) |
+
+**MIP** projects the brightest voxel through a slab, which is how pulmonary vessels and nodules are read; MinIP and AIP share the control for airways and for noise reduction. The **surface reconstruction** runs marching cubes over one label and reports surface area, volume and sphericity, with the mesh exportable as STL — the shape statistics are validated against an analytic sphere (volume within 0.1%, surface area within ~1.3%).
+
 > Screenshots use **TotalSegmentator-CT-Lite** (CC-BY-4.0), a de-identified public research dataset; no PHI is committed to this repository. The phantom and model-card views need no data at all.
 
 ## Core capabilities
