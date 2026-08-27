@@ -2,6 +2,31 @@
 
 This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
+## The 3D preview dialog printed its only numbers in near-invisible text (2026-08-27)
+
+`QDialog` is a top-level window: it does not inherit the stylesheet the app sets on the
+`MedicalViewer` instance (`ui_builder.py`), so its background is the system light grey. It *does*
+inherit the parent's palette, whose foreground was chosen for the dark main window. The mesh
+preview then styled its labels with the dark-theme ramp — `#C9D1D9` for the statistics line,
+`#8B949E` for the two captions. Measured against the actual dialog background, the statistics line
+came out at roughly **1.4:1**, and that line is the dialog's *only* quantitative output: surface
+area, volume, sphericity, face count. The "View" label had no explicit colour at all and inherited
+the dark palette's foreground, landing at **2.03:1**.
+
+Rather than patching each label, the two self-built dialogs now declare their own foreground once
+(`QDialog, QLabel { color: … }`), so a label added later is readable by default; the two muted
+captions keep a dimmer but still-compliant tone. Worst measured contrast in the dialog is now
+**5.56:1**, above the 4.5:1 WCAG AA threshold for body text.
+
+The regression test opens the real dialog, reads each label's effective foreground and the
+dialog's actual background, and computes the WCAG ratio — no source-string matching, so any
+future colour that fails on that background is caught regardless of how it is spelled. Three
+mutations confirm it bites (restoring either dark-ramp colour, or dropping the dialog-level
+declaration). The first version of that test passed while measuring nothing: `QLabel.pixmap()`
+returns an empty `QPixmap` rather than `None` in PySide6, so the `is not None` guard skipped every
+label and the contrast check kept its initial sentinel. It now asserts how many labels were
+actually measured, which is what turned it from decoration into a check.
+
 ## AI segmentation was mirrored on the product's own path, and no test could see it (2026-08-27)
 
 `organs.onnx` comes from TotalSegmentator/nnU-Net, whose volumes are normalised to **RAS** —

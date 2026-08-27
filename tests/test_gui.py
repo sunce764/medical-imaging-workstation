@@ -6197,6 +6197,92 @@ def test_ai_inplane_axis_contract(app):
     check(raised, "非法 inplane_axes 在构造期 fail fast，不静默按默认处理")
 
 
+def test_mesh_dialog_text_is_readable(app):
+    """三维预览弹窗里的文字必须在它自己的背景上读得出来。
+
+    QDialog 是顶层窗口，不继承主窗口设在实例上的深色样式表，背景是系统浅色。
+    此前弹窗沿用了主界面的深色主题调色板：统计行 `#C9D1D9` 落在浅底上对比度约
+    1.4:1，几乎不可见——而那一行正是这个弹窗唯一的定量输出（表面积/体积/球形度）。
+    这里真实弹出弹窗、读每个 QLabel 的实际前景色，与弹窗实际背景算 WCAG 对比度，
+    不做源码字符串匹配：换成任何一种在该背景上读不出来的颜色都会被抓到。
+    """
+    print("[三维预览弹窗：文字对比度]")
+    import re
+
+    from PySide6.QtCore import QTimer
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QDialog, QLabel
+
+    def rel_lum(c):
+        def ch(v):
+            v /= 255.0
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        return 0.2126 * ch(c.red()) + 0.7152 * ch(c.green()) + 0.0722 * ch(c.blue())
+
+    def contrast(fg, bg):
+        a, b = rel_lum(fg), rel_lum(bg)
+        hi, lo = max(a, b), min(a, b)
+        return (hi + 0.05) / (lo + 0.05)
+
+    v = m.MedicalViewer()
+    app.processEvents()
+    # 合成一个小立方体作为「器官」，只为让弹窗能被真实构造出来
+    vol = np.zeros((12, 12, 12), dtype=np.uint8)
+    vol[3:9, 3:9, 3:9] = 5
+    v.volume_mask = vol
+    v.volume_hu = np.zeros((12, 12, 12), dtype=np.float32)
+    v._organ_stats = [{'id': 5, 'name_zh': '肝', 'name_en': 'Liver'}]
+
+    import mesh3d
+    verts, faces = mesh3d.extract_surface(vol, 5, (1.0, 1.0, 1.0), step=1)
+    stats = mesh3d.mesh_shape_stats(verts, faces)
+    check(len(faces) > 0, "合成立方体成功提取到表面，弹窗有内容可显示")
+
+    seen = {}
+
+    def inspect():
+        for w in QApplication.topLevelWidgets():
+            if not (isinstance(w, QDialog) and w.isVisible()):
+                continue
+            bg = w.palette().window().color()
+            worst, worst_txt, n = 99.0, '', 0
+            for lab in w.findChildren(QLabel):
+                text = lab.text().strip()
+                px = lab.pixmap()
+                # PySide6 的 QLabel.pixmap() 返回空 QPixmap 而非 None，用 isNull 判定；
+                # 写成 `is not None` 会把每个标签都当图片跳过，测试便空转成摆设。
+                if not text or (px is not None and not px.isNull()):
+                    continue          # 纯图片标签（mesh 渲染视图）不参与文字对比度
+                n += 1
+                mo = re.search(r'color\s*:\s*(#[0-9A-Fa-f]{6})', lab.styleSheet())
+                fg = QColor(mo.group(1)) if mo else lab.palette().windowText().color()
+                ratio = contrast(fg, bg)
+                if ratio < worst:
+                    worst, worst_txt = ratio, text[:24]
+            seen['bg'] = bg.name()
+            seen['worst'] = worst
+            seen['text'] = worst_txt
+            seen['n'] = n
+            w.accept()
+            return
+
+    QTimer.singleShot(600, inspect)
+    v._show_mesh_dialog(5, verts, faces, stats)
+    app.processEvents()
+
+    check('worst' in seen, "弹窗被真实构造并可枚举其文字标签")
+    # 没有这条计数断言，上面的循环一旦因判定写错而全部 continue，对比度检查会
+    # 保持初始值并「通过」——即测试空转。至少要真正量到方位角、统计行、流程说明三行。
+    check(seen.get('n', 0) >= 3,
+          f"实际参与对比度检查的文字标签数 = {seen.get('n', 0)} ≥ 3（非空转）")
+    if 'worst' in seen:
+        # 4.5:1 是 WCAG AA 对正文的门槛；此前的 #C9D1D9 在浅底上只有约 1.4:1。
+        check(seen['worst'] >= 4.5,
+              f"弹窗最差文字对比度 {seen['worst']:.2f}:1 ≥ 4.5（背景 {seen['bg']}，"
+              f"最差的一行：{seen['text']!r}）")
+    v.close()
+
+
 def main_run():
     app = QApplication([])
     test_runner_catches_qt_slot_exceptions()
@@ -6207,6 +6293,7 @@ def main_run():
         print("WARN: 无 ../肺癌 真实数据（或 SKIP_REAL_DATA=1），仅运行数据无关的自包含测试")
         # 这些测试自建合成 DICOM / 用 /nonexistent.onnx 走数学降级，不依赖真实数据或 119MB 权重
         for t in (test_ai_engine, test_ai_inplane_axis_contract,
+                  test_mesh_dialog_text_is_readable,
                   test_noncanonical_dicom_gating,
                   test_unsupported_dicom_contract, test_missing_series_uid_contract,
                   test_load_clears_stale_hu_probe,
@@ -6271,6 +6358,7 @@ def main_run():
         test_startup(v)
         test_ai_engine(app)
         test_ai_inplane_axis_contract(app)
+        test_mesh_dialog_text_is_readable(app)
         test_prior_fixes(v, app)
         test_multiorgan_and_edit(v, app)
         test_roi(v, app)

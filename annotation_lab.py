@@ -135,6 +135,12 @@ def mask_axis_contract_ok(saved_contract):
     return True, ""
 
 
+# QDialog 是顶层窗口，不继承主窗口设在实例上的深色样式表，其背景为系统浅色。
+# 弹窗内的文字必须用浅色背景下的前景色，不能复用主界面那套深色主题调色板。
+_DIALOG_FG = '#24292F'          # 正文，浅底对比度约 13:1
+_DIALOG_FG_MUTED = '#57606A'    # 次要说明，浅底对比度约 6:1
+
+
 class AnnotationMixin:
     """标注 / 分割蒙版编辑 / 器官定量相关方法集合，混入 MedicalViewer。"""
 
@@ -816,6 +822,7 @@ class AnnotationMixin:
         """
         dlg = QDialog(self)
         dlg.setWindowTitle(model_card.card_title(self.is_english))
+        dlg.setStyleSheet(f"QDialog, QLabel {{ color: {_DIALOG_FG}; }}")
         dlg.resize(560, 520)
         lay = QVBoxLayout(dlg)
         body = QLabel(model_card.build_model_card(self.is_english))
@@ -877,6 +884,7 @@ class AnnotationMixin:
         rgb = (int(LABEL_LUT[lid][0]), int(LABEL_LUT[lid][1]), int(LABEL_LUT[lid][2]))
         dlg = QDialog(self)
         dlg.setWindowTitle(f"3D · {nm}")
+        dlg.setStyleSheet(f"QDialog, QLabel {{ color: {_DIALOG_FG}; }}")
         lay = QVBoxLayout(dlg)
 
         # 拖动降质、松手提质：实测完整网格渲染约 100–140ms/帧，拖动时会明显顿挫；
@@ -888,7 +896,7 @@ class AnnotationMixin:
         view = MeshView(azimuth=30.0, elevation=20.0)
         view.setFixedSize(SZ, SZ)
         view.setStyleSheet("background:#0D1117; border:1px solid #30363D;")
-        lb_ang = QLabel(); lb_ang.setStyleSheet("color:#8B949E; font-size:10px;")
+        lb_ang = QLabel(); lb_ang.setStyleSheet(f"color:{_DIALOG_FG_MUTED}; font-size:10px;")
 
         def paint(v, f):
             arr = np.ascontiguousarray(mesh3d.render_mesh(v, f, size=SZ, azimuth=view.azimuth,
@@ -934,13 +942,14 @@ class AnnotationMixin:
                f"体积 {stats['volume_mm3'] / 1000:.1f} mL · "
                f"球形度 {stats['sphericity']:.3f} · "
                f"{stats['n_faces']:,} 面片")
-        lb_s = QLabel(txt); lb_s.setStyleSheet("color:#C9D1D9;"); lay.addWidget(lb_s)
+        lb_s = QLabel(txt); lb_s.setStyleSheet(f"color:{_DIALOG_FG};"); lay.addWidget(lb_s)
         note = QLabel("Pipeline: marching cubes → Taubin smoothing → decimation. On an analytic "
                       "sphere: volume within 0.1%, surface area within ~1.3%."
                       if e else
                       "流程：marching cubes → Taubin 平滑 → 减面。解析球体验算：体积误差 0.1% 以内，"
                       "表面积误差约 1.3%。")
-        note.setWordWrap(True); note.setStyleSheet("color:#8B949E; font-size:10px;")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color:{_DIALOG_FG_MUTED}; font-size:10px;")
         lay.addWidget(note)
         btn = QPushButton("Export STL" if e else "导出 STL")
         btn.clicked.connect(lambda: self._export_stl(nm, verts, faces))
