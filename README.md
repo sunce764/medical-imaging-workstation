@@ -130,12 +130,12 @@ Three-dimensional medical volumes make memory and I/O the binding constraint lon
 ## Engineering and testing
 
 - The original God-object is decomposed into **5 UI mixins + 10 Qt-free compute modules**; the complete 19-module packaging inventory is declared in `pyproject.toml`.
-- A **local run on 2026-08-27** recorded **899 PASS / 0 FAIL** for the full suite with the local RIDER series present and **807 PASS / 0 FAIL** for `SKIP_REAL_DATA=1`. These are local results, not fresh-clone, coverage, or remote-CI evidence. As of that snapshot, the latest exact-SHA remote evidence was baseline **`2e9b700`**, [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765), with **520 PASS / 0 FAIL**, **81% coverage**, **Ruff PASS**, and `event=workflow_dispatch`; that historical CI does not cover any commit after it. Any later remote result is evidence only when its `headSha` exactly matches the commit under review. Its run/headSha should be recorded outside the repository or in the delivery summary rather than creating a second documentation commit. The custom runner promotes uncaught Qt signal/slot exceptions to failures, so a printed traceback can no longer coexist with exit code 0.
+- A **local run on 2026-08-27** recorded **909 PASS / 0 FAIL** for the full suite with the local RIDER series present and **817 PASS / 0 FAIL** for `SKIP_REAL_DATA=1`. These are local results, not fresh-clone, coverage, or remote-CI evidence. As of that snapshot, the latest exact-SHA remote evidence was baseline **`2e9b700`**, [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765), with **520 PASS / 0 FAIL**, **81% coverage**, **Ruff PASS**, and `event=workflow_dispatch`; that historical CI does not cover any commit after it. Any later remote result is evidence only when its `headSha` exactly matches the commit under review. Its run/headSha should be recorded outside the repository or in the delivery summary rather than creating a second documentation commit. The custom runner promotes uncaught Qt signal/slot exceptions to failures, so a printed traceback can no longer coexist with exit code 0.
 - Reconstruction tests assert numerical correctness, not merely finite output; DICOM loading is defensive against malformed metadata.
 
 ```bash
-python tests/test_gui.py                     # 2026-08-27 local run: 899 full-suite checks; local RIDER present
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-27 local run: 807 data-independent checks
+python tests/test_gui.py                     # 2026-08-27 local run: 909 full-suite checks; local RIDER present
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-27 local run: 817 data-independent checks
 ruff check .                                 # lint
 coverage run tests/test_gui.py && coverage report
 ```

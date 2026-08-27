@@ -6283,6 +6283,96 @@ def test_mesh_dialog_text_is_readable(app):
     v.close()
 
 
+def test_annotation_text_does_not_scale_with_zoom(app):
+    """ROI/测距的文字必须保持屏幕固定大小，且按实际字体度量夹在图像内。
+
+    此前字号定义在场景坐标里，随视图缩放一起放大：512² 序列铺满窗口时缩放常在
+    2.5–3.5×，文字随之涨到三倍多，压住它所描述的解剖；ROI 的防溢出判断又用了写死的
+    95/46 场景单位，那是在某一个缩放下估的，换个缩放既挡图又冲出边界。
+    这里在两个明显不同的缩放下各渲染一次，量文字**映射到视图后**的像素尺寸——
+    只要它又随缩放变化，比值就会偏离 1。
+    """
+    print("[标注文字：屏幕固定大小与边界夹取]")
+    import shutil
+    import tempfile
+    import uuid
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtWidgets import QGraphicsItem, QGraphicsTextItem
+
+    root = tempfile.mkdtemp()
+    try:
+        sid = generate_uid()
+        for i in range(3):
+            _write_min_dcm(os.path.join(root, f"s{i}.dcm"), (256, 256), sid,
+                           ipp_z=i, inst=i + 1, pix=1100, slope=1, intercept=-1024)
+        v = m.MedicalViewer()
+        v.resize(900, 700)
+        v.show()
+        v.load_data(root)
+        app.processEvents()
+        check(v.hu_calibrated and v.inplane_spacing_valid,
+              "合成序列具备 HU 与 spacing，ROI 统计才会渲染数值")
+
+        # ROI 的横坐标是挑过的：在 0.5× 缩放下，文字折算到场景单位约 122，写死的
+        # 95 会判定「右边放得下」而不翻转，实际却冲出右边界——只测放大抓不到这一类，
+        # 因为那时写死的常量偏大、反而保守。
+        H, W = v.volume_hu.shape[1], v.volume_hu.shape[2]
+        v.handle_annotation_added({'id': str(uuid.uuid4()), 'type': 'roi',
+                                   'rect': (130.0, 8.0, 18.0, 18.0)})
+        view = v.views[1]['view']
+
+        def measure(scale):
+            view.resetTransform()
+            view.scale(scale, scale)
+            v.update_display()
+            app.processEvents()
+            items = [it for it in view.scene.items() if isinstance(it, QGraphicsTextItem)]
+            if not items:
+                return None
+            it = items[0]
+            pinned = bool(it.flags() & QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+            # ItemIgnoresTransformations 的项，其 boundingRect 的 item 坐标就是屏幕像素；
+            # sceneBoundingRect 反过来依赖视图变换，拿它量屏幕尺寸会量到错的东西。
+            r = it.boundingRect()
+            return (pinned, float(r.width()), float(r.height()),
+                    float(it.pos().x()), float(it.pos().y()))
+
+        a = measure(2.0)
+        b = measure(6.0)
+        c = measure(0.5)      # 缩小：文字折算回场景单位反而更宽，边界最易被判错
+        check(a is not None and b is not None and c is not None,
+              "三个缩放下都渲染出了 ROI 统计文字")
+        if a and b and c:
+            pinned_a, wa, ha, xa, ya = a
+            pinned_b, wb, hb, xb, yb = b
+            check(pinned_a and pinned_b,
+                  "文字项置了 ItemIgnoresTransformations，字号锚定在屏幕像素上")
+            # 允许 1px 量化误差；随缩放放大的话 6/2 会让比值接近 3
+            check(abs(wa - wb) <= 1.5 and abs(ha - hb) <= 1.5,
+                  f"缩放 2× 与 6× 下文字屏幕尺寸一致：{wa:.0f}×{ha:.0f} vs {wb:.0f}×{hb:.0f}")
+            check(wa > 1.0 and ha > 1.0, f"量到的确实是文字而非空项（{wa:.0f}×{ha:.0f} px）")
+            # 边界：ROI 贴右边，文字必须翻到左侧。屏幕宽度按各自缩放折算回场景单位再比。
+            right_a, right_b = xa + wa / 2.0, xb + wb / 6.0
+            check(right_a <= W + 0.5 and right_b <= W + 0.5,
+                  f"两个缩放下文字都未越过图像右边界（右端 {right_a:.1f}/{right_b:.1f}, W={W}）")
+            bottom_a, bottom_b = ya + ha / 2.0, yb + hb / 6.0
+            check(bottom_a <= H + 0.5 and bottom_b <= H + 0.5,
+                  f"两个缩放下文字都未越过图像下边界（下端 {bottom_a:.1f}/{bottom_b:.1f}, H={H}）")
+            check(xa >= 0.0 and xb >= 0.0, "文字锚点未被推到图像左侧之外")
+
+            pinned_c, wc, hc, xc, yc = c
+            check(pinned_c and abs(wc - wa) <= 1.5 and abs(hc - ha) <= 1.5,
+                  f"缩小到 0.5× 时文字屏幕尺寸仍不变：{wc:.0f}×{hc:.0f}")
+            right_c, bottom_c = xc + wc / 0.5, yc + hc / 0.5
+            check(right_c <= W + 0.5 and bottom_c <= H + 0.5,
+                  f"0.5× 缩放下文字仍在图像内（右端 {right_c:.1f}、下端 {bottom_c:.1f}，"
+                  f"图像 {W}×{H}）")
+        v.close()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main_run():
     app = QApplication([])
     test_runner_catches_qt_slot_exceptions()
@@ -6294,6 +6384,7 @@ def main_run():
         # 这些测试自建合成 DICOM / 用 /nonexistent.onnx 走数学降级，不依赖真实数据或 119MB 权重
         for t in (test_ai_engine, test_ai_inplane_axis_contract,
                   test_mesh_dialog_text_is_readable,
+                  test_annotation_text_does_not_scale_with_zoom,
                   test_noncanonical_dicom_gating,
                   test_unsupported_dicom_contract, test_missing_series_uid_contract,
                   test_load_clears_stale_hu_probe,
@@ -6359,6 +6450,7 @@ def main_run():
         test_ai_engine(app)
         test_ai_inplane_axis_contract(app)
         test_mesh_dialog_text_is_readable(app)
+        test_annotation_text_does_not_scale_with_zoom(app)
         test_prior_fixes(v, app)
         test_multiorgan_and_edit(v, app)
         test_roi(v, app)

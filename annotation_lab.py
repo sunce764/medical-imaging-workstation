@@ -22,11 +22,22 @@ from datetime import datetime
 import numpy as np
 import scipy.ndimage as ndimage
 from PySide6.QtCore import QLineF, QPointF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetricsF,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QFileDialog,
+    QGraphicsItem,
     QGraphicsLineItem,
     QGraphicsPathItem,
     QGraphicsTextItem,
@@ -139,6 +150,26 @@ def mask_axis_contract_ok(saved_contract):
 # 弹窗内的文字必须用浅色背景下的前景色，不能复用主界面那套深色主题调色板。
 _DIALOG_FG = '#24292F'          # 正文，浅底对比度约 13:1
 _DIALOG_FG_MUTED = '#57606A'    # 次要说明，浅底对比度约 6:1
+
+
+def _pin_text_to_screen(txt, view):
+    """让场景内的文字项保持屏幕固定大小，并返回它折算到场景单位的 (宽, 高)。
+
+    默认情况下 QGraphicsTextItem 的字号定义在场景坐标里，会随视图缩放一起放大：
+    512² 的序列铺满窗口时缩放常在 2.5–3.5×，标注文字随之涨到原来的三倍多，压住
+    它所描述的解剖并溢出图像边界。置 ItemIgnoresTransformations 后字号锚定在屏幕
+    像素上，缩放只改变锚点位置、不改变字的大小。
+
+    返回值用于边界判断：文字的屏幕尺寸是固定的，但要和场景坐标里的图像宽高比较，
+    必须先按当前缩放折算回去——写死一个场景单位常量在任何别的缩放下都是错的。
+    """
+    txt.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+    scale = abs(view.transform().m11()) or 1.0
+    fm = QFontMetricsF(txt.font())
+    lines = txt.toPlainText().split("\n") or [""]
+    w_px = max((fm.horizontalAdvance(ln) for ln in lines), default=0.0)
+    h_px = fm.height() * len(lines)
+    return w_px / scale, h_px / scale
 
 
 class AnnotationMixin:
@@ -1093,7 +1124,13 @@ class AnnotationMixin:
                     txt = QGraphicsTextItem(label)
                     txt.setDefaultTextColor(col)
                     txt.setFont(QFont("Arial", 11, QFont.Bold))
-                    txt.setPos(anno['p2'][0] + 10, anno['p2'][1] + 10)
+                    tw, th = _pin_text_to_screen(txt, vdata['view'])
+                    H, W = self.volume_hu.shape[1], self.volume_hu.shape[2]
+                    tx = anno['p2'][0] + 10
+                    if tx + tw > W:                 # 右侧放不下就翻到测量终点左边
+                        tx = max(0.0, anno['p2'][0] - 10 - tw)
+                    ty = min(max(0.0, anno['p2'][1] + 10), max(0.0, H - th))
+                    txt.setPos(tx, ty)
                     vdata['view'].scene.addItem(txt)
                 elif anno['type'] == 'path':
                     pts = anno['points']
@@ -1137,11 +1174,14 @@ class AnnotationMixin:
                         txt = QGraphicsTextItem(stat)
                         txt.setDefaultTextColor(col)
                         txt.setFont(QFont("Arial", 10, QFont.Bold))
-                        # 防跑出画面：右侧放不下则移到椭圆左侧，纵向夹取在图像内
+                        # 防跑出画面：右侧放不下则移到椭圆左侧，纵向夹取在图像内。
+                        # 尺寸按实际字体度量折算，不用写死的常量——此前的 95/46 是在
+                        # 某一个缩放下估的，换个缩放就既挡图又溢出边界。
+                        tw, th = _pin_text_to_screen(txt, vdata['view'])
                         tx = rx0 + rw + 4
-                        if tx + 95 > W:
-                            tx = max(0, rx0 - 95)
-                        ty = min(max(0.0, ry0), max(0.0, H - 46))
+                        if tx + tw > W:
+                            tx = max(0.0, rx0 - tw - 4)
+                        ty = min(max(0.0, ry0), max(0.0, H - th))
                         txt.setPos(tx, ty)
                         vdata['view'].scene.addItem(txt)
               except Exception as _e:

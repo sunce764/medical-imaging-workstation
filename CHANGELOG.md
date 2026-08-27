@@ -2,6 +2,29 @@
 
 This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
+## Annotation text grew with the zoom until it covered what it described (2026-08-27)
+
+`QGraphicsTextItem` defines its point size in *scene* coordinates, so ROI statistics and ruler
+labels scaled with the view. A 512² series filling the window sits at roughly 2.5–3.5×, which
+turned a 10 pt label into the equivalent of 35 pt: the readout covered the very anatomy it was
+measuring and ran past the right edge of the image. Both labels now set
+`ItemIgnoresTransformations`, pinning the glyphs to screen pixels; zoom moves the anchor and
+nothing else.
+
+The overflow test that decided whether to flip the text to the other side of the ROI compared
+against a hard-coded `95` scene units — a figure estimated at one particular zoom. It is now
+derived from `QFontMetricsF` and divided by the current scale, because the label's screen size is
+fixed while the image bounds are in scene units, so the two can only be compared after converting.
+
+The first version of the regression test measured the wrong quantity: for an item with
+`ItemIgnoresTransformations`, `sceneBoundingRect()` is itself a function of the view transform,
+so it reported a 5× difference where there was none. `boundingRect()` is the one whose item
+coordinates *are* screen pixels. The second version then passed against a mutation that restored
+the hard-coded constant, because it only exercised magnification — where an oversized constant is
+accidentally conservative. Adding a 0.5× case fixed that: shrinking makes the label *wider* in
+scene units than the constant claims, so the bounds check wrongly says it fits. All three
+mutations now bite — removing the flag, removing the edge flip, and restoring the constant.
+
 ## The 3D preview dialog printed its only numbers in near-invisible text (2026-08-27)
 
 `QDialog` is a top-level window: it does not inherit the stylesheet the app sets on the
