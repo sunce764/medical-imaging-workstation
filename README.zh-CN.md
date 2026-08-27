@@ -17,7 +17,7 @@
 - **按第一性原理自行实现**——基于中心切片定理的直接傅里叶重建、解析 Shepp-Logan 模体，以及 DMR / ART / SIRT / ASD-POCS 迭代求解器。
 - **两个网络从零训练**——用于稀疏视角重建的 1.9M 残差 U-Net，与用于肺叶分割的 0.35M 3D U-Net。
 - **随软件发布的分割模型来路无任何文档**——其标签方案由本项目实测识别，并在公开真值上验证：21 器官 20 例、肺叶 57 例，抽自一个 297 例的公开数据集。
-- **四项量化研究、两项多例验证，以及一次促成产品改动的消融**——重建类研究直接 `import recon`（工作站的数值模块）；被测求解器（含 ASD-POCS）全部可在 GUI 的重建实验室里选用。分割类研究跑的是同一个 `organs.onnx`，或复现 `ai_engine` 的管线、或直接调用它——但其中大部分测量早于 `2a50e37` 对末窗处理的修改，故那几行属历史（修复前）证据，不是当前 shipped path 的逐步等价。哪个 arm 落在哪一侧按产物逐条记载，不用一句话总括（见「实测证据」一节）。
+- **四项量化研究、两项多例验证，以及一次促成产品改动的消融**——重建类研究直接 `import recon`（工作站的数值模块）；被测求解器（含 ASD-POCS）全部可在 GUI 的重建实验室里选用。分割类研究跑的是同一个 `organs.onnx`，或复现 `ai_engine` 的管线、或直接调用它——但其中大部分测量早于 `2a50e37` 对末窗处理的修改，故那几行属历史（修复前）证据，不是当前 shipped path 的逐步等价。哪个 arm 落在哪一侧按产物逐条记载，不用一句话总括（见「量化证据」一节）。
 
 > [!WARNING]
 > **仅供教学与科研。** 本软件不是经认证的医疗器械，不得用于临床诊断。AI 分割和器官定量均为自动估计，不构成临床结论。
@@ -51,7 +51,7 @@ Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开
 |:---:|:---:|
 | ![轴位分割](docs/img/gui_axial_segmentation.png) | ![三平面 MPR](docs/img/gui_mpr_triplanar.png) |
 
-**每一项定量都附带逐体素置信度。** 每个器官行给出模型的 softmax 最大类概率及其 5% 分位——低分位才是关键，因为误差集中在边界。低于 0.9 的条目会标出；下图这一次运行里，胆囊（`conf 0.88 / p5 0.54`）正是模型最没把握的那个，而它恰好也是 spacing 消融独立测出的最脆弱结构。
+**每一项定量都附带逐体素置信度。** 每个器官行给出模型的 softmax 最大类概率及其 5% 分位——低分位才是关键，因为误差集中在边界。低于 0.9 的条目会标出；下图这一次运行里，胆囊（`conf 0.91 / p5 0.59`）正是模型最没把握的那个，而它恰好也是 spacing 消融独立测出的最脆弱结构。
 
 ![AI 分割与逐体素置信度](docs/img/gui_confidence.png)
 
@@ -63,13 +63,13 @@ Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开
 
 | 器官定量与逐器官 HU | ROI 密度读数 |
 |:---:|:---:|
-| ![器官定量](img/gui_organ_quantification.png) | ![ROI 密度](img/gui_roi_tool.png) |
+| ![器官定量](docs/img/gui_organ_quantification.png) | ![ROI 密度](docs/img/gui_roi_tool.png) |
 
 **左右可用肉眼核验。** 腹窗下肝位于 `R` 侧、胃与脾位于 `L` 侧，这正是 `ai_engine` 里那条方位契约要保证的东西——标签是对着 CT-Lite 自带的 ground truth 核过的，不是画出来就算。**ROI** 给出均值±标准差、范围与物理单位面积；这些单位只在序列自证了 spacing 与 HU 标定时才出现，否则读数如实写明不可用，而不是编一个数。
 
 | 20 层厚层 MIP | 三维表面重建 |
 |:---:|:---:|
-| ![厚层 MIP](img/gui_slab_mip.png) | ![三维重建](img/gui_mesh3d.png) |
+| ![厚层 MIP](docs/img/gui_slab_mip.png) | ![三维重建](docs/img/gui_mesh3d.png) |
 
 **MIP** 沿层厚投影最大密度值，肺血管与结节正是这样阅读的；MinIP 与 AIP 共用同一控件，分别用于气道与降噪。**表面重建** 对单个标签跑 marching cubes，给出表面积、体积与球形度，网格可导出 STL——形状特征已用解析球体验算（体积误差 0.1% 以内，表面积约 1.3%）。
 
@@ -120,11 +120,13 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 
 实验测量的是随软件发布的那条管线，但直接程度分两档：重建类直接 `import recon`、调用 GUI 自己的函数；分割类要么复现 `ai_engine` 的预处理与 z 分块推理、跑同一个 `organs.onnx`（`seg_validate.py`、`seg3d_teacher.py`），要么实时调用 `ai_engine`（`seg_multi.py`、`seg_spacing.py`）。**已提交的分割证据大部分——但并非全部——早于 `2a50e37`**：该提交把产品末窗回移到 `[Z-DZ, Z)`（原先末块由 `pad(mode='constant')` 补零，而 HU 归一化后 0 即空气）。哪份产物落在这道分界的哪一侧，**逐 producer、逐 arm 而不同**（有些 arm 本就是 boundary-anchored），故按产物逐条记在 [`experiments/README.md`](experiments/README.md) 里，不在此处用一句总括代替。对其中回移前的那几行，数值属**历史（修复前）证据**，不是当前 shipped path 的等价测量。`seg_multi.py` 与 `seg_spacing.py` 还多一层后果：它们是运行时调用 `ai_engine` 的，故**当前源码已不再逐步复现其已提交 CSV**，两者本轮均未重跑。研究 IV 的学生模型是另训的独立模型，其产品线测量同样是复现产品推理路径，而非调用它。研究 I–III 与 spacing 消融见[技术报告](docs/technical_report.md)；**研究 IV 晚于该报告**，连同全部脚本与已提交结果一并收在 [`experiments/`](experiments/README.md)。
 
+**还有第二重、也是更大的一重边界：分割证据没有一条跑在产品的 DICOM 方位上。** 所有 producer 都经 `seg_validate.load_zhw` 取体数据，即规范到 **RAS** 的 NIfTI；`seg_multi.py` 与 `seg_spacing.py` 虽在运行时调用 `ai_engine`，喂给它的仍是同一份 RAS 体。而产品的体数据来自 canonical DICOM，其面内两轴方向相反（**LPS**）——直到 2026-08-27，`ai_engine` 两轴都没翻，成对器官在产品路径上整体互换，而下方每一个数字都照常健康。**故下列数字度量的是模型在 RAS 输入下的能力；在该日之前，它们不是、也从未有证据被声称是产品显示结果的度量。** 修复把该约定变成显式的 `inplane_axes` 参数并有回归测试覆盖；逐产物的边界记在 [`experiments/README.md`](experiments/README.md)。
+
 | 证据线 | 实测结果 | 适用边界 |
 |---|---|---|
 | **研究 I —— 重建剂量-质量** | 误差在 ≈180 视角后趋平——**实测表明那是重建链路自身的离散化地板（圆内 RMSE ≈0.03539;720/1440/2880 视角三者相差 0.02% 以内且不再下降），不是剂量结论**；最优 FBP 滤波器从稀疏角的平滑滤波切换为稠密角的锐利 Ram-Lak。**「ART 最鲁棒」这一结论已撤回**：它出自 1:20 的算力失衡（5 轮对 100 轮），各自取最优时 SIRT 在每一档剂量都优 9–20%。后续对同一批系统矩阵做 SVD 来检验本研究自己对最小二乘失稳的解释，结果**要改的是工具而非结论**：2-范数条件数对其中两个系统根本无定义，但最小二乘实际求逆的那部分谱上的噪声增益，恰在近方阵处取 23–37 倍的尖峰。替代说法刻意只做定性——不声称对该尖峰的任何定量归因。后续另补上了方法集里缺的一块：原先没有 TV 正则化基线，而它是稀疏角重建的标准对照。**ASD-POCS 在本研究的噪声水平下把最优求解器的误差压掉 45.1–54.7%（相对 SIRT 自身最优点），而到 η≈9% 时优势已在 60、90 视角转负（−0.8%、−10.0%），30 视角仍赢 6.4%**——可报告的结论是这条信噪比依赖关系，不是那个头条数字；另跑了一个刻意与 TV 先验作对的模体来试图推翻它，没能推翻。 | 解析二维 Shepp-Logan 模体；矩阵法限制在 ≈64×64；ART/SIRT 迭代次数固定、未逐剂量调优。[预印本稿](docs/preprint_recon.md) · [条件数 CSV](experiments/results/exp_c_conditioning.csv) |
 | **研究 II —— 模型出处与 Dice** | 标签重叠混淆矩阵实测出未文档化模型的标签方案即 TotalSegmentator v2 `class_map_part_organs`——21 个在场器官呈身份对角线——并纠正两处标签错误。被实测的是**标签映射**；由此推断这份权重就是那个上游 release，是很强的推断，但不是密码学意义上的证明。**20 例**患者级平均 Dice **0.909**（95% CI [0.889, 0.927]），单例 0.922 略偏乐观但落在区间内。 | 器官间可靠性差异远大于总体数字所示：肝 0.982、脾 0.976，而右肺上叶 0.773、前列腺 0.554（仅 7 例在场）。[`seg_multi.py`](experiments/seg_multi.py) |
-| **研究 III —— 学习式稀疏角重建** | 自实现 1.9M 参数残差 U-Net 将 RMSE 降低 **3–6 倍**，病灶对比度保留率从 0.87 提升至 **0.96–1.00**，分布外增益比为 0.81。**60 组无噪声 synthetic paired phantoms** 上，20%-of-lesion threshold 的 false-structure rate 为 **1.67%**，30% 与 50% threshold 均为 **0%**。 | 未加入 photon noise。1.67% 对 low-dose CT 既不是上界也不是下界；方向与幅度均未测，因此不声称 low SNR 是 dominant driver。 |
+| **研究 III —— 学习式稀疏角重建** | 自实现 1.9M 参数残差 U-Net 将 RMSE 降低 **3–6 倍**，病灶对比度保留率从 0.87 提升至 **0.957–0.996**，分布外增益比为 0.81。**60 组无噪声 synthetic paired phantoms** 上，20%-of-lesion threshold 的 false-structure rate 为 **1.67%**，30% 与 50% threshold 均为 **0%**。 | 未加入 photon noise。1.67% 对 low-dose CT 既不是上界也不是下界；方向与幅度均未测，因此不声称 low SNR 是 dominant driver。 |
 | **研究 IV —— 压缩分割模型与 model–inference-path interaction** | 从零训练的 0.35M 3D U-Net 对照 31.2M teacher。学生暴露出 tensor extent / zero-padding × `InstanceNorm3d` × fixed-size/no-augmentation training 的 interaction：同一权重得 **0.490 或 0.746**。对照把机制指向 normalization sensitivity，但未做 normalization replacement，不能认定唯一因果。 | 学生 input-size collapse 与产品 teacher 的 z-overlap/seam A/B 是两件事。后者覆盖全部 24 器官、**test 集 61 例中的 59 例**，一次 historical A/B 记录到 Dice **+0.0133**［+0.0072, +0.0194］、耗时 1.18×——那是回移前无重叠的 A 与 boundary-anchored 25% 重叠的 B **合并后**的差异，不是重叠单独的增益，也不是当前 shipped path 上的增量；同时出现的 +0.65GB 至今未归档；同为 `zslab` path 时，学生比 teacher 低 **0.4500**［-0.4877, -0.4118］（234 个叶次）。[`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) · [完整记述](experiments/README.md) |
 | **消融 —— spacing 契约** | 引擎此前跳过了 nnU-Net 必需的「重采样到训练 spacing」。先测代价（spacing 偏离一倍时平均 Dice 由 0.9219 掉到 0.7995，小器官最先垮且非单调），再据此实现。**20 例配对**下同一份失配输入由 **0.684 回升到 0.840**，**20/20 例全部改善**（Wilcoxon *p* = 1.9×10⁻⁶）；同一条本机序列的推理由 100s / 8.8GB 降至 **37s / 3.0GB**。 | 32GB 机器只测得到变粗方向，更细一侧是据「属降采样」推断而非实测。蒙版边界现按 1.5mm 网格量化——结构级准确度升、像素级边界精度降。[`seg_spacing.py`](experiments/seg_spacing.py) |
 | **扩展验证 —— 肺叶** | 57 例公开 CT 的五肺叶平均 Dice 为 **0.8867**（95% CI **[0.859, 0.914]**）；右肺上叶为 0.727，而原单例为 0.967。 | 只验证五个肺叶。该结论被独立印证：另一次 20 例运行用不同脚本、不同抽样，把同一个右肺上叶测为 0.773。[`seg3d_teacher.py`](experiments/seg3d_teacher.py) |
@@ -142,12 +144,12 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 10 个无 Qt 计算模块**；完整的 19-module packaging inventory 以 `pyproject.toml` 为准。
-- **2026-08-27 的一次本机实测**，全套（本地 RIDER 在场）为 **917 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **817 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`；该历史 CI 不覆盖其后的任何 commit。后续远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力，其 run/headSha 应记入仓库外 evidence 或交付摘要，不再制造第二个文档 commit。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
+- **2026-08-27 的一次本机实测**，全套（本地 RIDER 在场）为 **921 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **821 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`；该历史 CI 不覆盖其后的任何 commit。后续远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力，其 run/headSha 应记入仓库外 evidence 或交付摘要，不再制造第二个文档 commit。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
-python tests/test_gui.py                     # 2026-08-27 本机实测：全套 917 项；本地 RIDER 在场
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-27 本机实测：数据无关子集 817 项
+python tests/test_gui.py                     # 2026-08-27 本机实测：全套 921 项；本地 RIDER 在场
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-27 本机实测：数据无关子集 821 项
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```
@@ -178,7 +180,7 @@ coverage run tests/test_gui.py && coverage report
 - **仅做显示层脱敏：**屏幕与导出文件名会隐藏 PHI，但不会清洗底层 DICOM 标签和烧录文字。
 - **HU 单位必须有证据，不能只看 slope/intercept：**每一保留层都必须有 explicit `RescaleType=HU`，或满足 classic CT 的 `ORIGINAL`、非 `LOCALIZER`、非 multi-energy 标准保证，才开放 HU consumer。缺 explicit HU 的 `DERIVED`、未知/非 HU 单位、mixed-unit series 与 multi-energy CT 均只作 raw-value viewer-only。本地 RIDER 序列正属此列——它是 `DERIVED\SECONDARY\PROCESSED` 且无 `RescaleType`，产品因此正确地拒绝把它的数值称作 HU。`tools/declare_rider_hu.py` 从**数据侧**而非放宽闸门来解决：先用物理锚点（空气峰、软组织峰、值域）证明数值确为标准 HU，再写出一份派生副本，其**唯一新增的 tag** 是 explicit `RescaleType=HU`。`ImageType` 有意保持 `DERIVED`——这是该序列的事实，篡改它才是真正的造假；`PixelData` 逐字节原样复制。注意副本会使该序列满足 AI 条件，加载后会自动开始推理。
 - **换序列与 mask 状态 fail-safe：**新序列成功接管后才清旧 HU probe，并用新单位重建 HUD；加载失败则保留旧 readout。AI-pending 全零 placeholder 不会被保存成假 cache hit；只有经确认的全局清空才持久化带 provenance 的 empty mask、作废旧 AI callback，并可在保存前 Ctrl+Z。逐体素 eraser 最终擦成全零尚不归类为 explicit global clear。
-- **AI 泛化仍有未测部分：**肺叶验证 57 例、21 器官验证 20 例，样本量仍小，且全部来自同一个公开数据集（1.5mm 各向同性）；其他扫描协议与设备未经测试，器官间可靠性的差异远大于总体数字（肝 0.98 vs 前列腺 0.55）。spacing 重采样已接入（见证据表），但更细一侧仍属推断而非实测，且扫描范围过大时会被跳过。
+- **AI 泛化仍有未测部分：**肺叶验证 57 例、21 器官验证 20 例，样本量仍小，且全部来自同一个公开数据集（1.5mm 各向同性）、**全部以模型的 RAS 面内约定而非产品 DICOM 的 LPS 喂入**，故度量的是模型而非产品路径；其他扫描协议与设备未经测试，器官间可靠性的差异远大于总体数字（肝 0.98 vs 前列腺 0.55）。spacing 重采样已接入（见证据表），但更细一侧仍属推断而非实测，且扫描范围过大时会被跳过。
 - **重建限于教学范围：**DMR / ART / ASD-POCS 矩阵重建受最小二乘成本限制，实用上限约 64×64。研究 III 使用无噪声合成投影，不能证明低剂量临床表现。
 - **随访为刚性而非形变配准：**平面内配准在测试中将整体平移造成的 MAE 从 321 HU 降至 13 HU，但不会校正呼吸引起的器官形变；差异结果只能作定性参考，不能视为临床变化量。
 

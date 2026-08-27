@@ -4,7 +4,7 @@
 **报告日期：** 2026-08-26<br>
 **报告用途：** 研究生申请与算法作品集审阅、项目阶段复盘、后续研究决策<br>
 **软件定位：** 教学 / 科研工具，非医疗器械，不得用于临床诊断<br>
-**审计基线：** 固定 Git baseline `2e9b7005b33aed9012b7707ba89b4d0d26bb315d`。中英文 README 相对该 baseline 的 unified diff SHA-256 为 `0e81db074bde2177efc3c4bbe8f9cfcd1ed9040ee91ffe52a8ab92bc7843ef24`；该 hash 只绑定两份 README 的当前内容，不声称它们已 push 或经远端 CI 覆盖。**该值曾一度失效**：上一版发布的是 `08825d60…`，而其后又有一次提交改动了两份 README 却未重算，于是本文件第 11 行邀请读者执行的复算命令会给出不同的值——全项目唯一的密码学自证点当时是失败的。此处已重算并核验通过，但目前没有任何断言在 README 改动时强制重算，见 §10 的建议。
+**审计基线：** 固定 Git baseline `2e9b7005b33aed9012b7707ba89b4d0d26bb315d`。中英文 README 相对该 baseline 的 unified diff SHA-256 为 `d115adddec3aa3018b5ed1a82c4c079067f473c40c29a658840353b8df19018d`；该 hash 只绑定两份 README 的当前内容，不声称它们已 push 或经远端 CI 覆盖。**该值曾一度失效**：上一版发布的是 `08825d60…`，而其后又有一次提交改动了两份 README 却未重算，于是本文件第 11 行邀请读者执行的复算命令会给出不同的值——全项目唯一的密码学自证点当时是失败的。此处已重算并核验通过，但目前没有任何断言在 README 改动时强制重算，见 §10 的建议。
 
 > 本报告刻意区分四类信息：**本次实测**、**可由仓库产物复算**、**历史实测但未归档**、**推断或未测项**。数值不因叙事需要而跨越这些边界。
 
@@ -23,7 +23,7 @@ README diff 的 canonical 复算命令为：`git -c color.ui=false --no-pager di
 3. 研究不仅保留正结果，也保留被大样本推翻的试跑结果和被后续测量撤回的结论；
 4. 数据、模型、许可、软著快照和当前代码之间的边界均被显式记录。
 
-截至本报告日期，项目已经具备较强的**作品集展示价值和工程可信度**：2026-08-27 的一次本机实测，全套回归 **917 PASS / 0 FAIL**，数据无关子集 **817 PASS / 0 FAIL**；这些是 local evidence，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run 32833860765](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、coverage 81%、Ruff PASS，`event=workflow_dispatch`。该历史 CI 不覆盖其后的任何 commit；后续远端结果必须绑定具体 run 与精确 `headSha`。项目仍然不是临床产品，也还不是一项已完成的临床研究：分割验证来自单一公开数据源，教师模型很可能见过该数据；学习式重建使用无噪声合成投影；部分历史性能数字没有归档原始日志。
+截至本报告日期，项目已经具备较强的**作品集展示价值和工程可信度**：2026-08-27 的一次本机实测，全套回归 **921 PASS / 0 FAIL**，数据无关子集 **821 PASS / 0 FAIL**；这些是 local evidence，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run 32833860765](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、coverage 81%、Ruff PASS，`event=workflow_dispatch`。该历史 CI 不覆盖其后的任何 commit；后续远端结果必须绑定具体 run 与精确 `headSha`。项目仍然不是临床产品，也还不是一项已完成的临床研究：分割验证来自单一公开数据源，教师模型很可能见过该数据；学习式重建使用无噪声合成投影；部分历史性能数字没有归档原始日志。
 
 综合判断：这是一个“**产品实现 + 算法研究 + 证据治理**”结合得较完整的医学影像算法作品集。其可信度主要来自对错误结论的主动撤回、对推理路径的同口径比较，以及对不可复现部分的明确承认，而不是来自单个最高 Dice 或功能数量。
 
@@ -172,7 +172,7 @@ ONNX inference 在 Python background thread 中运行，Qt UI 更新只通过 si
 
 ### 3.5 Persistence 与安全恢复
 
-annotation 与 mask 可持久化到本地目录。恢复不仅匹配 `SeriesInstanceUID + shape`，还必须匹配由 ordered SOP UIDs、IOP/IPP、projected positions、PixelSpacing 与 volume shape 组成的 geometry fingerprint；legacy cache 缺 fingerprint 时 fail closed。同 UID/shape 的重排或几何变化也会被拒绝，避免错误 mask 进一步生成错误器官体积或 STL。De-ID 只替换 display 与显式 export filename；内部 project/cache 仍保留匹配所需 identifiers 与 provenance，且不会清洗 source DICOM tags 或 burned-in pixel text。
+annotation 与 mask 可持久化到本地目录。恢复须**四项全中**：AI 面内轴向契约（`axis_contract`）、`SeriesInstanceUID`、shape，以及由 ordered SOP UIDs、IOP/IPP、projected positions、PixelSpacing 与 volume shape 组成的 geometry fingerprint。缺轴向契约（2026-08-27 面内轴修复前的产物，蒙版左右镜像而前三项均照常匹配）或缺 fingerprint（legacy cache）一律 fail closed。同 UID/shape 的重排或几何变化也会被拒绝，避免错误 mask 进一步生成错误器官体积或 STL。De-ID 只替换 display 与显式 export filename；内部 project/cache 仍保留匹配所需 identifiers 与 provenance，且不会清洗 source DICOM tags 或 burned-in pixel text。
 
 ---
 
@@ -323,7 +323,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 | Student path 0.4903→0.7457 | 同一 weights、24 validation cases；两条 inference path | B，需外部 data / weight | [`seg3d_diag_ch8d3_33600s_zslab.json`](../experiments/results/seg3d_diag_ch8d3_33600s_zslab.json)、[`seg3d_diag_ch8d3_33600s_sliding.json`](../experiments/results/seg3d_diag_ch8d3_33600s_sliding.json) · [`seg3d_diag.py`](../experiments/seg3d_diag.py) |
 | Historical A/B（A=回移前无重叠 / B=boundary-anchored+25% 重叠）+0.0133 / 1.18×，非重叠单独增益 | 59 paired all-organ case means；time 由同一批 per-case `sec` 重算 | B，需外部 data / weight | [`seg3d_infer_bias_bench_A.csv`](../experiments/results/seg3d_infer_bias_bench_A.csv)、[`seg3d_infer_bias_bench_B.csv`](../experiments/results/seg3d_infer_bias_bench_B.csv) · [`seg3d_infer_bias.py`](../experiments/seg3d_infer_bias.py) `bench` |
 | Teacher–student `zslab` −0.4500 | 234 matched `(case, lobe)` rows；正文 CI 是 instance bootstrap | B，需外部 data / weight | [`seg3d_teacher_dice.csv`](../experiments/results/seg3d_teacher_dice.csv)、[`seg3d_student_ch8d3_33600s_zslab.csv`](../experiments/results/seg3d_student_ch8d3_33600s_zslab.csv) · [`seg3d_report.py`](../experiments/seg3d_report.py) |
-| 917 full / 817 subset | 2026-08-27 本机实测；commands 见 §11 | A | 本地 runner exit 0 与 PASS count；不是 fresh-clone、coverage 或远端 CI evidence |
+| 921 full / 821 subset | 2026-08-27 本机实测；commands 见 §11 | A | 本地 runner exit 0 与 PASS count；不是 fresh-clone、coverage 或远端 CI evidence |
 | 100s/8.8GB→37s/3.0GB；8.44→9.09GB | 各为历史单机 run | C | 文档中的 terminal record；没有可独立复核 artifact |
 | Exact upstream checkpoint、noisy-CT hallucination、cross-scanner generalisation | 未形成直接 measurement | D | 明确保持 unresolved，不由 checksum 或现有 Dice 推断 |
 
@@ -335,10 +335,10 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 
 | 检查 | 结果 | 解释 |
 |---|---:|---|
-| Full regression with local RIDER | **917 PASS / 0 FAIL** | 2026-08-27 本机实测；真实 DICOM 在场；本地 RIDER export 为 `DERIVED` 且无 explicit HU，故产品路径 viewer-only；标准 HU consumer 由 synthetic classic CT 覆盖；未重跑整卷 AI inference。测试始终读原始 `肺癌/`，不读 `tools/declare_rider_hu.py` 生成的 HU-declared 副本，故该副本不改变本行计数 |
-| `SKIP_REAL_DATA=1` local subset | **817 PASS / 0 FAIL** | 2026-08-27 本机实测；合成 DICOM、synthetic event、pure compute 与本地 artifact guard |
+| Full regression with local RIDER | **921 PASS / 0 FAIL** | 2026-08-27 本机实测；真实 DICOM 在场；本地 RIDER export 为 `DERIVED` 且无 explicit HU，故产品路径 viewer-only；标准 HU consumer 由 synthetic classic CT 覆盖；未重跑整卷 AI inference。测试始终读原始 `肺癌/`，不读 `tools/declare_rider_hu.py` 生成的 HU-declared 副本，故该副本不改变本行计数 |
+| `SKIP_REAL_DATA=1` local subset | **821 PASS / 0 FAIL** | 2026-08-27 本机实测；合成 DICOM、synthetic event、pure compute 与本地 artifact guard |
 | Fresh local clone | **该 snapshot 未运行** | 不把旧 clean-clone 计数当作该 snapshot 的证据 |
-| Ruff | **PASS** | 2026-08-26 本机执行 `ruff check .`，exit 0 |
+| Ruff | **PASS** | 2026-08-27 本机执行 `ruff check .`，exit 0 |
 | Pre-commit snapshot coverage | **未运行** | 新增 geometry/safety 代码后不沿用旧 denominator 或 module percentages |
 | As-of-snapshot exact-SHA remote baseline | **`2e9b700`** | 截至该 snapshot 的最新远端证据；后续远端状态必须另绑定 run / `headSha` |
 | Historical remote CI | [run 32833860765](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765) 覆盖 `2e9b700` | **520 PASS / 0 FAIL**，coverage 81%，Ruff PASS；`event=workflow_dispatch`；不覆盖其后的任何 commit |
@@ -418,6 +418,14 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 > - **`Z % 32 == 0` 只是 32 深度、补 32 那几条路径的充分边界**（`ai_engine`、`seg_validate.py`、
 >   `seg3d_teacher.py`，以及 `seg3d_infer_bias.py` 的 `A`/`C` 臂），**不能**外推到补 8 的
 >   `zslab_infer`。
+>
+> **还有与上一重相互独立的第二重边界：这些证据没有一条跑在产品的 DICOM 方位上。** 所有 producer 都经
+> `seg_validate.load_zhw` 取体数据，即规范到 **RAS** 的 NIfTI；`seg_multi.py` 与 `seg_spacing.py` 虽在
+> 运行时调用 `ai_engine`，喂给它的仍是同一份 RAS 体。产品的体数据来自 canonical DICOM，面内两轴方向
+> 相反（**LPS**），而 2026-08-27 之前 `ai_engine` 两轴都没翻——成对器官在产品路径上整体互换，本节每一
+> 个数字却都照常健康。故这些数字度量的是**模型在 RAS 输入下的能力**；该日之前它们不是、也从未有证据
+> 被声称是产品显示结果的度量。修复后轴序成为显式的 `inplane_axes` 参数，三个 experiments 调用点声明
+> `'ras'`，行为与已提交产物一致。
 >
 > 要对当前路径重测，需在整个 split 上重跑 ONNX 推理。本轮未做，也未改动任何已提交结果文件。
 
@@ -524,7 +532,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 
 ### 工程冻结与外部等待
 
-1. **commit / push / exact-SHA CI 都属仓库外的可变交付状态，本报告一律不固化**——任何写死的 SHA、run id 或 URL 都会被随后的文档提交再次推翻，这正是本节曾经犯过的错。核验方式是实时比较：`git ls-remote origin refs/heads/main` 给出的 live `main`，与目标 GitHub Actions run 的 `headSha`，两者逐字符一致才算远端门通过。自动 `push` trigger 历史上不可靠，故该门只接受 manual `workflow_dispatch` 产生的 run。tag 与 release 仍不在本次范围。
+1. **commit / push / exact-SHA CI 都属仓库外的可变交付状态，本报告只按 snapshot 标注、不作为当前状态固化**——文中出现的 SHA、run id 与 URL 一律限定为「截至某 snapshot 的历史证据」，不得读作 live `main` 或当前远端门的状态（§7 的审计 baseline 是刻意固定的 diff 基准，与此不同）。把它们**当作当前状态**写死，这正是本节曾经犯过的错。核验方式是实时比较：`git ls-remote origin refs/heads/main` 给出的 live `main`，与目标 GitHub Actions run 的 `headSha`，两者逐字符一致才算远端门通过。自动 `push` trigger 历史上不可靠，故该门只接受 manual `workflow_dispatch` 产生的 run。tag 与 release 仍不在本次范围。
 2. 自动 `push` trigger 根因不再是 P0，不阻塞本地工程冻结，也不主动深挖。
 3. 只有获得新的明确授权才可重开 performance run；届时必须使用已接入的 JSON provenance 合约，并核对 machine、configuration、wall time、process peak 与完整 model hashes。
 4. 继续冻结项目方提交记录所指向的 `docs/*.pdf` 与签章材料；等待 CPCC 期间不重建 V1.0 snapshot，状态变化只更新非冻结 Markdown。

@@ -91,7 +91,7 @@ liver / kidney / lung lobes                        ← 全程 > 0.85
 
 但这个项目此前已经栽过一次：肺叶 Dice 在单例上是 0.956–0.991，扩到 57 例后变成 **0.887**——单例偏乐观。有了这个教训，就该问：这次的 +0.064 靠得住吗？
 
-于是做了 **20 例配对验证**：同一份失配输入，一条走直通（修复前行为），一条走产品引擎（含重采样）。两者唯一的差别就是这一步，因此差值的分布直接就是这一步的效果分布。
+于是做了 **20 例配对验证**：同一份失配输入，一条走直通（修复前行为），一条走产品引擎（含重采样）。在同一条 RAS 输入路径上，两者唯一的差别就是这一步，因此差值的分布直接就是这一步的效果分布（两臂都不经产品的 DICOM/LPS 方位，故这是模型侧的效果，不是产品显示结果的效果）。
 
 | | 直通 | 经引擎 |
 |---|---|---|
@@ -173,4 +173,4 @@ python experiments/seg_spacing.py engine 3.0         # 单例：直通 vs 产品
 python experiments/seg_spacing.py multi 3.0 20       # 20 例配对验证
 ```
 
-数据为 TotalSegmentator-CT-Lite（CC-BY-4.0）公开去标识研究数据，manifest 记录固定 revision。全部脚本直调产品代码，非另写的替代实现。
+数据为 TotalSegmentator-CT-Lite（CC-BY-4.0）公开去标识研究数据，manifest 记录固定 revision。`engine` / `multi` 两臂运行时直接调用产品的 `ai_engine`；默认消融臂走的是 `seg_validate.run_onnx`——对 `ai_engine` 推理循环的复刻，且停在末窗回移（`2a50e37`）之前，不是产品代码本身。两臂不在同一末窗写法上，且都以模型的 RAS 面内约定喂入，而非产品 DICOM 的 LPS。

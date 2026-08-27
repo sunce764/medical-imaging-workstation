@@ -621,7 +621,7 @@ class AnnotationMixin:
 
     def _load_saved_mask(self, pid):
         """尝试加载上次保存的 AI 分割标签图(.npz)。自动恢复要求 SeriesInstanceUID、
-        mask/volume shape 与 geometry/order fingerprint 三者均匹配；legacy cache 缺少
+        mask/volume shape、geometry/order fingerprint 与 AI 面内轴向契约四者均匹配；legacy cache 缺少
         fingerprint 时 fail closed。判定逻辑在纯函数 mask_cache_matches（无 Qt，可独立
         单测），避免同一患者的随访/复扫、切片重排或几何变化静默复用错误蒙版。
         """

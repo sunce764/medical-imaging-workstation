@@ -2,6 +2,51 @@
 
 This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
+## Three independent audits, and what they found the axis fix had left behind (2026-08-27)
+
+Three read-only reviews ran in parallel over documentation, test effectiveness and freeze-readiness.
+None of them said the project was ready. What they found was not fabrication — one auditor
+recomputed roughly sixty quantitative claims from the committed CSVs and every one of them held —
+but **disclosure that had not kept up with the code**, plus guards that were not guarding.
+
+**The axis caveat existed in exactly one file.** After the in-plane axis fix, the scope note went
+into `experiments/README.md` and nowhere else: `RAS`, `LPS` and `inplane_axes` appeared **zero
+times** across the eight reader-facing documents, while both READMEs still said the experiments
+measure "the shipped pipeline" and the technical report still said they "characterise the shipped
+system". The note is now in seven documents and in `_load_saved_mask`'s docstring.
+
+**The first two figures a reader sees showed the patient mirrored.** `gui_axial_segmentation.png`,
+`gui_confidence.png` and `gui_mpr_triplanar.png` all predate the fix — liver on the `L` side,
+spleen and stomach on `R`, spinous process toward `A` — and sat a few lines above a newly added
+sentence inviting readers to check laterality by eye. All three are re-shot from the same case
+(CT-Lite s0029, `Slice 249/422` and `279/422` as before); per-organ volumes are unchanged, because
+mirroring never altered voxel counts, only which side they landed on. The gallbladder is still the
+least certain organ, now at `conf 0.91 / p5 0.59`.
+
+**The project's only cryptographic self-check was failing.** `project_report_zh.md` publishes a
+SHA-256 of the READMEs' diff against a fixed baseline and requires it be recomputed whenever a
+README changes — a rule the file records as having been broken once before. Seven README-touching
+commits later it was broken again. Recomputed and verified equal.
+
+**Four assertions were decoration.** The worst guarded a defect that had already happened once:
+`volume_mask` overlay on coronal and sagittal planes. Its assertion compared `volume_mask[z].shape`
+against `volume_hu[z].shape` and counted the block the test itself had just written — both true by
+construction, touching no product code. Restoring the historical bug (`plane == AXIAL` only) left
+the suite green. It now drives the product's own render and inspects `mask_item`, which is where
+the overlay actually lands; the mutation is caught precisely on the two non-axial planes. The other
+three: a HUD organ check satisfied by the slice number `'5'`, a recon title check whose second
+disjunct was stale state from a previous iteration, and a crop-statistics check that verified the
+strings `mm` and `HU` but never the numbers — pinned now to 225.00 mm² and 60.0 HU, values that
+immediately caught the figure this entry's author had computed by hand.
+
+Also: `dicom_geometry`'s non-finite rejection for IPP, IOP and PixelSpacing had no coverage at all
+(NaN is a documented trap in this project, and `_finite_vector`'s `isfinite` guard could be deleted
+with the suite still green) — three assertions added; the skipped 12-assertion block in
+`test_dl_recon_guard` now announces itself instead of vanishing silently on CI; and a claimed
+row-permutation control in `preprint_recon.md` was **removed rather than corrected**, because the
+before/after conditioning numbers it quoted exist in no commit and no artifact — the control was
+never scripted.
+
 ## Reimplementations of the inference pipeline are now checked against the product (2026-08-27)
 
 Two experiment scripts reimplement `ai_engine`'s preprocessing and sliding window rather than call

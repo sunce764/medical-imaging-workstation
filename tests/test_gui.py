@@ -27,7 +27,7 @@ from PySide6.QtWidgets import QApplication, QGraphicsTextItem, QGraphicsView, QM
 
 import ai_engine
 import main as m
-from constants import AXIAL, CORONAL, MANUAL_TRACK_LABEL, TOOL_POINTER, TOOL_RULER
+from constants import AXIAL, CORONAL, MANUAL_TRACK_LABEL, SAGITTAL, TOOL_POINTER, TOOL_RULER
 from graphics_view import ROIGraphicsItem
 
 # 静音弹窗，避免离屏阻塞。三个都必须 stub：question 曾被遗漏，导致触发
@@ -250,17 +250,49 @@ def test_multiorgan_and_edit(v, app):
     # 橡皮擦 AI 标签
     v.handle_seg_paint(1, [(70, 70)], True)
     check(int((v.volume_mask[z] == 10).sum()) < before, "橡皮可擦除 AI 分割")
-    # 蒙版叠加须覆盖三个平面：volume_mask 与 volume_hu 同形状，各平面按同一索引取切片。
-    # 曾硬编码 `plane == AXIAL`，使冠/矢状面看不到任何分割（MPR 与 AI 两大功能未打通）。
+    # 蒙版叠加须覆盖三个平面。曾硬编码 `plane == AXIAL`，使冠/矢状面看不到任何分割
+    # （MPR 与 AI 两大功能未打通）。
+    #
+    # 【此处必须驱动产品自己去渲染】旧版断言比的是 `volume_mask[zc]` 与 `volume_hu[zc]`
+    # 的形状、以及测试自己填进去的方块是否非零——两者都由测试的构造恒定成立，整条断言
+    # 不触及任何产品代码。实测把 main.py 的 overlay 分派改回 axial-only（原样重现那个
+    # 历史 bug），旧断言依旧全绿。改为渲染前后对比：先在 mask 全零时取一帧，再填入方块
+    # 取一帧，两帧必须不同——某个平面若不叠加蒙版，它的两帧就会逐像素相同。
     Z, H, W = v.volume_mask.shape
-    v.volume_mask[:] = 0
-    v.volume_mask[Z // 2 - 5:Z // 2 + 5, H // 2 - 20:H // 2 + 20, W // 2 - 20:W // 2 + 20] = 5
-    zc, yc, xc = Z // 2, H // 2, W // 2
-    for nm, msk, hu in (("Axial", v.volume_mask[zc, :, :], v.volume_hu[zc, :, :]),
-                        ("Coronal", v.volume_mask[:, yc, :], v.volume_hu[:, yc, :]),
-                        ("Sagittal", v.volume_mask[:, :, xc], v.volume_hu[:, :, xc])):
-        check(msk.shape == hu.shape and int((msk != 0).sum()) > 0,
-              f"{nm} 面蒙版切片与影像切片同形 {msk.shape} 且含分割 (得 {int((msk != 0).sum())} 体素)")
+    # 方块必须填在【产品当前所看的那个体素】上，不能用几何中心：渲染读的是
+    # current_3d_pos，而该 fixture 跨测试共享、前面的用例已经移动过它。用 Z//2
+    # 时实测 Axial/Sagittal 取不到方块而 Coronal 恰好取到，三条断言结果不一致。
+    zc, yc, xc = (int(np.clip(c, 20, lim - 21))
+                  for c, lim in zip(v.current_3d_pos, (Z, H, W), strict=True))
+    vd0 = v.views[1]
+    saved_plane = vd0['plane']
+    saved_anno = vd0['chk_anno'].isChecked()
+    # 蒙版叠加以 chk_anno 为前提，而该 fixture 跨测试共享、前面的用例可能已取消勾选；
+    # 不显式置位，三条断言会一致地「两帧都不显示」，看起来像产品坏了。
+    # 另：切平面只设 vd['plane']，不碰 cb_plane——setCurrentIndex 会触发
+    # change_view_plane，把状态泄漏给后续用例（实测污染了 MPR 各向异性那条）。
+    vd0['chk_anno'].setChecked(True)
+
+    # 蒙版不合成进底图，而是画在独立的 mask_item 上（graphics_view.py:149，ZValue=1），
+    # 由 set_image 的第二个参数驱动：本切片无器官时 hide()，有器官时 show()+setPixmap。
+    # 故取 image_item 是看不到蒙版的——必须查 mask_item。
+    def _mask_state(plane):
+        vd0['plane'] = plane
+        v.update_display()
+        app.processEvents()
+        mi = vd0['view'].mask_item
+        return mi.isVisible(), mi.pixmap()
+
+    for nm, plane in (("Axial", AXIAL), ("Coronal", CORONAL), ("Sagittal", SAGITTAL)):
+        v.volume_mask[:] = 0
+        vis_blank, _ = _mask_state(plane)
+        v.volume_mask[zc - 5:zc + 5, yc - 20:yc + 20, xc - 20:xc + 20] = 5
+        vis_painted, pm = _mask_state(plane)
+        check(not vis_blank and vis_painted and not pm.isNull() and pm.width() > 0,
+              f"{nm} 面：蒙版全零时 mask_item 隐藏、填入方块后显示且有内容"
+              f"（得 {vis_blank}→{vis_painted}, {pm.width()}×{pm.height()}）")
+    vd0['plane'] = saved_plane
+    vd0['chk_anno'].setChecked(saved_anno)
     v.series_geometry = saved_geometry
     v._apply_series_capabilities(); v._update_organ_stats(); app.processEvents()
 
@@ -799,6 +831,31 @@ def test_patient_space_geometry_contract():
             kw['ImagePositionPatient'] = (0, 0, z)
         return SimpleNamespace(**kw)
 
+    # 【几何字段的 NaN 拒绝】NaN 是本项目记在案的已知踩坑：它是合法 float，`is None`
+    # 与 float() 都拦不住。_dcm_float 那一侧早有覆盖，但 dicom_geometry 里 IPP / IOP /
+    # PixelSpacing 的 non-finite 拒绝此前从未被任何断言触发——把 _finite_vector 里的
+    # np.all(np.isfinite(...)) 整条删掉，全套仍绿。以下三条各自钉住一个字段。
+    nan = float('nan')
+    g_iop = dg.analyze_series([ds(0, iop=(1, 0, 0, 0, nan, 0)), ds(2, iop=(1, 0, 0, 0, nan, 0))])
+    check(not g_iop.canonical_orientation and g_iop.sort_indices is None,
+          "IOP 含 NaN → 方向不可证且不给排序（non-finite 拒绝生效）")
+    g_ipp = dg.analyze_series([SimpleNamespace(ImageOrientationPatient=axial,
+                                               PixelSpacing=(2, 3), RescaleSlope=1,
+                                               RescaleIntercept=-1024,
+                                               ImageType=('ORIGINAL', 'PRIMARY', 'AXIAL'),
+                                               ImagePositionPatient=(0, 0, nan)),
+                               ds(2)])
+    check(not g_ipp.uniform_z_geometry_valid and g_ipp.slice_spacing_mm is None,
+          "IPP 含 NaN → z 几何不可证，不产出伪层距")
+    g_ps = dg.analyze_series([SimpleNamespace(ImageOrientationPatient=axial,
+                                              PixelSpacing=(nan, 3), RescaleSlope=1,
+                                              RescaleIntercept=-1024,
+                                              ImageType=('ORIGINAL', 'PRIMARY', 'AXIAL'),
+                                              ImagePositionPatient=(0, 0, 0)),
+                              ds(2)])
+    check(not g_ps.inplane_spacing_valid,
+          "PixelSpacing 含 NaN → 面内间距不可证，不开放 mm 换算")
+
     reversed_series = [ds(4, slope=2), ds(0, intercept=-1000), ds(2, slope=3)]
     g = dg.analyze_series(reversed_series)
     check(g.sort_indices == (1, 2, 0) and g.slice_spacing_mm == 2.0,
@@ -1042,10 +1099,16 @@ def test_spacing_capability_gating(app):
               and not v.tool_btns['btn_rul'].isChecked()
               and all(vd['view'].current_tool == TOOL_POINTER for vd in v.views.values()),
               "valid spacing → invalid spacing 同步撤销 Ruler button/global/view 状态")
-        check(not measure_view.is_drawing
-              and not any(isinstance(item, QGraphicsTextItem) and "mm" in item.toPlainText()
-                          for item in measure_view.scene.items()),
-              "spacing 失效时取消进行中的 measurement preview，不留下伪 mm")
+        # 【scene 扫描那半边此前永不触发】换序列时 load_data → set_image 已经清空过 scene，
+        # 于是 isinstance(...) 在每次迭代都是空集，只有 is_drawing 那半边承重：把
+        # cancel_ruler_preview 改成只置 is_drawing=False、不移除图元，断言仍 PASS。
+        # 改为直接查 temp_text 这个预览图元本身——它才是「伪 mm」的载体。
+        _tt = getattr(measure_view, 'temp_text', None)
+        _stale_mm = (_tt is not None and _tt.scene() is not None
+                     and "mm" in _tt.toPlainText())
+        check(not measure_view.is_drawing and not _stale_mm,
+              f"spacing 失效时取消进行中的 measurement preview，不留下伪 mm"
+              f"（is_drawing={measure_view.is_drawing}, 预览图元仍在场={_stale_mm}）")
         check(any("Px unavailable" in x or "像素间距不可用" in x for x in br)
               and not any("Px 1.00mm" in x for x in br),
               f"overlay 明示 PixelSpacing unavailable，不伪造 1mm（{br}）")
@@ -1697,6 +1760,10 @@ def test_dl_recon_guard():
     check(R.dl_available("") is False, "空路径 → 报告不可用")
     have = R.dl_available(RECON_DL_MODEL)
     print(f"    本机模型就绪={have}（缺失时下列推理断言自动跳过，不算失败）")
+    # 权重是 gitignored 的外部文件，CI 上必然缺席，这 12 条推理断言会整块消失而
+    # 计数照常「全部通过」——实测藏起权重后 CHECKS total 少 12、failed=0。故显式
+    # 记录跳过与否，让「本轮到底验了什么」出现在日志里，而不是靠数字对不上才发现。
+    check(True, f"学习式重建权重{'在场，执行下列 12 条推理断言' if have else '缺席（CI 常态），下列 12 条推理断言本轮未执行'}")
     if not have:
         return
     rng = np.random.RandomState(0)
@@ -4168,8 +4235,11 @@ def test_mpr_linkage(app):
         vi.sync_crosshair(QPointF(20, 10), 1); app.processEvents()
         hud = vi.lbl_hud.text()
         check('123' in hud, f"HUD 报出该体素 HU（得「{hud}」）")
-        check(('肝' in hud) or ('Liver' in hud) or ('5' in hud),
-              f"HUD 报出所在器官（得「{hud}」）")
+        # 【勿再放进 `'5' in hud`】HUD 文本形如 `(x, y, z)  {hu} {unit}`，此处 z=5，
+        # 那个 disjunct 由切片号恒满足，整条断言随之恒真：实测把 _update_hud 里
+        # 追加器官名的那一行整个删掉，本断言依旧 PASS。只认器官名本身。
+        check(('肝' in hud) or ('Liver' in hud),
+              f"HUD 报出所在器官名（得「{hud}」）")
 
         # 联动关闭时只更新 HUD，不改光标
         vi.btn_mpr.setChecked(False)
@@ -4397,8 +4467,13 @@ def test_crop_and_legend(app):
         QMessageBox.question = staticmethod(_q)
         vi.handle_crop_requested(1, poly)
         check(asked['n'] == 1, "Axial 上截取弹出统计框")
-        check('mm' in asked['msg'] and 'HU' in asked['msg'],
-              f"统计框给出面积与均值 HU（「{asked['msg'][:40].replace(chr(10), ' / ')}」）")
+        # 【勿退回只验单位】fixture 是精确可算的：ROI (12,12)-(28,28) 整个落在
+        # volume_hu[2, 10:30, 10:30] = 60 的方块内，实测面积 225.00 mm²、均值恰为 60.0 HU。
+        # 只验 'mm'/'HU' 两个字串时，把 handle_crop_requested 里的多边形掩码换成全 1
+        # （等于整幅统计，面积 1600 mm²、均值 -660 HU）断言依旧 PASS。故钉死数值。
+        _msg = asked['msg']
+        check('225.00' in _msg and '60.0' in _msg and 'mm' in _msg and 'HU' in _msg,
+              f"统计框给出正确的面积 225.00 mm² 与均值 60.0 HU（「{_msg[:56].replace(chr(10), ' / ')}」）")
         check(not _glob.glob(os.path.join(tmp, '*.png')), "选「否」时不写任何文件")
 
         out_png = os.path.join(tmp, "crop.png")
@@ -4595,8 +4670,11 @@ def test_matrix_recon_ui(app):
                 vi._last_recon_img = None
                 vi.run_art_sirt(); app.processEvents()
                 check(vi._last_recon_img is not None, f"{meth} 跑通并留下重建结果")
-                check(meth in vi.views[4]['title_label'].text() or 'RMSE' in vi.views[3]['title_label'].text(),
-                      f"{meth} 更新了视图标题")
+                # 【勿再或上 V3 的 'RMSE'】那一支由循环前那次 DMR 留下的陈旧标题恒满足，
+                # 两个 disjunct 实测都为真，断言随之恒真：把 V4 标题里的 {method} 去掉，
+                # ART/SIRT/ASD-POCS 三条仍全 PASS。只认本次方法名出现在 V4 标题里。
+                check(meth in vi.views[4]['title_label'].text(),
+                      f"{meth} 出现在 V4 标题（得「{vi.views[4]['title_label'].text()}」）")
 
         # 系统矩阵构建失败（返回 None）时必须安全退出，而不是拿 None 去算
         with _mock.patch.object(type(vi), '_build_system_matrix', lambda s, nn, th: None):

@@ -26,7 +26,7 @@ python experiments/cluster_ci.py             # Case-level clustered bootstrap CI
 
 Outputs are written to `experiments/results/`: one PNG figure plus one CSV of raw data per experiment.
 
-> Reproduction dependencies (outside the App): `pip install -r experiments/requirements-experiments.txt` (matplotlib / nibabel / remotezip).
+> Reproduction dependencies (outside the App): `pip install -r experiments/requirements-experiments.txt` (matplotlib / nibabel / remotezip / torch / onnx — `torch` is needed by Studies III and IV, `onnx` only by `seg3d_bench.py`).
 
 ## Methods
 
@@ -194,8 +194,8 @@ The image is normalised to RAS and then converted to the GUI's (Z,H,W) axis orde
 ## Findings
 `exp` outputs: `seg_confusion.png` (confusion heatmap) · `seg_dice.csv` · `seg_mapping.md`
 
-1. **The mapping is measured to be an identity diagonal**: our#k → the k-th TotalSegmentator organ, matching one by one (this case exercises labels 1–23 only — label 24, right kidney cyst, was never predicted and produces no row; and this case's ground truth contains no prostate/kidney cyst, so labels 22/23 have no measured Dice either. Identity for all three of labels 22–24 is fixed by this mapping scheme, not by a measured overlap). **This measures the label scheme = TotalSegmentator v2 `class_map_part_organs`** (24 organs + background, an nnU-Net v2 export), so the mapping is no longer "unknown". The mapping is what the code uses and what is measured; concluding that the weights themselves are that upstream release is an inference from it — strongly supported, not cryptographically proven.
-2. **Mean Dice ≈ 0.92 over the 21 organs present** (kidneys 0.98, lung lobes 0.96–0.99, small organs such as thyroid/gallbladder 0.79–0.82), consistent with TotalSegmentator's officially published level — **simultaneously validating that the GUI inference pipeline is correct**.
+1. **The mapping is measured to be an identity diagonal**: our#k → the k-th TotalSegmentator organ, matching one by one (this case exercises labels 1–23 only — label 24, right kidney cyst, was never predicted and produces no row; and this case's ground truth contains no prostate/kidney cyst, so labels 22/23 have no measured Dice either. Identity for all three of labels 22–24 is fixed by this mapping scheme **in this case**, not by a measured overlap; the 20-case run below measures all three — prostate 0.554 over 7 cases, and the two kidney cysts at 0.802 and 0.879, one case each). **This measures the label scheme = TotalSegmentator v2 `class_map_part_organs`** (24 organs + background, an nnU-Net v2 export), so the mapping is no longer "unknown". The mapping is what the code uses and what is measured; concluding that the weights themselves are that upstream release is an inference from it — strongly supported, not cryptographically proven.
+2. **Mean Dice ≈ 0.92 over the 21 organs present** (measured on RAS input, so bounded by the two scope notes above) (kidneys 0.98, lung lobes 0.96–0.99, small organs such as thyroid/gallbladder 0.79–0.82), consistent with TotalSegmentator's officially published level — **simultaneously validating that the GUI inference pipeline is correct**.
 3. **Corrected historical mislabels**: `5` = **liver** (an earlier inference wrongly took it as "heart"; the model has no heart/aorta output — both live in another TS part, labels 51/52, outside 0–24); lung lobes `10,11` = **left**, `12,13,14` = **right** (the earlier left/right swap was a radiological-convention mirror artefact). `models/organ_labels_candidate.json` has been rewritten accordingly into the confirmed mapping.
 
 | our# | Organ | Dice | | our# | Organ | Dice |
@@ -294,7 +294,7 @@ Extra dependency: `torch` (see `requirements-experiments.txt`). **The App does n
 | true lesion signal (the yardstick) | +0.3472 |
 | FBP at the lesion-free site | +0.0017 |
 | **network at the lesion-free site** | **+0.0028** |
-| network at the true-lesion site | +0.3427 (**99% recovered**) |
+| network at the true-lesion site | +0.3420 (**98.5% recovered**) |
 | false-structure rate (> 20% / 30% / 50% of a true lesion), 60 paired phantoms | **1.67% / 0% / 0%** |
 
 The network's signal where nothing exists is the same order as FBP's own fluctuation. **On these phantoms it crossed the 20%-of-lesion threshold in 1 of 60 pairs, and crossed neither the 30% nor 50% threshold** — a bounded result on noise-free synthetic data, not a guarantee that it never invents structure. This has to be measured with paired phantoms: the matrix's "background streak std" is a whole-background statistic, in which one isolated fake lesion is diluted by tens of thousands of pixels and cannot be seen at all.
@@ -320,7 +320,7 @@ In-distribution reduction 79.7% → out-of-distribution mean 64.3%, **ratio 0.81
 | 60 | ∞（秩亏） | 3839 / 4096 | 3839 | **1076** | 257 | **0.611** |
 | 90 | 3.36e3 | 4096 / 4096 | 4096 | 46.9 | 0 | 0.090 |
 
-1. **cond₂ is undefined for two of the three systems, so C's sentence was inapplicable rather than false.** At 30 and 60 views σ_min (2.8e-16, 7.2e-15) sits below the numerical-zero threshold `max(m,n)·ε·σ_max` (≈3.8e-11, 5.3e-11): both matrices are rank-deficient and cond₂ is mathematically infinite. Any finite value printed for them is rounding noise — permuting the rows of `A`, which cannot change its spectrum, moves the 30-view figure from 1.48e17 to 6.09e16 and the 60-view figure from 8.10e15 to 2.45e16, enough to reverse their order.
+1. **cond₂ is undefined for two of the three systems, so C's sentence was inapplicable rather than false.** At 30 and 60 views σ_min (2.8e-16, 7.2e-15) sits below the numerical-zero threshold `max(m,n)·ε·σ_max` (≈3.8e-11, 5.3e-11): both matrices are rank-deficient and cond₂ is mathematically infinite. Any finite value printed for them is rounding noise: σ_min sits five orders of magnitude below the cutoff, so `σ_max/σ_min` reports the SVD's rounding floor rather than a property of `A`, and `recon_cond.py` records `inf`. **No row-permutation control was ever scripted or committed**, so no measured before/after pair is claimed.
 2. **Stated about the spectrum `lstsq` retains, the conditioning story holds sharply.** `compute_dmr` calls `np.linalg.lstsq(rcond=None)`, which truncates the spectrum; the operative noise gain is `1/σ_k` over the *retained* directions, and that goes 29.5 → **1076** → 46.9 — a factor of 36.5 above the sparse case and 22.9 above the dense one, peaking exactly at the near-square regime. The other half is the implicit truncated-SVD regularisation, which collapses monotonically over the same range (2177 → 257 → 0 discarded directions): at 30 views more than half the solution space is projected away, and that is what keeps the most rank-deficient system stable.
 
    **Erratum.** An earlier revision computed the retained rank from a hand-written cutoff of `max(m,n)·ε_float32·σ_max`, reasoning that `A` is stored as float32. That is wrong — `numpy.linalg.lstsq` upcasts unconditionally to double (`_commonType` in `numpy/linalg/_linalg.py` returns `double` for every real input), so the cutoff uses ε_float64. It understated the 60-view gain as 34.6 instead of 1076 and led this section to report that the textbook expectation had been refuted, when the corrected measurement supports it. The tell was in the table and was missed: the 90-view row read "full rank" and "15 discarded directions" at once. `recon_cond.py` now reads the rank back from the same `lstsq` call under study instead of reimplementing its cutoff.
@@ -340,7 +340,7 @@ Judge by **|CTF − 1|**, not by "higher CTF is better": ramp overshoots at shar
 | 10 | 5 | 0.265 → **0.226** | 37.2% |
 | 12–28 | 6–14 | ≈ level | 36.7–40.3% |
 
-**4 of 8 frequencies land closer to ground truth, 4 are level, none is worse.** The gain concentrates at high frequency, where ramp's overshoot is worst (CTF 1.99 at a 4 px period — nearly double the true modulation) and the CNN corrects it. At low frequency FBP is already close to the truth, so there is little left to fix. RMSE reduction only drops off at the finest line width (2 px, 28.0%) — the sampling limit itself.
+****6 of 8** frequencies land closer to ground truth; the remaining two (16 px and 28 px periods) go marginally the other way, by ≤ 0.005 of |CTF − 1|.** The gain concentrates at high frequency, where ramp's overshoot is worst (CTF 1.99 at a 4 px period — nearly double the true modulation) and the CNN corrects it. At low frequency FBP is already close to the truth, so there is little left to fix. RMSE reduction only drops off at the finest line width (2 px, 28.0%) — the sampling limit itself.
 
 ## Limitations (stated, not buried)
 
@@ -351,7 +351,7 @@ Judge by **|CTF − 1|**, not by "higher CTF is better": ramp overshoots at shar
 - **The 24.1% on gratings is a real weakness**, not a rounding artefact: at the sampling limit a post-processor cannot restore information the sparse projections never carried.
 
 ## Reconstruction-DL study — one-sentence summary
-A 1.9 M-parameter self-implemented post-processor cuts sparse-view RMSE by **3–6×** versus the best linear filter and lifts lesion-contrast retention from a view-count-independent **0.87 ceiling to 0.96–1.00**. Across **60 noise-free synthetic paired phantoms**, its false-structure rate is **1.67%** at the 20%-of-lesion threshold and **0%** at 30% and 50%; its gain survives the three out-of-distribution shape families tested (gain ratio 0.81). These are measurements on those phantoms, not general guarantees. Photon-noise direction and magnitude are unmeasured, so 1.67% is neither an upper nor a lower bound for low-dose CT.
+A 1.9 M-parameter self-implemented post-processor cuts sparse-view RMSE by **3–6×** versus the best linear filter and lifts lesion-contrast retention from a view-count-independent **0.87 ceiling to 0.957–0.996**. Across **60 noise-free synthetic paired phantoms**, its false-structure rate is **1.67%** at the 20%-of-lesion threshold and **0%** at 30% and 50%; its gain survives the three out-of-distribution shape families tested (gain ratio 0.81). These are measurements on those phantoms, not general guarantees. Photon-noise direction and magnitude are unmeasured, so 1.67% is neither an upper nor a lower bound for low-dose CT.
 
 ---
 
