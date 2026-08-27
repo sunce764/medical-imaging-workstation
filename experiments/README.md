@@ -145,6 +145,16 @@ In low-dose CT, **the answer to "which algorithm/filter" changes with dose**: in
 > experiment call sites now declare `'ras'`, so their behaviour and every committed artifact
 > here are unchanged. See the CHANGELOG entry for the measured before/after.
 >
+> **The mirroring itself is now checked automatically.** Both `seg_validate.run_onnx` and
+> `seg3d_teacher.run_onnx` reimplement the product's preprocessing and sliding window, and until
+> now nothing detected when a reimplementation drifted from the product — the final-window
+> pullback and the in-plane axis order were each found by hand, long after the fact. A regression
+> test (`test_mirrored_pipeline_feeds_model_identically`) records the tensors both paths hand to
+> ONNX and compares them element-wise: with `Z` a multiple of 32 they must be identical, and with
+> `Z` not a multiple the difference is required to fall **only** on the last block, pinning the
+> declared divergence above so it cannot quietly spread. It stubs the session, so it needs no
+> weights and runs in the data-independent subset.
+>
 > Re-measuring against the current path would require re-running ONNX inference over the full
 > split. That has not been done, and no committed result file was edited.
 

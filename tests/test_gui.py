@@ -6379,6 +6379,107 @@ def test_annotation_text_does_not_scale_with_zoom(app):
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_mirrored_pipeline_feeds_model_identically(app):
+    """复刻管线送进模型的张量必须与产品一致，且已声明的差异只许出现在末块。
+
+    seg 的全部证据都产自**复刻**而非产品本身（`seg_validate.run_onnx` 与
+    `seg3d_teacher.run_onnx` 各自重写了归一化与滑窗）。复刻一旦与产品分歧，那些证据
+    就不再描述产品，而分歧本身此前没有任何自动检测：末窗回移（`2a50e37`）与面内轴序
+    （2026-08-27）都是隔了很久才由人工发现，后者期间产品把患者右肺标成左肺、测试全绿。
+
+    比对的是**送进 ONNX 的张量**而不是最终标签：归一化、滑窗切分、padding、轴序——
+    真正会分歧的都在这里，而合成体喂给真实模型几乎只得到全背景，逐体素比标签会变成
+    平凡通过。两边的 session 都换成记录器，因此不需要权重，也不跑真实推理。
+
+    两组尺寸各有分工：Z 为 32 的倍数时**必须逐元素全等**；Z 不是倍数时，复刻仍是回移
+    前的写法，差异**只许落在最后一块**——这把那条已声明的差异钉死，防止它悄悄扩散到
+    别的块。面内尺寸都取非 32 倍数，以覆盖 padding。
+    """
+    print("[复刻管线与产品：送入模型的张量]")
+    import types
+
+    import onnxruntime as ort
+
+    sys.path.insert(0, os.path.join(_ROOT, "experiments"))
+    import seg3d_teacher as st
+    import seg_validate as sv
+
+    def recorder(store):
+        class _S:
+            def get_inputs(self):
+                return [types.SimpleNamespace(name="x")]
+
+            def run(self, _outputs, feed):
+                blk = np.array(list(feed.values())[0], copy=True)
+                store.append(blk)
+                n, _, d, h, w = blk.shape
+                return [np.zeros((n, 25, d, h, w), dtype=np.float32)]
+        return _S()
+
+    def feeds(vol):
+        """返回 (复刻送入的张量列表, 产品送入的张量列表)。"""
+        mirrored = []
+        saved_sess = ort.InferenceSession
+        ort.InferenceSession = lambda *a, **k: recorder(mirrored)
+        try:
+            sv.run_onnx(vol)
+        finally:
+            ort.InferenceSession = saved_sess
+
+        product = []
+        saved_get = ai_engine._get_session
+        ai_engine._get_session = lambda _p: recorder(product)
+        try:
+            eng = ai_engine.AutoAIEngineThread(
+                vol, lambda mk, ms: None, spacing=None,
+                inplane_axes=ai_engine.INPLANE_AXES_MODEL)  # 复刻喂的就是模型轴序
+            eng._run_body()
+            app.processEvents()
+        finally:
+            ai_engine._get_session = saved_get
+        # 第二个复刻：seg3d_teacher 自己也重写了同一套管线，同样要对着产品验。
+        # 它的 run_onnx 接受外部 session，直接传记录器即可，无需 patch。
+        teacher = []
+        st.run_onnx(vol, sess=recorder(teacher), quiet=True)
+        return mirrored, product, teacher
+
+    rng = np.random.default_rng(3)
+
+    # —— ① Z 为 32 的倍数：不触发末窗差异，必须完全一致 ——
+    vol = rng.normal(-300, 400, (64, 50, 90)).astype(np.float32)
+    mir, pro, tea = feeds(vol)
+    check(len(mir) == len(pro) == 2,
+          f"Z=64 切成同样多的块（复刻 {len(mir)} / 产品 {len(pro)}）")
+    check([t.shape for t in mir] == [t.shape for t in pro],
+          f"张量形状序列一致（{[t.shape for t in mir]}）")
+    if len(mir) == len(pro):
+        diffs = [i for i, (a, b) in enumerate(zip(mir, pro, strict=True)) if not np.array_equal(a, b)]
+        check(not diffs,
+              f"Z 为 32 倍数时逐元素全等；不等的块 {diffs}（涵盖归一化、滑窗、padding、轴序）")
+    check(bool(mir) and float(np.nanmax(mir[0])) <= 1.0 and float(np.nanmin(mir[0])) >= 0.0,
+          "记录到的确实是归一化后的张量（值域 [0,1]），比对的不是空壳")
+    tdiff = ([i for i, (a, b) in enumerate(zip(tea, pro, strict=True))
+              if not np.array_equal(a, b)] if len(tea) == len(pro) else None)
+    check(tdiff == [],
+          f"seg3d_teacher 这个复刻同样与产品逐元素一致（块数 {len(tea)}/{len(pro)}，"
+          f"不等的块 {tdiff}）")
+
+    # —— ② Z 非 32 倍数：复刻仍是回移前写法，差异只许出现在末块 ——
+    vol2 = rng.normal(-300, 400, (70, 50, 90)).astype(np.float32)
+    mir2, pro2, tea2 = feeds(vol2)
+    check(len(mir2) == len(pro2) == 3, f"Z=70 切成 3 块（复刻 {len(mir2)} / 产品 {len(pro2)}）")
+    if len(mir2) == len(pro2) and mir2:
+        diffs2 = [i for i, (a, b) in enumerate(zip(mir2, pro2, strict=True)) if not np.array_equal(a, b)]
+        last = len(mir2) - 1
+        check(diffs2 == [last],
+              f"差异只落在末块（不等的块 {diffs2}，末块索引 {last}）——"
+              f"这是 2a50e37 末窗回移的已声明差异，不得扩散到其它块")
+        tdiff2 = ([i for i, (a, b) in enumerate(zip(tea2, pro2, strict=True))
+                   if not np.array_equal(a, b)] if len(tea2) == len(pro2) else None)
+        check(tdiff2 == [last],
+              f"seg3d_teacher 的差异同样只落在末块（{tdiff2}）——两个复刻处在同一侧")
+
+
 def main_run():
     app = QApplication([])
     test_runner_catches_qt_slot_exceptions()
@@ -6391,6 +6492,7 @@ def main_run():
         for t in (test_ai_engine, test_ai_inplane_axis_contract,
                   test_mesh_dialog_text_is_readable,
                   test_annotation_text_does_not_scale_with_zoom,
+                  test_mirrored_pipeline_feeds_model_identically,
                   test_noncanonical_dicom_gating,
                   test_unsupported_dicom_contract, test_missing_series_uid_contract,
                   test_load_clears_stale_hu_probe,
@@ -6457,6 +6559,7 @@ def main_run():
         test_ai_inplane_axis_contract(app)
         test_mesh_dialog_text_is_readable(app)
         test_annotation_text_does_not_scale_with_zoom(app)
+        test_mirrored_pipeline_feeds_model_identically(app)
         test_prior_fixes(v, app)
         test_multiorgan_and_edit(v, app)
         test_roi(v, app)

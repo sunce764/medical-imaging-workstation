@@ -2,6 +2,30 @@
 
 This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
+## Reimplementations of the inference pipeline are now checked against the product (2026-08-27)
+
+Two experiment scripts reimplement `ai_engine`'s preprocessing and sliding window rather than call
+it — `seg_validate.run_onnx` and `seg3d_teacher.run_onnx` — and the segmentation evidence is
+produced on those, not on the product path. Nothing detected when a reimplementation drifted. Both
+known divergences were found by hand and long after they appeared: the final-window pullback
+(`2a50e37`), and the in-plane axis order, during which the product labelled the patient's right
+lung as the left one while every test stayed green.
+
+The check compares the **tensors handed to ONNX**, not the resulting labels. That is where drift
+actually lives — normalisation, window slicing, padding, axis order — and it avoids a trap the
+first attempt fell into: a synthetic volume fed to the real model segments almost nothing, so
+comparing label maps passes trivially with both sides empty. (The first version of this test did
+exactly that; it was caught by an assertion demanding the mirrored path produce more than
+background.) Both sessions are replaced by recorders, so the test needs no weights, runs in the
+data-independent subset, and takes well under a second.
+
+Two size regimes divide the work. With `Z` a multiple of 32 the tensors must match element-wise —
+covering normalisation, slicing, padding and axis order at once. With `Z` not a multiple, the
+mirrors still use the pre-pullback form, so a difference is expected; the test requires it to fall
+**only** on the last block. That pins the declared divergence instead of merely tolerating it: if
+it ever spreads to another block, the test fails. Mutations confirm both halves bite — changing
+the product's normalisation divisor fails two assertions, reverting the pullback fails one.
+
 ## The suite now reports its own count, because the log loses lines (2026-08-27)
 
 Test totals were obtained by counting `PASS` lines in the output. Two runs of CI on the *same*
