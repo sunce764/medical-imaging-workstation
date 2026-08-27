@@ -153,7 +153,8 @@ In low-dose CT, **the answer to "which algorithm/filter" changes with dose**: in
 > ONNX and compares them element-wise: with `Z` a multiple of 32 they must be identical, and with
 > `Z` not a multiple the difference is required to fall **only** on the last block, pinning the
 > declared divergence above so it cannot quietly spread. It stubs the session, so it needs no
-> weights and runs in the data-independent subset.
+> weights — but it runs in the full suite only, since importing `seg_validate` pulls in `nibabel`
+> and `matplotlib`, neither of which CI installs.
 >
 > Re-measuring against the current path would require re-running ONNX inference over the full
 > split. That has not been done, and no committed result file was edited.

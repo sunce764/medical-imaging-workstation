@@ -6389,7 +6389,8 @@ def test_mirrored_pipeline_feeds_model_identically(app):
 
     比对的是**送进 ONNX 的张量**而不是最终标签：归一化、滑窗切分、padding、轴序——
     真正会分歧的都在这里，而合成体喂给真实模型几乎只得到全背景，逐体素比标签会变成
-    平凡通过。两边的 session 都换成记录器，因此不需要权重，也不跑真实推理。
+    平凡通过。两边的 session 都换成记录器，因此不需要权重，也不跑真实推理；但 `seg_validate` 顶层
+    import 了 nibabel 与 matplotlib（都非产品依赖），故本测试只在全套中运行。
 
     两组尺寸各有分工：Z 为 32 的倍数时**必须逐元素全等**；Z 不是倍数时，复刻仍是回移
     前的写法，差异**只许落在最后一块**——这把那条已声明的差异钉死，防止它悄悄扩散到
@@ -6492,7 +6493,6 @@ def main_run():
         for t in (test_ai_engine, test_ai_inplane_axis_contract,
                   test_mesh_dialog_text_is_readable,
                   test_annotation_text_does_not_scale_with_zoom,
-                  test_mirrored_pipeline_feeds_model_identically,
                   test_noncanonical_dicom_gating,
                   test_unsupported_dicom_contract, test_missing_series_uid_contract,
                   test_load_clears_stale_hu_probe,
@@ -6559,6 +6559,8 @@ def main_run():
         test_ai_inplane_axis_contract(app)
         test_mesh_dialog_text_is_readable(app)
         test_annotation_text_does_not_scale_with_zoom(app)
+        # 仅全套：seg_validate 顶层 import nibabel 与 matplotlib，二者都不是产品依赖，
+        # CI 只装 requirements.txt，故该比对无法在数据无关子集中运行。
         test_mirrored_pipeline_feeds_model_identically(app)
         test_prior_fixes(v, app)
         test_multiorgan_and_edit(v, app)

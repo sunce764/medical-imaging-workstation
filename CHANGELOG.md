@@ -16,8 +16,12 @@ actually lives — normalisation, window slicing, padding, axis order — and it
 first attempt fell into: a synthetic volume fed to the real model segments almost nothing, so
 comparing label maps passes trivially with both sides empty. (The first version of this test did
 exactly that; it was caught by an assertion demanding the mirrored path produce more than
-background.) Both sessions are replaced by recorders, so the test needs no weights, runs in the
-data-independent subset, and takes well under a second.
+background.) Both sessions are replaced by recorders, so the test needs no weights and takes well under a
+second. It runs in the full suite only: `seg_validate` imports `nibabel` and `matplotlib` at
+module level and neither is a product dependency, so CI — which installs `requirements.txt` —
+cannot import it. That was found by CI failing on the first push of this change, which is the
+same class of mistake the test itself is about: something that works locally and does not
+exist on the path that actually runs.
 
 Two size regimes divide the work. With `Z` a multiple of 32 the tensors must match element-wise —
 covering normalisation, slicing, padding and axis order at once. With `Z` not a multiple, the
