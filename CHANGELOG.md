@@ -2,6 +2,21 @@
 
 This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
+## The suite now reports its own count, because the log loses lines (2026-08-27)
+
+Test totals were obtained by counting `PASS` lines in the output. Two runs of CI on the *same*
+commit `3f0aa24` disagreed: run `33042859794` printed 797 such lines and run `33043192428` printed
+798. Both finished green, both ended in "全部通过", and neither recorded a FAIL — the missing entry
+(`pix=1200 slope=1 intercept=0`) exercises nothing outside the repository, the pinned dependency
+versions match `requirements.txt` exactly, and the two preceding CI runs printed all four cases. So
+the discrepancy is in the log, not in what executed; a counting method built on grepping that log
+inherits the noise.
+
+`check()` now records each outcome and the runner prints
+`CHECKS total= passed= failed=` before its verdict. That line is the count to quote. It also makes
+a dropped line visible rather than silent: when the `PASS` lines in a log do not add up to the
+number the runner reports, the log is the thing that is wrong.
+
 ## Annotation text grew with the zoom until it covered what it described (2026-08-27)
 
 `QGraphicsTextItem` defines its point size in *scene* coordinates, so ROI statistics and ruler

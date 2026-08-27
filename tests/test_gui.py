@@ -38,6 +38,11 @@ QMessageBox.warning = staticmethod(lambda *a, **k: None)
 QMessageBox.question = staticmethod(lambda *a, **k: QMessageBox.No)
 
 _FAILS = []
+# 每次 check 追加一个 bool。总数与通过数由此得出，而不是靠在日志里数 "PASS" 行——
+# 实测同一 commit 的两次 CI，日志里的 PASS 行数相差 1（run 33042859794 得 797、
+# 33043192428 得 798），两次都无 FAIL 且都报「全部通过」，即日志本身会偶发丢行。
+# runner 自报的计数不受此影响，日志行数与它对不上时也就能立刻看出是日志丢了。
+_CHECKS = []
 
 
 def _record_uncaught_exception(exc_type, exc_value, exc_tb):
@@ -50,6 +55,7 @@ sys.excepthook = _record_uncaught_exception
 
 
 def check(cond, label):
+    _CHECKS.append(bool(cond))
     print(("  PASS " if cond else "  FAIL ") + label)
     if not cond:
         _FAILS.append(label)
@@ -6538,7 +6544,10 @@ def main_run():
         test_model_checksums()        # 权重摘要清单与文档一致：纯文本 + 已入库 .onnx
         test_performance_artifact_contract()  # 性能产物 provenance 合约：纯 stdlib + 临时文件
         test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
-    print("\n" + ("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS)))
+    total, passed = len(_CHECKS), sum(_CHECKS)
+    # 这一行是计数的权威口径：报测试数请用它，不要数日志里的 PASS 行。
+    print(f"\nCHECKS total={total} passed={passed} failed={total - passed}")
+    print("全部通过" if not _FAILS else f"{len(_FAILS)} 项失败: " + "; ".join(_FAILS))
     return 1 if _FAILS else 0
 
 
