@@ -455,8 +455,13 @@ def exp_resolution(net, n_views, periods=(4, 6, 8, 10, 12, 16, 20, 28), n_rep=8)
                          gain_pct=round((rf - rn) / rf * 100, 2)))
         print(f"  周期{p:>3}px 线宽{half:>2}px  CTF {cf:.3f}→{cn:.3f}  "
               f"|CTF-1| {abs(cf-1):.3f}→{abs(cn-1):.3f}  RMSE降幅 {rows[-1]['gain_pct']:.1f}%")
-    better = sum(1 for r in rows if r['dev_cnn'] < r['dev_fbp'] - 0.01)
-    print(f"  {better}/{len(rows)} 个频率上 CNN 的调制度更接近真值")
+    # 严格比较，不设 dead-band：此前用 `- 0.01` 的隐藏容差打印 4/8，而文档按严格比较
+    # 写 6/8，重跑脚本会与文档对不上。两个反向的频率差距都 ≤0.005，一并报出来。
+    better = sum(1 for r in rows if r['dev_cnn'] < r['dev_fbp'])
+    worse = [r for r in rows if r['dev_cnn'] > r['dev_fbp']]
+    gap = max((r['dev_cnn'] - r['dev_fbp'] for r in worse), default=0.0)
+    print(f"  {better}/{len(rows)} 个频率上 CNN 的调制度严格更接近真值"
+          f"（其余 {len(worse)} 个反向，最大差距 {gap:.4f}）")
     _write_csv("recon_dl_resolution.csv", rows)
     _plot_resolution(rows)
     return rows

@@ -15,7 +15,7 @@
 **软件简介**：本软件是一款基于 PySide6（Qt6）的桌面端 CT 医学影像工作站，面向影像教学与科研，集成三大部分——**临床阅片工具**、**AI 多器官分割**、以及**CT 断层重建教学实验室**。软件支持 DICOM 影像的加载、多平面重组（MPR）阅片、窗宽窗位调节、测量与标注、AI 自动器官分割与定量、双序列随访对比，以及从投影到重建的完整教学演示。
 **已验证运行环境**：macOS 本机（Python 3.10）；截至下述 snapshot，远端数据无关测试曾在 GitHub Actions 的 Ubuntu runner 通过。Windows 未在该 snapshot 验证，不能据此声明平台兼容性。依赖 PySide6、pydicom、NumPy、SciPy、scikit-image、ONNX Runtime。
 **开发语言**：Python。
-**软件规模**：应用代码分为 UI mixin 与无 Qt 计算模块；2026-08-27 的一次本机实测，全套回归为 921 PASS，`SKIP_REAL_DATA=1` 子集为 821 PASS。这些是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。
+**软件规模**：应用代码分为 UI mixin 与无 Qt 计算模块；2026-08-27 的一次本机实测，全套回归为 925 PASS，`SKIP_REAL_DATA=1` 子集为 825 PASS。这些是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。
 **定位声明**：本软件为**影像教学 / 科研工具**，**不是经认证的医疗器械，不得用于临床诊断**；AI 分割与定量结果为自动推断，仅供参考。
 
 ---
@@ -238,7 +238,7 @@ python main.py --data <DICOM目录路径>    # 启动即加载指定 DICOM 目�
 
 单击**「深度学习重建 (CNN 后处理)」**，用一个自实现的残差 U-Net 去除稀疏角 FBP 的条纹伪影。**V3 显示网络的输入（ramp-FBP）、V4 显示网络输出**，便于直接对比"网络到底改了什么"。
 
-方法与量化结果见[实验说明](../experiments/README.md)与[技术报告](technical_report.md)研究三：在随机模体家族上，RMSE 较最优线性滤波低 3–6 倍，病灶对比度保留率从 0.87 提升到 0.96–1.00。**60 组无噪声 synthetic paired phantoms** 上，20%-of-lesion threshold 的 false-structure rate 为 **1.67%**，30% 与 50% threshold 均为 **0%**。未加入 photon noise，因此 1.67% 对 low-dose CT 既不是上界也不是下界；变化方向和幅度均未测，也不据此声称 low SNR 是 dominant driver。
+方法与量化结果见[实验说明](../experiments/README.md)与[技术报告](technical_report.md)研究三：在随机模体家族上，RMSE 较最优线性滤波低 3–6 倍，病灶对比度保留率从 0.87 提升到 0.957–0.996。**60 组无噪声 synthetic paired phantoms** 上，20%-of-lesion threshold 的 false-structure rate 为 **1.67%**，30% 与 50% threshold 均为 **0%**。未加入 photon noise，因此 1.67% 对 low-dose CT 既不是上界也不是下界；变化方向和幅度均未测，也不据此声称 low SNR 是 dominant driver。
 
 > **三处限制直接写在界面上，不只写在文档里**：
 > - **模型在 20 视角下训练**。当前视角数与之不符时，V4 标题会明确标注「⚠ 视角不匹配」——用在其他视角下效果会打折，软件不会假装它通用。

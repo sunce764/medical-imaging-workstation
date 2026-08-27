@@ -19,9 +19,14 @@ system". The note is now in seven documents and in `_load_saved_mask`'s docstrin
 `gui_confidence.png` and `gui_mpr_triplanar.png` all predate the fix — liver on the `L` side,
 spleen and stomach on `R`, spinous process toward `A` — and sat a few lines above a newly added
 sentence inviting readers to check laterality by eye. All three are re-shot from the same case
-(CT-Lite s0029, `Slice 249/422` and `279/422` as before); per-organ volumes are unchanged, because
-mirroring never altered voxel counts, only which side they landed on. The gallbladder is still the
-least certain organ, now at `conf 0.91 / p5 0.59`.
+(CT-Lite s0029). Two of them land on the same slices as before (`249/422` and `279/422`) with
+per-organ volumes unchanged — mirroring never altered voxel counts, only which side they landed on.
+The third, `gui_confidence.png`, does not: it previously showed a 126-slice run with 18 organs, and
+now shows the same 422-slice run as the others, so its numbers legitimately differ. The confidence
+sentence in both READMEs was rewritten accordingly — at `conf 0.91` the gallbladder is no longer
+below the 0.9 flag threshold, so the claim that it is "flagged" and "least certain" would have been
+false twice over; what is true, and visible in the figure, is that its 5th percentile (0.59) is the
+lowest in the run.
 
 **The project's only cryptographic self-check was failing.** `project_report_zh.md` publishes a
 SHA-256 of the READMEs' diff against a fixed baseline and requires it be recomputed whenever a

@@ -49,8 +49,9 @@ def measure(n=64, angle_range=180.0, n_projs=(30, 60, 90)):
         sigma_k = float(sv[k - 1]) if k > 0 else float("nan")
 
         # cond₂ 只在满秩时才有意义。30/60 视角的 σ_min 低于 eps·σ_max·max(m,n)，
-        # 即数值上就是零，此时 σ_max/σ_min 是舍入噪声而非矩阵性质——实测行置换
-        # 就能让 30 与 60 的大小关系反转，故这两档记为 inf 而不报一个假精度的数。
+        # 即数值上就是零，此时 σ_max/σ_min 是舍入噪声而非矩阵性质，故这两档记为 inf
+        # 而不报一个假精度的数。【勿再写「实测行置换能让大小关系反转」】那个对照从未
+        # 被脚本化、也没有任何产物记录它，文档中的同一说法已于 2026-08-28 删除。
         tol = max(m_rows, n_cols) * np.finfo(np.float64).eps * smax
         rank = int((sv > tol).sum())
         cond = smax / smin if smin > tol else float("inf")

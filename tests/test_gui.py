@@ -855,6 +855,18 @@ def test_patient_space_geometry_contract():
                               ds(2)])
     check(not g_ps.inplane_spacing_valid,
           "PixelSpacing 含 NaN → 面内间距不可证，不开放 mm 换算")
+    # 【上面三条钉的是结果，杀不掉守卫本身】NaN 参与的比较天然为 False，所以即使把
+    # _finite_vector 里的 isfinite 整条删掉，三个 contract 依旧都是 False、断言照样通过
+    # ——实测确认。真正要钉的是「非有限值一律退成 None」这个契约，故直接测该函数。
+    for bad, why in ((float('nan'), 'NaN'), (float('inf'), '+Inf'), (float('-inf'), '-Inf')):
+        probe = SimpleNamespace(ImagePositionPatient=(0.0, bad, 2.0),
+                                ImageOrientationPatient=axial, PixelSpacing=(bad, 3.0))
+        check(dg._finite_vector(probe, 'ImagePositionPatient', 3) is None
+              and dg._finite_vector(probe, 'PixelSpacing', 2) is None,
+              f"_finite_vector 对含 {why} 的向量退回 None（非有限值不得流入几何计算）")
+    ok_probe = SimpleNamespace(ImagePositionPatient=(0.0, 1.0, 2.0))
+    check(dg._finite_vector(ok_probe, 'ImagePositionPatient', 3) is not None,
+          "_finite_vector 对全有限向量正常返回（上面三条不是靠恒 None 通过的）")
 
     reversed_series = [ds(4, slope=2), ds(0, intercept=-1000), ds(2, slope=3)]
     g = dg.analyze_series(reversed_series)
@@ -1099,16 +1111,15 @@ def test_spacing_capability_gating(app):
               and not v.tool_btns['btn_rul'].isChecked()
               and all(vd['view'].current_tool == TOOL_POINTER for vd in v.views.values()),
               "valid spacing → invalid spacing 同步撤销 Ruler button/global/view 状态")
-        # 【scene 扫描那半边此前永不触发】换序列时 load_data → set_image 已经清空过 scene，
-        # 于是 isinstance(...) 在每次迭代都是空集，只有 is_drawing 那半边承重：把
-        # cancel_ruler_preview 改成只置 is_drawing=False、不移除图元，断言仍 PASS。
-        # 改为直接查 temp_text 这个预览图元本身——它才是「伪 mm」的载体。
-        _tt = getattr(measure_view, 'temp_text', None)
-        _stale_mm = (_tt is not None and _tt.scene() is not None
-                     and "mm" in _tt.toPlainText())
+        # 【判据必须是 temp_text is None】cancel_ruler_preview 的收尾正是把 temp_item /
+        # temp_text 置空（graphics_view.py:327-328）。此前两版判据都恒假：扫 scene 里的
+        # QGraphicsTextItem——换序列时 set_image 已清空 scene；查 `temp_text.scene() is not
+        # None`——图元同样早已不在 scene 中。于是只有 is_drawing 那半边承重。
+        # :1091 已断言此刻 temp_text 确实含 "mm"，故它是否被置空是可判定且有意义的。
+        _stale_mm = measure_view.temp_text is not None
         check(not measure_view.is_drawing and not _stale_mm,
               f"spacing 失效时取消进行中的 measurement preview，不留下伪 mm"
-              f"（is_drawing={measure_view.is_drawing}, 预览图元仍在场={_stale_mm}）")
+              f"（is_drawing={measure_view.is_drawing}, temp_text 未清空={_stale_mm}）")
         check(any("Px unavailable" in x or "像素间距不可用" in x for x in br)
               and not any("Px 1.00mm" in x for x in br),
               f"overlay 明示 PixelSpacing unavailable，不伪造 1mm（{br}）")
@@ -1763,7 +1774,7 @@ def test_dl_recon_guard():
     # 权重是 gitignored 的外部文件，CI 上必然缺席，这 12 条推理断言会整块消失而
     # 计数照常「全部通过」——实测藏起权重后 CHECKS total 少 12、failed=0。故显式
     # 记录跳过与否，让「本轮到底验了什么」出现在日志里，而不是靠数字对不上才发现。
-    check(True, f"学习式重建权重{'在场，执行下列 12 条推理断言' if have else '缺席（CI 常态），下列 12 条推理断言本轮未执行'}")
+    print(f"    {'权重在场，执行下列推理断言' if have else '权重缺席（CI 常态），下列推理断言本轮整块未执行'}")
     if not have:
         return
     rng = np.random.RandomState(0)
@@ -5911,6 +5922,17 @@ def test_mask_cache_roundtrip(app):
                         '0': [{'id': 'legacy', 'type': 'ruler', 'p1': [1, 1], 'p2': [2, 2]}]}, f)
         vc.volume_mask = None; vc.global_annotations = {'all': []}
         check(not vc._load_saved_mask(pid), "legacy mask 缺 fingerprint → 默认拒绝")
+        # 【上一条已不再单独检验 fingerprint】轴向契约在 _load_saved_mask 里先于
+        # mask_cache_matches 判定，而 legacy 产物两者皆缺，于是在轴向那步就被拒；把
+        # mask_cache_matches 改成恒真，上一条仍会通过。故补一份【带轴向契约但仍缺
+        # fingerprint】的缓存，让 fingerprint 这一道单独可证。
+        import annotation_lab as _al
+        np.savez_compressed(os.path.join(ed, f"{pid}_mask.npz"),
+                            mask=np.ones((3, 16, 16), np.uint8), series_uid=np.array(uid_b),
+                            axis_contract=np.array(_al.MASK_AXIS_CONTRACT))
+        vc.volume_mask = None
+        check(not vc._load_saved_mask(pid),
+              "有轴向契约但缺 fingerprint → 仍拒绝（fingerprint 这一道单独承重）")
         vc._load_annotations_json(pid)
         check(vc.global_annotations == {'all': []}, "legacy annotation 缺 fingerprint → 默认拒绝")
     finally:

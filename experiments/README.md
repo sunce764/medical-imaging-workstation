@@ -42,7 +42,7 @@ Outputs are written to `experiments/results/`: one PNG figure plus one CSV of ra
 `exp_a_dose_quality.png`
 
 RMSE falls monotonically from **0.222** at 15 views to **0.035** at 360 views; SSIM rises from **0.35** to **0.95**.
-**Beyond ≈180 views the curve flattens** — but see `recon_floor.py` / `exp_a_metric_floor.csv`: the plateau is the reconstruction chain's own discretisation floor (in-circle RMSE ≈0.03539; 720/1440/2880 views give 0.035394/0.035386/0.035388 — within 0.02% and no longer descending), not evidence that the dose is sufficient. Adding further dose gives only a marginal quality improvement, which is what a floor predicts and is **not** a basis for declaring the dose sufficient.
+**Beyond ≈180 views the curve flattens** — but see `recon_floor.py` / `exp_a_metric_floor.csv`: the plateau is the reconstruction chain's own discretisation floor (in-circle RMSE ≈0.03539; 720/1440/2880 views give 0.035394/0.035386/0.035388 — within 0.023% and no longer descending), not evidence that the dose is sufficient. Adding further dose gives only a marginal quality improvement, which is what a floor predicts and is **not** a basis for declaring the dose sufficient.
 
 ### B — The optimal filter choice inverts with dose (256×256)
 `exp_b_filters.png`
@@ -195,7 +195,7 @@ The image is normalised to RAS and then converted to the GUI's (Z,H,W) axis orde
 `exp` outputs: `seg_confusion.png` (confusion heatmap) · `seg_dice.csv` · `seg_mapping.md`
 
 1. **The mapping is measured to be an identity diagonal**: our#k → the k-th TotalSegmentator organ, matching one by one (this case exercises labels 1–23 only — label 24, right kidney cyst, was never predicted and produces no row; and this case's ground truth contains no prostate/kidney cyst, so labels 22/23 have no measured Dice either. Identity for all three of labels 22–24 is fixed by this mapping scheme **in this case**, not by a measured overlap; the 20-case run below measures all three — prostate 0.554 over 7 cases, and the two kidney cysts at 0.802 and 0.879, one case each). **This measures the label scheme = TotalSegmentator v2 `class_map_part_organs`** (24 organs + background, an nnU-Net v2 export), so the mapping is no longer "unknown". The mapping is what the code uses and what is measured; concluding that the weights themselves are that upstream release is an inference from it — strongly supported, not cryptographically proven.
-2. **Mean Dice ≈ 0.92 over the 21 organs present** (measured on RAS input, so bounded by the two scope notes above) (kidneys 0.98, lung lobes 0.96–0.99, small organs such as thyroid/gallbladder 0.79–0.82), consistent with TotalSegmentator's officially published level — **simultaneously validating that the GUI inference pipeline is correct**.
+2. **Mean Dice ≈ 0.92 over the 21 organs present** (measured on RAS input, so bounded by the two scope notes above; kidneys 0.98, lung lobes 0.96–0.99, small organs such as thyroid/gallbladder 0.79–0.82), consistent with TotalSegmentator's officially published level — **simultaneously exercising the GUI inference pipeline **as it stood then** — bounded by both scope notes above: the pre-`2a50e37` final window, and RAS input rather than the product's LPS**.
 3. **Corrected historical mislabels**: `5` = **liver** (an earlier inference wrongly took it as "heart"; the model has no heart/aorta output — both live in another TS part, labels 51/52, outside 0–24); lung lobes `10,11` = **left**, `12,13,14` = **right** (the earlier left/right swap was a radiological-convention mirror artefact). `models/organ_labels_candidate.json` has been rewritten accordingly into the confirmed mapping.
 
 | our# | Organ | Dice | | our# | Organ | Dice |
@@ -338,9 +338,9 @@ Judge by **|CTF − 1|**, not by "higher CTF is better": ramp overshoots at shar
 | 6 | 3 | 0.705 → **0.436** | 37.2% |
 | 8 | 4 | 0.316 → **0.155** | 37.4% |
 | 10 | 5 | 0.265 → **0.226** | 37.2% |
-| 12–28 | 6–14 | ≈ level | 36.7–40.3% |
+| 12–28 | 6–14 | ≈ level (16 px and 28 px marginally favour ramp, by ≤0.005) | 36.7–40.3% |
 
-****6 of 8** frequencies land closer to ground truth; the remaining two (16 px and 28 px periods) go marginally the other way, by ≤ 0.005 of |CTF − 1|.** The gain concentrates at high frequency, where ramp's overshoot is worst (CTF 1.99 at a 4 px period — nearly double the true modulation) and the CNN corrects it. At low frequency FBP is already close to the truth, so there is little left to fix. RMSE reduction only drops off at the finest line width (2 px, 28.0%) — the sampling limit itself.
+**6 of 8** frequencies land closer to ground truth; the remaining two (16 px and 28 px periods) go marginally the other way, by ≤ 0.005 of |CTF − 1|.** The gain concentrates at high frequency, where ramp's overshoot is worst (CTF 1.99 at a 4 px period — nearly double the true modulation) and the CNN corrects it. At low frequency FBP is already close to the truth, so there is little left to fix. RMSE reduction only drops off at the finest line width (2 px, 28.0%) — the sampling limit itself.
 
 ## Limitations (stated, not buried)
 
