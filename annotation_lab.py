@@ -117,6 +117,24 @@ def mask_cache_matches(saved_uid, saved_shape, saved_fingerprint,
     return True, ""
 
 
+# AI 分割输出的轴向契约标识。修复推理左右轴之前落盘的蒙版，其 W 轴是镜像的
+# （成对器官标签互换），但 SeriesInstanceUID、shape 与 geometry fingerprint
+# 三项都不会因此改变——既有三项守卫识别不出它。故显式记录契约并单独判定。
+MASK_AXIS_CONTRACT = 'dicom-cols-left/v2'
+
+
+def mask_axis_contract_ok(saved_contract):
+    """缓存蒙版的轴向契约是否与当前推理路径一致（纯函数，无 Qt，可独立单测）。
+
+    缺失即视为修复前的产物：那批蒙版左右镜像，宁可重跑 AI 也不恢复。
+    """
+    if not saved_contract:
+        return False, "缓存未记录轴向契约（AI 左右方向修复前的产物，蒙版左右镜像）"
+    if str(saved_contract) != MASK_AXIS_CONTRACT:
+        return False, (f"轴向契约不同（缓存 {saved_contract} vs 当前 {MASK_AXIS_CONTRACT}）")
+    return True, ""
+
+
 class AnnotationMixin:
     """标注 / 分割蒙版编辑 / 器官定量相关方法集合，混入 MedicalViewer。"""
 
@@ -581,9 +599,13 @@ class AnnotationMixin:
             saved_uid = str(z['series_uid'].item()) if 'series_uid' in z.files else ''
             saved_fingerprint = (str(z['geometry_fingerprint'].item())
                                  if 'geometry_fingerprint' in z.files else '')
-            ok, why = mask_cache_matches(saved_uid, m.shape, saved_fingerprint,
-                                         self._current_series_uid(), self.volume_hu.shape,
-                                         self._current_geometry_fingerprint())
+            saved_contract = (str(z['axis_contract'].item())
+                              if 'axis_contract' in z.files else '')
+            ok, why = mask_axis_contract_ok(saved_contract)
+            if ok:
+                ok, why = mask_cache_matches(saved_uid, m.shape, saved_fingerprint,
+                                             self._current_series_uid(), self.volume_hu.shape,
+                                             self._current_geometry_fingerprint())
             if not ok:
                 print(f"跳过磁盘缓存的分割蒙版：{why}；将重新运行 AI 分割。")
                 return False
@@ -671,7 +693,8 @@ class AnnotationMixin:
                 with os.fdopen(npz_fd, 'wb') as f:
                     np.savez_compressed(f, mask=self.volume_mask,
                                         series_uid=np.array(series_uid),
-                                        geometry_fingerprint=np.array(geometry_fingerprint))
+                                        geometry_fingerprint=np.array(geometry_fingerprint),
+                                        axis_contract=np.array(MASK_AXIS_CONTRACT))
                     f.flush(); os.fsync(f.fileno())
 
             replacement_target = os.path.basename(json_target)

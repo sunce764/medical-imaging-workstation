@@ -132,6 +132,19 @@ In low-dose CT, **the answer to "which algorithm/filter" changes with dose**: in
 >   `seg_validate.py`, `seg3d_teacher.py`, and the `A`/`C` arms of `seg3d_infer_bias.py`). It does
 >   **not** carry over to `zslab_infer`, which pads to a multiple of 8.
 >
+> **A second axis of scope, independent of the one above: none of this evidence ever ran on the
+> product's DICOM orientation.** Every producer here obtains its volume through
+> `seg_validate.load_zhw`, i.e. NIfTI normalised to **RAS**. `seg_multi.py` and `seg_spacing.py`
+> call `ai_engine` at runtime, but they hand it that same RAS volume, so they measured the model
+> on RAS too. The product's own volumes come from canonical DICOM, whose two in-plane axes run
+> the opposite way (**LPS**), and until 2026-08-27 `ai_engine` flipped neither — paired organs
+> came out swapped on the shipped path while every number in this file stayed healthy. The
+> figures below are therefore measurements of **the model under RAS input**; before that date
+> they were not, and were never claimed on evidence to be, measurements of what the product
+> displayed. The fix makes the convention an explicit `inplane_axes` argument; these three
+> experiment call sites now declare `'ras'`, so their behaviour and every committed artifact
+> here are unchanged. See the CHANGELOG entry for the measured before/after.
+>
 > Re-measuring against the current path would require re-running ONNX inference over the full
 > split. That has not been done, and no committed result file was edited.
 

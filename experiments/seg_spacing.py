@@ -117,8 +117,10 @@ def run_via_engine(img_zhw, gt_zhw, spacing, base_labels):
     small = resample(img_zhw, f, order=1).astype(np.float32)
     got = {}
     t0 = time.perf_counter()
+    # 输入源自 load_zhw（RAS），已是模型轴序，显式声明后行为与已提交产物一致。
     eng = ai_engine.AutoAIEngineThread(small, lambda m, ms: got.update(mask=m),
-                                       spacing=(spacing, spacing, spacing))
+                                       spacing=(spacing, spacing, spacing),
+                                       inplane_axes=ai_engine.INPLANE_AXES_MODEL)
     eng._run_body()
     dt = time.perf_counter() - t0
     pred = got.get('mask')
@@ -207,8 +209,10 @@ def multi_case(spacing, n_cases, seed=0):
 
         d_dir = score(run_onnx(small))
         got = {}
+        # 同上：RAS 输入，显式声明模型轴序，不参与 DICOM 侧的面内翻转。
         eng = ai_engine.AutoAIEngineThread(small, lambda m, ms, _g=got: _g.update(m=m),
-                                           spacing=(spacing,) * 3)
+                                           spacing=(spacing,) * 3,
+                                           inplane_axes=ai_engine.INPLANE_AXES_MODEL)
         eng._run_body()
         if got.get('m') is None:
             print(f"  [{k}/{len(pick)}] {cid} 引擎无输出，跳过"); continue

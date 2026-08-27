@@ -4036,6 +4036,20 @@ def test_mask_cache_guard():
                                         "1.2.840.A", (200, 512, 512), fp_a)
         check(not ok and "shape" in why, "shape 不匹配 → 拒绝")
 
+    # 轴向契约是独立的一道守卫：AI 左右/前后方向修复前落盘的蒙版在面内两轴上镜像，
+    # 而它的 UID、shape 与 geometry fingerprint 三项都不会因此改变，上面那组守卫
+    # 全部会放行它。故必须单独记录契约并判定。
+    ok, why = al.mask_axis_contract_ok(al.MASK_AXIS_CONTRACT)
+    check(ok and why == "", "轴向契约一致 → 允许恢复")
+    ok, why = al.mask_axis_contract_ok("")
+    check(not ok and "契约" in why,
+          "缓存未记录轴向契约（方向修复前的产物）→ fail closed")
+    ok, why = al.mask_axis_contract_ok(None)
+    check(not ok, "轴向契约为 None → fail closed")
+    ok, why = al.mask_axis_contract_ok("dicom-cols-left/v1")
+    check(not ok and "契约不同" in why, "轴向契约版本不同 → 拒绝")
+    check(al.MASK_AXIS_CONTRACT, "轴向契约常量非空，可写入 npz 并回读")
+
 
 def test_geometry_fingerprint_contract():
     """cache/annotation fingerprint 必须稳定绑定有序 SOP、geometry 与 volume shape。"""
@@ -5970,6 +5984,219 @@ def test_hu_declaration_tool_contract():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_hu_declaration_tool_roundtrip():
+    """`tools/declare_rider_hu.py` 的通过路径与 CLI 分支：合成 CT，不放宽任何判据。
+
+    判据依赖真实 CT 的直方图形态（空气峰、软组织峰、值域），因此这里合成一份
+    **具备这些物理特征**的体数据——空气背景 + 软组织圆 + 骨点 + 噪声——让它
+    如实通过判据，而不是为了测试把判据调松。随后跑完整写出流程与 CLI 各分支。
+    """
+    print("[HU 声明工具：合成 CT 的通过路径与 CLI 分支]")
+    import contextlib
+    import importlib.util
+    import io as _io
+    import shutil
+    import tempfile
+
+    import pydicom
+    from pydicom.uid import generate_uid
+
+    import dicom_geometry as dg
+
+    spec = importlib.util.spec_from_file_location(
+        "declare_rider_hu", os.path.join(_ROOT, "tools", "declare_rider_hu.py"))
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+
+    root = tempfile.mkdtemp()
+    try:
+        # —— 合成一份有真实 CT 直方图特征的序列（HU 域构造，再转存储值）——
+        rng = np.random.default_rng(20260827)
+        size, n_slices, intercept = 64, 4, -1024
+
+        def synth_slice():
+            hu = np.full((size, size), -1000.0)          # 体外空气
+            yy, xx = np.mgrid[0:size, 0:size]
+            r = np.hypot(yy - size / 2.0, xx - size / 2.0)
+            hu[r < size * 0.34] = 30.0                   # 软组织
+            hu[r < size * 0.08] = 800.0                  # 骨
+            hu += rng.normal(0.0, 10.0, hu.shape)        # 噪声，让直方图峰有宽度
+            hu = np.clip(hu, -1024.0, 3071.0)
+            return np.rint(hu - intercept).astype(np.int16)   # 存储值 = HU - intercept
+
+        src = os.path.join(root, "src")
+        os.makedirs(src)
+        sid = generate_uid()
+        for i in range(n_slices):
+            _write_min_dcm(os.path.join(src, f"s{i}.dcm"), (size, size), sid,
+                           ipp_z=i * 1.5, inst=i + 1, slope=1, intercept=intercept,
+                           pixels=synth_slice(),
+                           image_type=('DERIVED', 'SECONDARY', 'PROCESSED'))
+        files = sorted(os.path.join(src, f) for f in os.listdir(src))
+
+        # 合成序列必须先被产品判为 viewer-only，否则这个测试没有在测真实场景。
+        pre = dg.analyze_series([pydicom.dcmread(f, stop_before_pixels=True) for f in files])
+        check(not pre.hu_calibrated,
+              "合成 CT 初始为 DERIVED 且无 RescaleType，产品判 viewer-only")
+
+        ok, notes = tool.verify_is_hu(files)
+        check(ok and any("空气峰" in n for n in notes),
+              f"物理锚点判据放行合成 CT（判据未放宽）：{[n for n in notes if '峰' in n]}")
+
+        # —— write_copy 全流程 ——
+        dst = os.path.join(root, "dst")
+        written, dropped = tool.write_copy(files, src, dst)
+        check(written == n_slices and dropped == 0,
+              f"写出 {written}/{n_slices} 层；合成源本就没有 Group Length，丢弃 {dropped}")
+
+        copies = sorted(os.path.join(dst, f) for f in os.listdir(dst))
+        post = dg.analyze_series([pydicom.dcmread(f, stop_before_pixels=True) for f in copies])
+        check(post.hu_calibrated and post.canonical_orientation
+              and post.inplane_spacing_valid and post.uniform_z_geometry_valid,
+              "副本 hu_calibrated=True 且三项 geometry 契约不受影响")
+        first_src, first_dst = pydicom.dcmread(files[0]), pydicom.dcmread(copies[0])
+        check(first_dst.PixelData == first_src.PixelData
+              and tuple(first_dst.ImageType) == ('DERIVED', 'SECONDARY', 'PROCESSED')
+              and first_dst.RescaleType == 'HU',
+              "副本像素逐字节一致、ImageType 仍为 DERIVED、RescaleType 已声明")
+
+        # —— CLI 各分支 ——
+        def run_cli(*argv):
+            """跑一次 main()，返回 (是否 SystemExit, 输出文本)。"""
+            backup, buf = sys.argv, _io.StringIO()
+            sys.argv = ["declare_rider_hu.py", *argv]
+            try:
+                with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                    tool.main()
+                return False, buf.getvalue()
+            except SystemExit:
+                return True, buf.getvalue()
+            finally:
+                sys.argv = backup
+
+        verify_dst = os.path.join(root, "never_written")
+        exited, _ = run_cli("--src", src, "--dst", verify_dst, "--verify-only")
+        check(not exited and not os.path.exists(verify_dst),
+              "--verify-only 不写出任何文件")
+
+        cli_dst = os.path.join(root, "cli_dst")
+        exited, out = run_cli("--src", src, "--dst", cli_dst)
+        check(not exited and len(os.listdir(cli_dst)) == n_slices and "RescaleType=HU" in out,
+              "CLI 正常路径写出完整副本并报告差异面")
+
+        empty_src = os.path.join(root, "empty_src")
+        os.makedirs(empty_src)
+        for label, argv in (
+                ("输出目录等于源目录", ("--src", src, "--dst", src)),
+                ("输出目录位于源目录内", ("--src", src, "--dst", os.path.join(src, "inner"))),
+                ("源目录不存在", ("--src", os.path.join(root, "nope"), "--dst", cli_dst)),
+                ("源目录为空", ("--src", empty_src, "--dst", cli_dst))):
+            exited, _ = run_cli(*argv)
+            check(exited, f"CLI fail-closed：{label}")
+        check(len(os.listdir(src)) == n_slices,
+              "源目录在全部 CLI 调用后仍为 %d 个文件，未被覆写" % n_slices)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_ai_inplane_axis_contract(app):
+    """AI 推理必须在 DICOM(LPS) 与模型(RAS) 之间成对翻转面内两轴。
+
+    这不是风格问题。organs.onnx 期望 RAS（面内两轴沿 Right / Anterior），而产品的
+    volume_hu 来自 canonical DICOM（沿 Left / Posterior），两个面内轴都相反。
+    对 CT-Lite 的 ground truth 实测：两轴都不翻时肺叶五个标签 Dice 全为 0.000、
+    肝 0.181；只翻左右时肺叶合并 0.977 但叶间混淆、单叶仅 0.000–0.223。
+    故此处直接驱动 `_run_body`，断言送进模型的体与取回的标签、置信度三者都
+    严格成对翻转——删掉其中任何一次翻转，或少翻一个轴，都会被抓到。
+    """
+    print("[AI 面内轴向契约：DICOM(LPS) ↔ 模型(RAS) 成对翻转]")
+    import ai_engine as ae
+
+    # 每个象限取不同值，任何一次遗漏或多余的翻转都会改变结果
+    vol = np.zeros((3, 6, 8), dtype=np.float32)
+    vol[:, :3, :4] = -900.0      # rows 小 / cols 小
+    vol[:, :3, 4:] = -300.0      # rows 小 / cols 大
+    vol[:, 3:, :4] = 100.0       # rows 大 / cols 小
+    vol[:, 3:, 4:] = 400.0       # rows 大 / cols 大
+
+    def norm(a):
+        return ((np.clip(a, -1000, 400) + 1000.0) / 1400.0).astype(np.float32)
+
+    captured, produced = {}, {}
+
+    def fake_infer(self, norm_vol):
+        captured['sent'] = np.array(norm_vol, copy=True)
+        m = np.zeros(norm_vol.shape, dtype=np.uint8)
+        m[:, :2, :2] = 7          # 只落在一个角，方向可辨
+        m[:, -1:, -1:] = 9
+        self.confidence = np.zeros(norm_vol.shape, dtype=np.uint8)
+        self.confidence[:, :2, :2] = 200
+        produced['mask'] = np.array(m, copy=True)
+        return m
+
+    got = {}
+    worker = ae.AutoAIEngineThread(vol, lambda mask, ms: got.update(mask=mask),
+                                 model_path=os.path.abspath(__file__), spacing=None)
+    saved_infer, saved_flag = ae.AutoAIEngineThread._run_onnx_multiorgan, ae.HAS_ONNX
+    ae.AutoAIEngineThread._run_onnx_multiorgan = fake_infer
+    ae.HAS_ONNX = True
+    try:
+        worker._run_body()
+        app.processEvents()
+    finally:
+        ae.AutoAIEngineThread._run_onnx_multiorgan = saved_infer
+        ae.HAS_ONNX = saved_flag
+
+    check('sent' in captured, "推理被实际调用（假模型已接管）")
+    expected_sent = norm(vol)[:, ::-1, ::-1]
+    check(np.array_equal(captured['sent'], expected_sent),
+          "送进模型的体是 volume 面内两轴翻转后的结果（rows 与 cols 都翻）")
+    # 单独钉死「只翻一个轴」这类不完全修复
+    check(not np.array_equal(captured['sent'], norm(vol)[:, :, ::-1]),
+          "送进模型的体不是只翻左右（只翻一轴会导致叶间混淆）")
+    check(not np.array_equal(captured['sent'], norm(vol)),
+          "送进模型的体不是未翻转的原体（不翻会让成对器官标签互换）")
+
+    check(got.get('mask') is not None, "回调收到标签图")
+    check(np.array_equal(got['mask'], produced['mask'][:, ::-1, ::-1]),
+          "取回的标签图已翻回产品轴序")
+    expected_conf = np.zeros(vol.shape, dtype=np.uint8)
+    expected_conf[:, :2, :2] = 200
+    check(worker.confidence is not None
+          and np.array_equal(worker.confidence, expected_conf[:, ::-1, ::-1]),
+          "置信度与其标签同源，一并翻回，两者不错位")
+    # 自反性：作用两次必须还原，这是成对翻转成立的前提
+    check(np.array_equal(ae._to_model_axes(ae._to_model_axes(vol)), vol),
+          "_to_model_axes 自反：作用两次还原原体")
+    check(np.array_equal(ae._to_model_axes(vol)[:, ::-1, ::-1], vol),
+          "_to_model_axes 只翻面内两轴，z 轴不动")
+
+    # experiments 路径（seg_multi / seg_spacing）喂的是 load_zhw 的 RAS 轴序，
+    # 已与模型一致，必须原样送入——否则我们会把本来正确的那条路径改错。
+    captured.clear()
+    w2 = ae.AutoAIEngineThread(vol, lambda mask, ms: None,
+                               model_path=os.path.abspath(__file__), spacing=None,
+                               inplane_axes=ae.INPLANE_AXES_MODEL)
+    saved_infer2, saved_flag2 = ae.AutoAIEngineThread._run_onnx_multiorgan, ae.HAS_ONNX
+    ae.AutoAIEngineThread._run_onnx_multiorgan = fake_infer
+    ae.HAS_ONNX = True
+    try:
+        w2._run_body()
+        app.processEvents()
+    finally:
+        ae.AutoAIEngineThread._run_onnx_multiorgan = saved_infer2
+        ae.HAS_ONNX = saved_flag2
+    check(np.array_equal(captured['sent'], norm(vol)),
+          "inplane_axes='ras' 的输入原样送入模型，不再翻转")
+
+    raised = False
+    try:
+        ae.AutoAIEngineThread(vol, lambda *a: None, inplane_axes="xyz")
+    except ValueError:
+        raised = True
+    check(raised, "非法 inplane_axes 在构造期 fail fast，不静默按默认处理")
+
+
 def main_run():
     app = QApplication([])
     test_runner_catches_qt_slot_exceptions()
@@ -5979,7 +6206,8 @@ def main_run():
     if not has_data:
         print("WARN: 无 ../肺癌 真实数据（或 SKIP_REAL_DATA=1），仅运行数据无关的自包含测试")
         # 这些测试自建合成 DICOM / 用 /nonexistent.onnx 走数学降级，不依赖真实数据或 119MB 权重
-        for t in (test_ai_engine, test_noncanonical_dicom_gating,
+        for t in (test_ai_engine, test_ai_inplane_axis_contract,
+                  test_noncanonical_dicom_gating,
                   test_unsupported_dicom_contract, test_missing_series_uid_contract,
                   test_load_clears_stale_hu_probe,
                   test_invalid_calibration_raw_gating, test_hu_unit_semantics_gating,
@@ -6023,6 +6251,7 @@ def main_run():
         test_recon_iter_options_contract()  # 迭代档位与方法的绑定：纯逻辑，无 Qt
         test_cluster_ci_artifact_safety()  # 覆写已提交产物的 fail-closed / 原子写：临时目录，无 Qt
         test_hu_declaration_tool_contract()  # HU 声明工具的差异面白名单与判据 fail-closed：合成 DICOM，无 Qt
+        test_hu_declaration_tool_roundtrip()  # HU 声明工具的通过路径与 CLI 分支：合成 CT，无 Qt
         test_public_wording_gate()         # 公开口径语义门：纯文本，无 Qt
         test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
         test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据
@@ -6041,6 +6270,7 @@ def main_run():
             v.ai_thread.cancel()
         test_startup(v)
         test_ai_engine(app)
+        test_ai_inplane_axis_contract(app)
         test_prior_fixes(v, app)
         test_multiorgan_and_edit(v, app)
         test_roi(v, app)
@@ -6117,6 +6347,7 @@ def main_run():
         test_recon_iter_options_contract()  # 迭代档位与方法的绑定：纯逻辑，无 Qt
         test_cluster_ci_artifact_safety()  # 覆写已提交产物的 fail-closed / 原子写：临时目录，无 Qt
         test_hu_declaration_tool_contract()  # HU 声明工具的差异面白名单与判据 fail-closed：合成 DICOM，无 Qt
+        test_hu_declaration_tool_roundtrip()  # HU 声明工具的通过路径与 CLI 分支：合成 CT，无 Qt
         test_public_wording_gate()         # 公开口径语义门：纯文本，无 Qt
         test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
         test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据

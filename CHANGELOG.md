@@ -2,6 +2,54 @@
 
 This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
+## AI segmentation was mirrored on the product's own path, and no test could see it (2026-08-27)
+
+`organs.onnx` comes from TotalSegmentator/nnU-Net, whose volumes are normalised to **RAS** —
+the two in-plane axes run towards the patient's Right and Anterior. The product's `volume_hu`
+comes from DICOM, and AI only runs when canonical orientation holds, i.e.
+`ImageOrientationPatient = [1,0,0,0,1,0]`: columns towards **Left**, rows towards **Posterior**.
+Both in-plane axes are inverted between the two conventions. `ai_engine` flipped neither.
+
+**Measured against CT-Lite ground truth on one case**, the cost of that was not a slight loss
+of accuracy but systematic mislabelling:
+
+| | liver | lung UL(L) | lung LL(L) | lung UL(R) | lung ML(R) | lung LL(R) |
+|---|---|---|---|---|---|---|
+| before (no flip) | 0.181 | **0.000** | **0.000** | **0.000** | **0.000** | **0.000** |
+| flipping only L/R | 0.880 | 0.223 | 0.173 | 0.000 | 0.006 | 0.119 |
+| **after (both axes)** | **0.965** | **0.979** | **0.989** | **0.792** | **0.987** | **0.992** |
+
+Paired organs were swapped outright — the product labelled the patient's right lung as the left
+one. Spleen and both kidneys land at 0.961 / 0.987 / 0.983 after the fix. The intermediate row is
+kept deliberately: flipping only left/right looks like a fix (merged-lung Dice 0.977) while the
+lobes stay scrambled, because the fissures are oblique and the anterior/posterior axis was still
+reversed.
+
+**Why every existing test passed.** None of the segmentation evidence goes through DICOM.
+`seg_validate` and `seg3d_teacher` read NIfTI and normalise to RAS themselves; `516b7cb`, which
+established the label mapping, ran on that path — its conclusion was right and remains right, it
+simply never covered the path the product actually runs. Worse, `seg_multi` and `seg_spacing`
+*do* call `ai_engine` at runtime, but they feed it `load_zhw` output, which is already RAS — so
+they too were measuring the correct orientation and reported healthy Dice. The defect sat exactly
+in the gap between the two.
+
+That gap is now closed by making the convention explicit instead of assumed: `AutoAIEngineThread`
+takes `inplane_axes`, `'lps'` (the product's default, flipped in and out as a pair) or `'ras'`
+(already model orientation, passed through untouched), and rejects anything else at construction
+rather than silently guessing. The three experiment call sites now declare `'ras'`, so their
+behaviour — and the committed CSVs produced on it — are unchanged.
+
+**Cached masks needed their own guard.** A mask written before this fix is mirrored in-plane, yet
+its SeriesInstanceUID, shape and geometry fingerprint are all unaffected, so the three existing
+guards would restore it without complaint. `axis_contract` is now recorded in the `.npz` and
+checked by the pure function `mask_axis_contract_ok`; a cache without it fails closed. The one
+cache present locally predates fingerprints entirely and was already being rejected.
+
+The regression test drives `_run_body` with a direction-sensitive synthetic volume and a stub
+model, asserting the volume in, the labels out and the confidence map are all flipped as a set.
+Three mutations confirm it bites: degrading the flip to identity (5 failures), flipping only
+left/right (5), and dropping the flip on the way back (1).
+
 ## The HU gate was right; the local data was under-declared (2026-08-27)
 
 The local RIDER series loaded as viewer-only: no CT presets, no ROI quantification, no AI, no
@@ -38,8 +86,8 @@ asserts the **entire** tag difference per file — exactly one added tag, remova
 Length, zero value changes — and a five-way mutation test confirms the assertion catches a changed
 `WindowCenter`, an extra tag, a deleted `SliceThickness` and a forged `ImageType` rather than merely
 passing. The copy is gitignored and no test reads it: the suite still loads the original `肺癌/`, so the copy
-itself moves no count. The local full suite went 854 -> **867 PASS / 0 FAIL** on 2026-08-27
-(subset 762 -> 775) purely because this round adds 13 checks over the tool's own assertions. Loading the copy does make the series
+itself moves no count; the 13 checks this round adds over the tool's own assertions do. (The
+suite totals are stated once, in the README, rather than repeated here.) Loading the copy does make the series
 AI-eligible, which starts inference automatically — worth knowing before opening it on a CPU-only
 machine.
 

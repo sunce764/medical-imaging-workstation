@@ -54,6 +54,42 @@ def _fit_shape(arr: np.ndarray, shape: tuple) -> np.ndarray:
     return out
 
 
+
+# ---------------------------------------------------------------------------
+# 体素轴向契约（实测确定，勿轻改）
+# ---------------------------------------------------------------------------
+# organs.onnx 来自 TotalSegmentator/nnU-Net，其训练与评测体数据规范到 RAS，
+# 两个面内轴分别沿【患者 Right】与【患者 Anterior】为正
+# （`experiments/seg_validate.load_zhw` 正是这么喂的，实测 Dice 0.92–0.99）。
+# 产品的 volume_hu 来自 DICOM：AI 仅在 canonical orientation 成立时启用，此时
+# ImageOrientationPatient=[1,0,0,0,1,0]，列沿【Left】、行沿【Posterior】为正。
+# 即 RAS 与 LPS 的两个面内轴都相反，z 轴（Superior）一致。
+#
+# 后果不是精度略降，而是标签系统性错位。同一例 CT-Lite 对 ground truth 实测：
+#   两轴都不翻 —— 肺叶五个标签 Dice 全 0.000，肝 0.181（成对器官左右互换）
+#   只翻左右   —— 肺叶【合并】0.977 但叶间混淆，上/下叶体素数互换，单叶 0.000–0.223
+#   两轴都翻   —— 见下方回归测试与 CHANGELOG 记录的实测值
+# 此前一直未被发现，是因为 seg 的验证脚本走 NIfTI/RAS 路径，从不经过 DICOM。
+_INPLANE_FLIP = np.s_[:, ::-1, ::-1]
+
+# 调用方必须声明自己传入的面内轴序，不再靠隐式假设：
+#   'lps' —— 产品路径，volume 直接来自 canonical DICOM（列沿 Left、行沿 Posterior）
+#   'ras' —— experiments 路径，NIfTI 经 as_closest_canonical 规范到 RAS 后再转轴序
+#            （`seg_validate.load_zhw`），已经与模型一致，不得再翻。
+# 两者只差面内两轴的方向；传错会让标签系统性错位而不报错，故非法值一律 fail fast。
+INPLANE_AXES_DICOM = 'lps'
+INPLANE_AXES_MODEL = 'ras'
+_VALID_INPLANE_AXES = (INPLANE_AXES_DICOM, INPLANE_AXES_MODEL)
+
+
+def _to_model_axes(vol: np.ndarray) -> np.ndarray:
+    """在产品的 DICOM(LPS) 轴序与模型的 RAS 轴序之间互转（自反：作用两次即还原）。
+
+    只翻两个面内轴；z 轴在两种约定下同为 Superior，不动。
+    """
+    return np.ascontiguousarray(vol[_INPLANE_FLIP])
+
+
 class _AISignals(QObject):
     """跨线程回调载体。在主线程创建，子线程 emit 时 Qt 以 QueuedConnection 自动投递到
     主线程事件循环——这是从 threading.Thread 安全更新 Qt UI 的正确方式。
@@ -94,7 +130,8 @@ class AutoAIEngineThread:
                  model_path: str = MODEL_PATH,
                  progress_callback: Callable[[int, int], None] | None = None,
                  failed_callback: Callable[[str], None] | None = None,
-                 spacing: tuple[float, float, float] | None = None) -> None:
+                 spacing: tuple[float, float, float] | None = None,
+                 inplane_axes: str = INPLANE_AXES_DICOM) -> None:
         # volume_hu: 完整的 3D HU 值体素数组，shape=(Z, H, W)，float32
         # callback: 推理完成后调用，签名为 callback(label_map, elapsed_ms)
         #           label_map 为 uint8 多类标签图（0=背景，1-24=器官类别）
@@ -102,6 +139,11 @@ class AutoAIEngineThread:
         # progress_callback: 可选，签名 progress_callback(done_slices, total_slices)，
         #                    在滑窗推理过程中经 Qt 信号（QueuedConnection）投递到主线程，
         #                    用于更新进度显示
+        if inplane_axes not in _VALID_INPLANE_AXES:
+            raise ValueError(
+                f"inplane_axes 必须是 {_VALID_INPLANE_AXES} 之一，收到 {inplane_axes!r}")
+        # 面内轴序契约，决定是否需要在送入模型前后翻转，见 _INPLANE_FLIP 上方说明。
+        self.inplane_axes = inplane_axes
         self.volume_hu = volume_hu
         self.callback = callback
         self.model_path = model_path
@@ -248,7 +290,16 @@ class AutoAIEngineThread:
         # === 路径1：真实 ONNX 多器官分割推理 ===
         if HAS_ONNX and os.path.exists(self.model_path):
             try:
-                final_mask = self._run_onnx_multiorgan(norm_vol)
+                # DICOM 输入的面内两轴与模型相反，必须成对翻转，否则标签系统性错位
+                # （见 _INPLANE_FLIP 说明）；已是模型轴序的输入不得再翻。
+                flip = self.inplane_axes == INPLANE_AXES_DICOM
+                final_mask = self._run_onnx_multiorgan(
+                    _to_model_axes(norm_vol) if flip else norm_vol)
+                if final_mask is not None and flip:
+                    final_mask = _to_model_axes(final_mask)
+                    if self.confidence is not None:
+                        # 置信度与它所描述的标签同源，必须一起翻回，否则两者错位。
+                        self.confidence = _to_model_axes(self.confidence)
                 if final_mask is not None and plan is not None:
                     # 标签与置信度都必须回到原网格，否则与 volume_hu 对不上。
                     # order=0 最近邻：标签是离散的，插值会造出不存在的类别；

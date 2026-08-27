@@ -85,9 +85,13 @@ def run(n_cases, seed):
             print(f"  [{k}/{len(pick)}] {cid} 无在场器官，跳过"); continue
         got = {}
         t0 = time.perf_counter()
+        # 输入来自 load_zhw（NIfTI 已规范到 RAS），本就是模型轴序，故显式声明 ras：
+        # ai_engine 自 2026-08-27 起会翻转 DICOM 轴序输入的面内两轴，本路径不得再翻。
+        # 声明后行为与既有已提交产物完全一致。
         eng = ai_engine.AutoAIEngineThread(img.astype(np.float32),
                                            lambda m, ms, _g=got: _g.update(m=m),
-                                           spacing=(1.5, 1.5, 1.5))
+                                           spacing=(1.5, 1.5, 1.5),
+                                           inplane_axes=ai_engine.INPLANE_AXES_MODEL)
         eng._run_body()
         dt = time.perf_counter() - t0
         pred = got.get('m')
