@@ -2,6 +2,47 @@
 
 This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
+## The HU gate was right; the local data was under-declared (2026-08-27)
+
+The local RIDER series loaded as viewer-only: no CT presets, no ROI quantification, no AI, no
+3D tracking, no follow-up comparison. This had been recorded in six places as correct behaviour
+and locked by tests, and re-measuring it confirmed the gate is right. Every one of the 233 slices
+is `DERIVED\SECONDARY\PROCESSED` with no `RescaleType`, and DICOM PS3.3 C.8.2 lets an omitted
+Rescale Type imply HU only for an `ORIGINAL` classic CT image. `_slice_has_standard_hu` fails
+closed, exactly as specified.
+
+**But the values are standard HU, and that is measurable.** Reconstructing the histogram over a
+24-slice sample puts the air peak at **-1025 HU** and the soft-tissue peak at **-5 HU**, with the
+padding-excluded range spanning **-1024..3071** — precisely the 12-bit signed CT interval, with
+`slope=1 / intercept=-1024` identical across all 233 slices. The unit was never in doubt
+numerically; only the declaration was missing.
+
+**The fix belongs on the data side, and the product is unchanged.** `dicom_geometry` already
+accepts an explicit `RescaleType=HU` regardless of `ImageType` — a `DERIVED` image may legitimately
+declare its units, and the existing test suite already covered that case. So `tools/declare_rider_hu.py`
+verifies the values against physical anchors and writes a derived copy that adds exactly one tag.
+`ImageType` stays `DERIVED`: that is true of the series, and rewriting it to `ORIGINAL` would be the
+actual falsification. Not one line of product code changed; the copy reports
+`hu_calibrated=True` with all four geometry contracts green.
+
+**One difference is not ours and is disclosed rather than glossed.** pydicom does not write retired
+Group Length elements (`filewriter.py`: `if tag.element == 0 and tag.group > 6: continue`, citing
+PS3.5 §7.2), so the copy loses 7 such elements per file, 1631 in total. Dropping them is also the
+only coherent option — adding an element to group `0028` invalidates the old `(0028,0000)` length,
+so preserving it would produce a self-contradictory file. Group Length carries no clinical or
+geometric meaning and no reader depends on it.
+
+The first version of the script only checked `PixelData`, `ImageType` and `RescaleType`, which is
+how the Group Length difference went unnoticed until a separate comparison surfaced it. It now
+asserts the **entire** tag difference per file — exactly one added tag, removals restricted to Group
+Length, zero value changes — and a five-way mutation test confirms the assertion catches a changed
+`WindowCenter`, an extra tag, a deleted `SliceThickness` and a forged `ImageType` rather than merely
+passing. The copy is gitignored and no test reads it: the suite still loads the original `肺癌/`, so the copy
+itself moves no count. The local full suite went 854 -> **867 PASS / 0 FAIL** on 2026-08-27
+(subset 762 -> 775) purely because this round adds 13 checks over the tool's own assertions. Loading the copy does make the series
+AI-eligible, which starts inference automatically — worth knowing before opening it on a CPU-only
+machine.
+
 ## ASD-POCS reaches the GUI, and its iteration list had to differ (2026-08-26)
 
 The TV baseline added earlier lived in `recon.py` and was called only by

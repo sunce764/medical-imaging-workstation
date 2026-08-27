@@ -5856,6 +5856,120 @@ def test_hu_conversion(app):
             shutil.rmtree(d, ignore_errors=True)
 
 
+def test_hu_declaration_tool_contract():
+    """`tools/declare_rider_hu.py` 的两道安全断言必须承重，不能退化成摆设。
+
+    该脚本会写出真实 DICOM 的派生副本，其全部安全性依赖两处：差异面白名单
+    （只允许新增 RescaleType、只允许删 retired Group Length）与 HU 判据的
+    fail-closed。两者若被改坏而无人察觉，副本就可能悄悄携带被篡改的元数据，
+    因此这里逐条构造反例，确认断言真的会拒绝而不只是恰好通过。
+    """
+    print("[HU 声明工具：差异面白名单与 HU 判据 fail-closed]")
+    import copy
+    import importlib.util
+    import shutil
+    import tempfile
+
+    import pydicom
+    from pydicom.uid import generate_uid
+
+    spec = importlib.util.spec_from_file_location(
+        "declare_rider_hu", os.path.join(_ROOT, "tools", "declare_rider_hu.py"))
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+
+    root = tempfile.mkdtemp()
+    try:
+        base = os.path.join(root, "base.dcm")
+        # 源刻意用 DERIVED——真实 RIDER 副本正是如此，且篡改 ImageType 的反例
+        # 只有在源不是 ORIGINAL 时才真的构成改动（否则那条用例是空操作）。
+        _write_min_dcm(base, (8, 8), generate_uid(), ipp_z=0, inst=1,
+                       image_type=('DERIVED', 'SECONDARY', 'PROCESSED'))
+        src = pydicom.dcmread(base)
+        # pydicom 依 PS3.5 §7.2 不写出 retired Group Length，合成文件里本就没有；
+        # 手工塞一个，才能覆盖“允许被丢弃”的那条分支。
+        src.add_new((0x0008, 0x0000), 'UL', 288)
+
+        def derived(**mutate):
+            """构造一份正常副本，再按 mutate 施加单点污染。"""
+            d = copy.deepcopy(src)
+            d.RescaleType = "HU"
+            for tag in [e.tag for e in d if tool._is_group_length(e.tag)]:
+                del d[tag]
+            for key, value in mutate.items():
+                if value is None:
+                    delattr(d, key)
+                else:
+                    setattr(d, key, value)
+            return d
+
+        clean = derived()
+        dropped = tool.assert_only_expected_diff(src, clean, "clean")
+        check(dropped == 1,
+              f"正常副本通过白名单，并如实报告丢弃 1 个 Group Length（实际 {dropped}）")
+
+        no_declaration = copy.deepcopy(src)
+        for tag in [e.tag for e in no_declaration if tool._is_group_length(e.tag)]:
+            del no_declaration[tag]
+        mutations = (
+            ("改动既有 tag 的值（WindowCenter）", derived(WindowCenter=999)),
+            ("多新增一个无关 tag（PatientComments）", derived(PatientComments="x")),
+            ("删掉一个非 Group Length 的 tag（SliceThickness）", derived(SliceThickness=None)),
+            ("篡改 ImageType 为 ORIGINAL", derived(ImageType=['ORIGINAL', 'PRIMARY', 'AXIAL'])),
+            ("漏写 RescaleType（新增集为空）", no_declaration),
+        )
+        for label, polluted in mutations:
+            try:
+                tool.assert_only_expected_diff(src, polluted, "polluted")
+                rejected = False
+            except RuntimeError:
+                rejected = True
+            check(rejected, f"差异面白名单拒绝：{label}")
+
+        # —— HU 判据的 fail-closed 分支：合成小图没有真实 CT 直方图，
+        #    因此只覆盖“应当拒绝”的方向，通过方向由真实序列在工具运行时覆盖。——
+        def series(name, **kwargs):
+            directory = os.path.join(root, name)
+            os.makedirs(directory)
+            sid = generate_uid()
+            for i in range(2):
+                _write_min_dcm(os.path.join(directory, f"s{i}.dcm"), (8, 8), sid,
+                               ipp_z=i, inst=i + 1, **kwargs)
+            return sorted(os.path.join(directory, f) for f in os.listdir(directory))
+
+        rejects = (
+            ("非 CT modality", series("mr", modality='MR')),
+            ("缺 RescaleSlope/Intercept", series("empty", empty_numeric=True)),
+            ("已有 explicit RescaleType（不覆盖既有声明）",
+             series("declared", rescale_type='ED')),
+            ("multi-energy 未实现", series("multi", multi_energy='YES')),
+            ("值域超出合理 CT HU 区间",
+             series("range", pix=5000, slope=1, intercept=0)),
+        )
+        for label, files in rejects:
+            ok, notes = tool.verify_is_hu(files)
+            check(not ok and bool(notes), f"HU 判据 fail-closed：{label}")
+
+        mixed_dir = os.path.join(root, "mixed")
+        os.makedirs(mixed_dir)
+        mixed_uid = generate_uid()
+        for i, intercept in enumerate((-1024, -512)):
+            _write_min_dcm(os.path.join(mixed_dir, f"s{i}.dcm"), (8, 8), mixed_uid,
+                           ipp_z=i, inst=i + 1, intercept=intercept)
+        ok, notes = tool.verify_is_hu(
+            sorted(os.path.join(mixed_dir, f) for f in os.listdir(mixed_dir)))
+        check(not ok and any("不唯一" in n for n in notes),
+              "HU 判据 fail-closed：序列内 slope/intercept 不唯一（mixed-unit）")
+
+        # 输出目录不得等于或位于源目录内，避免覆写神圣的源数据。
+        check(tool._is_group_length(pydicom.tag.Tag(0x0028, 0x0000))
+              and not tool._is_group_length(tool.RESCALE_TYPE_TAG)
+              and not tool._is_group_length(pydicom.tag.Tag(0x0002, 0x0000)),
+              "Group Length 判定只认 (gggg,0000) 且 group>6，不误伤 RescaleType 与 file meta")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def main_run():
     app = QApplication([])
     test_runner_catches_qt_slot_exceptions()
@@ -5908,6 +6022,7 @@ def main_run():
         test_asdpocs_numerics()        # ASD-POCS/TV 正则化：合成小系统，无 Qt / 真实数据
         test_recon_iter_options_contract()  # 迭代档位与方法的绑定：纯逻辑，无 Qt
         test_cluster_ci_artifact_safety()  # 覆写已提交产物的 fail-closed / 原子写：临时目录，无 Qt
+        test_hu_declaration_tool_contract()  # HU 声明工具的差异面白名单与判据 fail-closed：合成 DICOM，无 Qt
         test_public_wording_gate()         # 公开口径语义门：纯文本，无 Qt
         test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
         test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据
@@ -6001,6 +6116,7 @@ def main_run():
         test_asdpocs_numerics()        # ASD-POCS/TV 正则化：合成小系统，无 Qt / 真实数据
         test_recon_iter_options_contract()  # 迭代档位与方法的绑定：纯逻辑，无 Qt
         test_cluster_ci_artifact_safety()  # 覆写已提交产物的 fail-closed / 原子写：临时目录，无 Qt
+        test_hu_declaration_tool_contract()  # HU 声明工具的差异面白名单与判据 fail-closed：合成 DICOM，无 Qt
         test_public_wording_gate()         # 公开口径语义门：纯文本，无 Qt
         test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
         test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据

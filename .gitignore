@@ -96,3 +96,9 @@ experiments/.seg3d_prep/
 .codex/
 AGENTS.md
 experiments/results/seg3d_student_ch8.*
+
+# 由 `python tools/declare_rider_hu.py` 生成的 RIDER 派生副本（约 117MB）。副本只比
+# 源多一个 explicit `RescaleType=HU` tag，ImageType 与 PixelData 逐字节不变。
+# 与 `肺癌/` 同理不入库；`*.dcm` 已覆盖其中的文件，此处按仓库惯例再加目录兜底，
+# 以防副本里出现非 .dcm 文件。
+RIDER_HU_declared/
