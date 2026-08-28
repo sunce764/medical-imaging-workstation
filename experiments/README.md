@@ -340,7 +340,7 @@ Judge by **|CTF − 1|**, not by "higher CTF is better": ramp overshoots at shar
 | 10 | 5 | 0.265 → **0.226** | 37.2% |
 | 12–28 | 6–14 | ≈ level (16 px and 28 px marginally favour ramp, by ≤0.005) | 36.7–40.3% |
 
-**6 of 8** frequencies land closer to ground truth; the remaining two (16 px and 28 px periods) go marginally the other way, by ≤ 0.005 of |CTF − 1|.** The gain concentrates at high frequency, where ramp's overshoot is worst (CTF 1.99 at a 4 px period — nearly double the true modulation) and the CNN corrects it. At low frequency FBP is already close to the truth, so there is little left to fix. RMSE reduction only drops off at the finest line width (2 px, 28.0%) — the sampling limit itself.
+**6 of 8** frequencies land closer to ground truth; the remaining two (16 px and 28 px periods) go marginally the other way, by ≤ 0.005 of |CTF − 1|. The gain concentrates at high frequency, where ramp's overshoot is worst (CTF 1.99 at a 4 px period — nearly double the true modulation) and the CNN corrects it. At low frequency FBP is already close to the truth, so there is little left to fix. RMSE reduction only drops off at the finest line width (2 px, 28.0%) — the sampling limit itself.
 
 ## Limitations (stated, not buried)
 

@@ -24,9 +24,11 @@ per-organ volumes unchanged — mirroring never altered voxel counts, only which
 The third, `gui_confidence.png`, does not: it previously showed a 126-slice run with 18 organs, and
 now shows the same 422-slice run as the others, so its numbers legitimately differ. The confidence
 sentence in both READMEs was rewritten accordingly — at `conf 0.91` the gallbladder is no longer
-below the 0.9 flag threshold, so the claim that it is "flagged" and "least certain" would have been
-false twice over; what is true, and visible in the figure, is that its 5th percentile (0.59) is the
-lowest in the run.
+below the 0.9 flag threshold, so calling it "flagged" and "least certain" would have been false
+twice over. The organ actually flagged in this run is the **prostate at `conf 0.82`**, visible in the
+tri-planar figure; the gallbladder's 0.59 is the lowest 5th percentile **among the rows the panel
+has room to show**, which is what the sentence now says. (The first rewrite got this wrong too, by
+asserting no organ fell below 0.9 while a figure two lines above showed one that did.)
 
 **The project's only cryptographic self-check was failing.** `project_report_zh.md` publishes a
 SHA-256 of the READMEs' diff against a fixed baseline and requires it be recomputed whenever a

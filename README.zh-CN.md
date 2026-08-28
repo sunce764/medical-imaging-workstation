@@ -51,7 +51,7 @@ Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开
 |:---:|:---:|
 | ![轴位分割](docs/img/gui_axial_segmentation.png) | ![三平面 MPR](docs/img/gui_mpr_triplanar.png) |
 
-**每一项定量都附带逐体素置信度。** 每个器官行给出模型的 softmax 最大类概率及其 5% 分位——低分位才是关键，因为误差集中在边界。最大类概率低于 0.9 的条目会被标出。下图这一次运行里没有器官的均值概率低到那个程度，但 **5% 分位**把它们清楚地分开了：胆囊（`conf 0.91 / p5 0.59`）的分位最低，即它最没把握的那些体素是全卷中最没把握的，而它恰好也是 spacing 消融独立测出的最脆弱结构。
+**每一项定量都附带逐体素置信度。** 每个器官行给出模型的 softmax 最大类概率及其 5% 分位——低分位才是关键，因为误差集中在边界。最大类概率低于 0.9 的条目会被标出——这一次运行里恰好有一个：前列腺 `conf 0.82`，可在上方的三平面图中看到。在面板能列出的那些行里，胆囊（`conf 0.91 / p5 0.59`）的 5% 分位最低：它的均值很稳，最没把握的那些体素却不稳，而它恰好也是 spacing 消融独立测出的最脆弱结构。
 
 ![AI 分割与逐体素置信度](docs/img/gui_confidence.png)
 
@@ -118,7 +118,7 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 
 ## 量化证据
 
-实验测量的是随软件发布的那条管线的**代码**——但对分割类而言，并不包括它实际运行的方位（见下方第二重边界），但直接程度分两档：重建类直接 `import recon`、调用 GUI 自己的函数；分割类要么复现 `ai_engine` 的预处理与 z 分块推理、跑同一个 `organs.onnx`（`seg_validate.py`、`seg3d_teacher.py`），要么实时调用 `ai_engine`（`seg_multi.py`、`seg_spacing.py`）。**已提交的分割证据大部分——但并非全部——早于 `2a50e37`**：该提交把产品末窗回移到 `[Z-DZ, Z)`（原先末块由 `pad(mode='constant')` 补零，而 HU 归一化后 0 即空气）。哪份产物落在这道分界的哪一侧，**逐 producer、逐 arm 而不同**（有些 arm 本就是 boundary-anchored），故按产物逐条记在 [`experiments/README.md`](experiments/README.md) 里，不在此处用一句总括代替。对其中回移前的那几行，数值属**历史（修复前）证据**，不是当前 shipped path 的等价测量。`seg_multi.py` 与 `seg_spacing.py` 还多一层后果：它们是运行时调用 `ai_engine` 的，故**当前源码已不再逐步复现其已提交 CSV**，两者本轮均未重跑。研究 IV 的学生模型是另训的独立模型，其产品线测量同样是复现产品推理路径，而非调用它。研究 I–III 与 spacing 消融见[技术报告](docs/technical_report.md)；**研究 IV 晚于该报告**，连同全部脚本与已提交结果一并收在 [`experiments/`](experiments/README.md)。
+实验测量的是随软件发布的那条管线的**代码**，直接程度分两档——但对分割类而言，并不包括它实际运行的方位（见下方第二重边界）：重建类直接 `import recon`、调用 GUI 自己的函数；分割类要么复现 `ai_engine` 的预处理与 z 分块推理、跑同一个 `organs.onnx`（`seg_validate.py`、`seg3d_teacher.py`），要么实时调用 `ai_engine`（`seg_multi.py`、`seg_spacing.py`）。**已提交的分割证据大部分——但并非全部——早于 `2a50e37`**：该提交把产品末窗回移到 `[Z-DZ, Z)`（原先末块由 `pad(mode='constant')` 补零，而 HU 归一化后 0 即空气）。哪份产物落在这道分界的哪一侧，**逐 producer、逐 arm 而不同**（有些 arm 本就是 boundary-anchored），故按产物逐条记在 [`experiments/README.md`](experiments/README.md) 里，不在此处用一句总括代替。对其中回移前的那几行，数值属**历史（修复前）证据**，不是当前 shipped path 的等价测量。`seg_multi.py` 与 `seg_spacing.py` 还多一层后果：它们是运行时调用 `ai_engine` 的，故**当前源码已不再逐步复现其已提交 CSV**，两者本轮均未重跑。研究 IV 的学生模型是另训的独立模型，其产品线测量同样是复现产品推理路径，而非调用它。研究 I–III 与 spacing 消融见[技术报告](docs/technical_report.md)；**研究 IV 晚于该报告**，连同全部脚本与已提交结果一并收在 [`experiments/`](experiments/README.md)。
 
 **还有第二重、也是更大的一重边界：分割证据没有一条跑在产品的 DICOM 方位上。** 所有 producer 都经 `seg_validate.load_zhw` 取体数据，即规范到 **RAS** 的 NIfTI；`seg_multi.py` 与 `seg_spacing.py` 虽在运行时调用 `ai_engine`，喂给它的仍是同一份 RAS 体。而产品的体数据来自 canonical DICOM，其面内两轴方向相反（**LPS**）——直到 2026-08-27，`ai_engine` 两轴都没翻，成对器官在产品路径上整体互换，而下方每一个数字都照常健康。**故下列数字度量的是模型在 RAS 输入下的能力；在该日之前，它们不是、也从未有证据被声称是产品显示结果的度量。** 修复把该约定变成显式的 `inplane_axes` 参数并有回归测试覆盖；逐产物的边界记在 [`experiments/README.md`](experiments/README.md)。
 
@@ -144,12 +144,12 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 10 个无 Qt 计算模块**；完整的 19-module packaging inventory 以 `pyproject.toml` 为准。
-- **2026-08-27 的一次本机实测**，全套（本地 RIDER 在场）为 **925 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **825 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`；该历史 CI 不覆盖其后的任何 commit。后续远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力，其 run/headSha 应记入仓库外 evidence 或交付摘要，不再制造第二个文档 commit。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
+- **2026-08-27 的一次本机实测**，全套（本地 RIDER 在场）为 **927 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **827 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`；该历史 CI 不覆盖其后的任何 commit。后续远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力，其 run/headSha 应记入仓库外 evidence 或交付摘要，不再制造第二个文档 commit。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
-python tests/test_gui.py                     # 2026-08-27 本机实测：全套 925 项；本地 RIDER 在场
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-27 本机实测：数据无关子集 825 项
+python tests/test_gui.py                     # 2026-08-27 本机实测：全套 927 项；本地 RIDER 在场
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-27 本机实测：数据无关子集 827 项
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```

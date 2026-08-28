@@ -2499,6 +2499,19 @@ def test_public_wording_gate():
         # 那是「精确短语黑名单」换了一层皮而已。改成**共现不变式**：只要那几个量值
         # （或成本名词）与「重叠」/「当前路径」出现在同一行，就必须带上限定词，
         # 否则命中。这样逃逸口不再是换个动词，而是必须把限定显式写出来。
+        # 【方位限定的共现不变式】seg 的全部证据都跑在 RAS 上，从不经过产品的 DICOM/LPS
+        # 方位——2026-08-27 修复前产品因此把患者右肺标成左肺而测试全绿。该限定此前只写在
+        # experiments/README.md 一处，其余八份文档仍声称测的是 shipped pipeline；补写之后
+        # 又连续两轮出现「加了新句、没删旧句」。故立为闸门：把分割证据与产品/shipped 路径
+        # 关联时，同一行必须出现方位限定，否则命中。
+        ("分割证据被写成产品路径而未限定方位",
+         r"(?i)seg_validate|seg3d_teacher|segmentation (stud|experiment|evidence|work)|"
+         r"分割(研究|实验|证据)",
+         r"(?i)shipped (system|pipeline|path)|characteris\w+ the shipped|"
+         r"随软件发布的那条管线|产品(路径|管线)|"
+         r"validat\w+ (the|its) [^.]{0,24}pipeline",
+         r"(?i)\bRAS\b|\bLPS\b|inplane_axes|面内(轴|两轴|方位)|orientation|方位|"
+         r"as it stood then|当时|历史|historical|~~|withdrawn|撤回|code\b|代码"),
         ("重叠增益被写成单独变量",
          r"(?i)\+0\.0133|\+0\.013\b|1\.18×|1\.184×|\+0\.65 ?GB|0\.65 ?GB|\+0\.205",
          r"(?i)z-overlap|z ?overlap|overlap|z-seam|z seam|z ?重叠|z ?接缝|"
@@ -2602,6 +2615,10 @@ def test_public_wording_gate():
         # 下面八条全部**实测绕开过**本门的前几版（前三版分别是精确短语表、
         # 动词枚举表、加了 measures/yields 的动词表）。它们不是从规则词表里抄下来的，
         # 而是复审独立构造出来打穿门的原句——作为 deliberate known-bad 才有证据力。
+        ("分割证据被写成产品路径而未限定方位",
+         "The segmentation evidence characterises the shipped system as it stood pre-`2a50e37`."),
+        ("分割证据被写成产品路径而未限定方位",
+         "分割研究测量的正是随软件发布的那条管线。"),
         ("重叠增益被写成单独变量", "Adding z-overlap yields +0.0133 Dice on the path we ship."),
         ("重叠增益被写成单独变量", "z-overlap improves Dice by +0.0133 on the current pipeline."),
         ("重叠增益被写成单独变量", "The +0.0133 Dice comes from z-overlap on the shipped path."),
@@ -2622,8 +2639,11 @@ def test_public_wording_gate():
               f"语义门能抓到「{rule_name}」的同义改写（注入：{bad_line[:52]}…）")
     # 反向自检：一句带了限定的同义改写必须被放行，否则门过严会逼人绕过它
     ok_probe = dict(texts)
+    # 【正例随口径升级】此句原先只带 z 窗口限定即算合格；方位闸门立起来之后，
+    # 「validates the shipped pipeline」还必须说明是在哪个方位上验的，否则应当命中。
     ok_probe["__ok__"] = ("The segmentation study validates the shipped inference pipeline "
-                          "as it stood pre-`2a50e37`.")
+                          "as it stood pre-`2a50e37`, on RAS input rather than the "
+                          "product's LPS orientation.")
     ok_probe["__ok2__"] = "This historical A/B records +0.0133; it does not isolate overlap alone."
     ok_probe["__ok3__"] = ("For this 32-deep path the block count is unchanged by construction, "
                            "so the recorded wall-clock is indicative rather than a measurement.")
