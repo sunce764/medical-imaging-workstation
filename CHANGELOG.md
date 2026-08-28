@@ -25,10 +25,26 @@ cleanly is worse than one that does not: nothing prompts anyone to look.
 **Neither would have been caught by anything.** The wording gate reads Markdown as plain text and
 never asked whether it renders. The new gate implements CommonMark 0.30 left/right-flanking plus
 delimiter matching in pure stdlib — `markdown-it-py` is not a product dependency and cannot enter
-the data-independent subset — and was calibrated against that parser across the whole repository
-until the two agreed delimiter for delimiter (12 and 20 in the two broken files, 0 everywhere
-else). It carries four known-bad injections and eight "not too strict" probes, including inline
-code, fenced blocks, cross-line emphasis and table rows. Reverting one fix reproduces a failure.
+the data-independent subset. Its first version was calibrated by agreeing with that parser
+delimiter for delimiter on the two broken files (12 and 20), and an earlier draft of this entry
+claimed agreement "everywhere else" as well. That was false: on `docs/technical_report.md` the
+implementation reported 2 where the parser reported 0 — the four-asterisk case, which pairs
+without leaking. The two never agreed everywhere, because they are not measuring the same thing.
+
+**A review then showed the gate could be switched off by deleting one line.** Its coverage check
+compared a hardcoded document list against a count derived from that same list — emptying the list
+left the suite green with an unchanged total. The scan is now driven by `os.walk` with no list at
+all, and the guard is that enumeration finds at least twelve files. The same review found the
+detector's blind spots and one branch that no known-bad sample reached: consecutive blockquote
+lines were treated as one block, so a bad delimiter inside a large quote containing tables and
+lists could be paired off by an unrelated one, and table cells were not separated. Both are fixed
+— blockquotes are unwrapped and re-split recursively, each table cell is its own inline context —
+and three known-bad samples now exercise the previously untested branch. Validation was redone by
+injecting both failure shapes into every real `**…**` across all fifteen Markdown files: 2842
+injections, zero misses, zero false positives. The one apparent false positive turned out to be
+the *oracle's* error, not the detector's: `MarkdownIt("commonmark")` does not parse tables, so it
+paired emphasis across table rows. GitHub, which does parse them, leaks the delimiters exactly
+where the detector said it would.
 
 **The project's only cryptographic self-attestation now has a gate.** `docs/project_report_zh.md`
 invites the reader to recompute a SHA-256 over the README diff against a fixed baseline. That value
@@ -62,7 +78,33 @@ failure. The gate reads the CSVs with `utf-8-sig`: their headers carry a BOM, wh
 silently collapsed a join key once during checking and produced a contradiction that looked like a
 documentation error but was not.
 
-Local counts move to **978** full-suite and **867** `SKIP_REAL_DATA=1` checks.
+**The user-facing manuals had been missed by the orientation round entirely.** Both quote the
+spacing ablation's 0.922 → 0.799 while containing not a single mention of `RAS` or `LPS`; so did
+`docs/spacing_contract.md`'s ablation table, whose only orientation note sat beside a different
+experiment several sections away. The existing wording rules are **line-level** co-occurrence
+checks and cannot see this: the number and its qualifier are usually paragraphs apart. A
+document-level rule now requires any Markdown quoting the segmentation figures to carry the
+qualifier somewhere in the file, and it is enumeration-driven rather than list-driven.
+
+**That rule immediately surfaced a tenth document no list contained.**
+`experiments/results/seg_mapping.md` — the label-mapping evidence record — describes its own
+inference as "GUI 同款" (the same as the GUI's) with no orientation qualifier, which is precisely
+the claim shape the axis round retracted. It is frozen evidence under `experiments/results/` and is
+not edited here; its qualifier lives in `experiments/README.md`'s directory-level scope note, and
+the gate's exemption asserts that note actually exists rather than merely listing the file. The
+same file was also absent from the wording gate's document list and has been added to it.
+
+**Three gates were added to close what a clean clone showed was unguarded.** A clone of the
+repository was checked out and run: nothing unexpected is missing (the gaps are the undistributed
+weights, external experiment data, and the private agreements), the subset passes there, and the
+867-vs-848 difference decomposes into eight checksum checks and eleven learned-reconstruction
+checks that need artifacts the repository does not ship. What the clone did expose is that nothing
+compared the product's third-party imports against `requirements.txt` — the existing inventory
+checker only reconciles local modules. `shiboken6` is imported directly and is not declared; it
+arrives as a hard dependency of PySide6, and the new gate accepts that only because the reason is
+written at the import site, which it verifies.
+
+Local counts move to **996** full-suite and **885** `SKIP_REAL_DATA=1` checks.
 
 ## Three independent audits, and what they found the axis fix had left behind (2026-08-27)
 

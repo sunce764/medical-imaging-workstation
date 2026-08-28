@@ -2471,7 +2471,9 @@ def test_public_wording_gate():
     docs = ["README.md", "README.zh-CN.md", "docs/preprint_recon.md",
             "docs/technical_report.md", "docs/project_report_zh.md",
             "experiments/README.md", "docs/manual_en.md", "docs/manual_zh.md",
-            "THIRD_PARTY_NOTICES.md", "docs/spacing_contract.md", "CHANGELOG.md"]
+            "THIRD_PARTY_NOTICES.md", "docs/spacing_contract.md", "CHANGELOG.md",
+            # 公开、且写着「GUI 同款滑窗推理」——正属本门要管的那类主张，此前不在任何清单里
+            "experiments/results/seg_mapping.md"]
     texts = {}
     for rel in docs:
         fp = os.path.join(_ROOT, rel)
@@ -2651,19 +2653,67 @@ def test_public_wording_gate():
         check(not [h for h in scan(ok_probe) if h[1] == _k],
               f"带限定的同义改写被正确放行（门不过严）：{_k}")
 
+    # —— 文档级：凡引用分割定量的文档，整篇必须出现方位限定 ——
+    # 上面的规则都是**行级**共现，抓不到这一类：数字与限定常隔着好几段，甚至不在同一节。
+    # 两份用户手册正是这样漏掉的——它们引用 0.922 → 0.799，整篇却一次 RAS/LPS 都没有，
+    # 而那些数字全部测自模型的 RAS 面内方位，不经产品的 DICOM 路径。
+    # 这里用 os.walk 枚举，不挂在本文件里那几份各不相同的硬编码清单上。
+    SEG_NUMBERS = ("0.9219", "0.7995", "0.922", "0.799", "0.8867", "0.684", "0.840")
+    axis_scanned, axis_bad = 0, []
+    for _dir, _subs, _files in os.walk(_ROOT):
+        _subs[:] = [d for d in _subs if not d.startswith(".") and d != "__pycache__"]
+        for _name in _files:
+            if not _name.endswith(".md"):
+                continue
+            _rel = os.path.relpath(os.path.join(_dir, _name), _ROOT)
+            _body = open(os.path.join(_dir, _name), encoding="utf-8").read()
+            if not any(num in _body for num in SEG_NUMBERS):
+                continue
+            axis_scanned += 1
+            if "RAS" not in _body and "LPS" not in _body:
+                axis_bad.append(_rel)
+    check(axis_scanned >= 8,
+          f"扫到 {axis_scanned} 份引用分割定量的 Markdown（过少说明枚举写错了）")
+
+    # `experiments/results/` 里的记录是冻结证据，改它属禁区（改已跑出的产物）。它们的方位
+    # 限定写在 experiments/README.md 的**目录级**范围声明里，不逐份重复。豁免不能只是白名单
+    # 加一行——这里核实那条覆盖声明确实存在、且确实是目录级口径，否则豁免无效。
+    FROZEN = "experiments/results" + os.sep
+    exempt = sorted(b for b in axis_bad if b.startswith(FROZEN))
+    axis_bad = [b for b in axis_bad if not b.startswith(FROZEN)]
+    if exempt:
+        cover = open(os.path.join(_ROOT, "experiments", "README.md"), encoding="utf-8").read()
+        # 该声明跨行、且每行以 `> ` 起头：先剥引用前缀并压平空白再匹配
+        cover = re.sub(r"\s+", " ", re.sub(r"(?m)^\s*>\s?", "", cover))
+        check("none of this evidence ever ran on the product's DICOM orientation" in cover
+              and "Every producer here" in cover,
+              f"冻结证据 {exempt} 的方位限定由 experiments/README.md 的目录级声明覆盖"
+              f"（该声明缺失则豁免不成立）")
+    check(not axis_bad,
+          f"引用分割定量的文档都带方位限定（缺失：{axis_bad or '无'}；"
+          f"冻结证据豁免：{exempt or '无'}）")
+
 
 def test_markdown_emphasis_renders():
-    """公开 Markdown 的 `**强调**` 必须真的渲染成粗体，而不是原样吐出 `**`。
+    """公开 Markdown 的 `**强调**` 必须真的配成粗体，而不是原样吐出 `**` 或悄悄改变范围。
 
     由来：README 中文版与中文说明书里共 **16 处**加粗在 GitHub 上是坏的，肉眼可见——
     根因是 CommonMark 的 flanking 规则。闭合定界符紧跟在全角标点之后（`**非临床器械：**无`）
-    既不能闭合、又因后接汉字而被判成开启；开启定界符紧接全角引号（`**「配准」**`）同理。
-    两者都退化成孤立定界符，整段加粗失效。同一轮还查出一处 `orientation****.`——那是
-    插入方位限定时留下的残留，四星把两层强调套在一起，加粗范围远超本意。
+    既不能闭合、又因后接汉字被判成开启；开启定界符紧接全角引号（`**「配准」**`）同理。
+    还有一处 `orientation****.` 是插入方位限定时留下的残留：它渲染得干干净净，四星却把两层
+    强调套在一起，把加粗范围扩到前面整个从句——**渲染无残留的缺陷最危险，没有东西提示你去看**。
 
-    判定按 CommonMark 0.30 的 left/right-flanking 加定界符配对**自行实现**：
-    `markdown-it-py` 不是产品依赖，不能进数据无关子集。该实现已与它在全仓库逐处对账
-    一致（两份问题文档 12 / 20 处逐一吻合，其余文档同为 0），修复后双方均归零。
+    判定按 CommonMark 0.30 的 left/right-flanking 加定界符配对**自行实现**：`markdown-it-py`
+    不是产品依赖，不能进数据无关子集。该实现与它逐处对账：对全部公开 `.md` 的每一处真实
+    `**X**` 注入两种已知失效形状（全角冒号、全角引号）共 2842 次，漏报 0、误报 0。
+
+    **已知边界，不声称覆盖**：裸 HTML 块内的 `**` 不识别（本仓库无暴露面，行首 HTML 全用
+    `<strong>`）；`**` 与单星或三星混排不在判定范围内——定界符正则有意只取**恰好两星**的
+    那种，混排的歧义留给解析器，不在此处判定。
+
+    扫描对象由 `os.walk` **枚举**得到，不维护清单——早先版本用硬编码列表加一句
+    `scanned == len(docs)` 自我核对，那是拿列表和它自己比：把列表清空，套件照样全绿、
+    计数都不变，整道门可被一行改动静默降级到零覆盖。
     """
     print("[Markdown 强调渲染门]")
     import re
@@ -2671,7 +2721,8 @@ def test_markdown_emphasis_renders():
 
     _PCAT = {"Pc", "Pd", "Pe", "Pf", "Pi", "Po", "Ps"}          # CommonMark 0.30 的标点类别
     _ASCII_P = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
-    _NEWBLK = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s|>|\||#{1,6}\s)")
+    _NEWBLK = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s)")
+    _CELL = re.compile(r"(?<!\\)\|")
 
     def _punct(ch):
         return ch is not None and (ch in _ASCII_P or unicodedata.category(ch) in _PCAT)
@@ -2679,38 +2730,64 @@ def test_markdown_emphasis_renders():
     def _space(ch):
         return ch is None or ch.isspace()
 
-    def _blocks(src):
-        """切块：强调不跨块。列表项 / 表格行 / 标题各自成块；连续 `>` 行合为一块。"""
-        out, buf, start, fence, prev_q = [], [], 1, False, False
-        def flush(_s=lambda: None):
+    def _units(src, base=1):
+        """产出 (行号, 片段)：每个片段是一个独立的 inline 解析上下文。
+
+        强调不跨 inline 上下文。列表项 / 标题各自成段；**表格每个单元格**独立
+        （实测 `| **甲 | 乙** |` 在 GitHub 上漏出两个 `**`）；引用块要**剥掉 `>` 再递归**
+        ——把连续 `>` 行当成一整块会让内含表格/列表的大引用里，坏定界符被无关定界符配掉。
+        """
+        out, buf, start, fence = [], [], base, False
+        quote, qstart = [], base
+
+        def flush():
             nonlocal buf
             if buf:
                 out.append((start, "\n".join(buf)))
                 buf = []
-        for i, line in enumerate(src.split("\n"), 1):
+
+        def flush_quote():
+            nonlocal quote
+            if quote:
+                inner = "\n".join(re.sub(r"^\s*>\s?", "", q) for q in quote)
+                out.extend(_units(inner, qstart))
+                quote = []
+
+        for i, line in enumerate(src.split("\n"), base):
             if line.lstrip().startswith("```"):
                 fence = not fence
-                flush(); prev_q = False
+                flush(); flush_quote()
                 continue
             if fence:
                 continue
-            if not line.strip():
-                flush(); prev_q = False
+            if line.lstrip().startswith(">"):
+                flush()
+                if not quote:
+                    qstart = i
+                quote.append(line)
                 continue
-            quote = line.lstrip().startswith(">")
-            if _NEWBLK.match(line) and not (quote and prev_q):
+            flush_quote()
+            if not line.strip():
+                flush()
+                continue
+            if line.lstrip().startswith("|"):
+                flush()
+                for cell in _CELL.split(line):
+                    if cell.strip():
+                        out.append((i, cell))
+                continue
+            if _NEWBLK.match(line):
                 flush(); start = i
             elif not buf:
                 start = i
             buf.append(line)
-            prev_q = quote
-        flush()
+        flush(); flush_quote()
         return out
 
     def unmatched_strong(src):
-        """返回会以字面 `**` 漏进渲染结果的定界符 [(行号, 上下文)]。"""
+        """返回配不上对的 `**` 定界符 [(行号, 上下文)]。"""
         hits = []
-        for start, blk in _blocks(src):
+        for start, blk in _units(src):
             inside = set()
             for cm in re.finditer(r"`[^`\n]*`", blk):      # 行内 code 里的 ** 是字面量
                 inside.update(range(cm.start(), cm.end()))
@@ -2718,9 +2795,9 @@ def test_markdown_emphasis_renders():
             for dm in re.finditer(r"(?<!\*)\*\*(?!\*)", blk):
                 if dm.start() in inside:
                     continue
+                # 相邻字符取原文：cmark 判 flanking 用的就是源码里真实的前后字符
                 prev = blk[dm.start() - 1] if dm.start() else None
                 nxt = blk[dm.end()] if dm.end() < len(blk) else None
-                # 相邻字符取原文：cmark 判 flanking 用的就是源码里真实的前后字符
                 op = not _space(nxt) and (not _punct(nxt) or _space(prev) or _punct(prev))
                 cl = not _space(prev) and (not _punct(prev) or _space(nxt) or _punct(nxt))
                 if cl and stack:
@@ -2731,7 +2808,8 @@ def test_markdown_emphasis_renders():
                     hits.append(start + blk.count("\n", 0, dm.start()))
             hits.extend(start + blk.count("\n", 0, p) for p in stack)
         lines = src.split("\n")
-        return [(ln, lines[ln - 1].strip()[:90]) for ln in sorted(hits)]
+        return [(ln, lines[ln - 1].strip()[:90] if 0 < ln <= len(lines) else "")
+                for ln in sorted(hits)]
 
     # —— ① 门本身承重：已知坏样本必须被抓到 ——
     known_bad = {
@@ -2739,6 +2817,11 @@ def test_markdown_emphasis_renders():
         "开启定界符紧接全角引号": "单击右侧面板顶部的**「加载 DICOM 目录」**按钮，选择目录。",
         "插入残留的四星": "which also **exercised the pipeline **on RAS input, never on LPS****. Tail.",
         "跨列表项的孤立定界符": "- **甲：**乙丙丁。\n- **戊：**己庚辛。",
+        # 下面两条走的是「既不能开也不能闭 / 无可闭合对象」那条上报分支——上面四条全部
+        # 经由「栈残留」路径，删掉 else 分支它们照样命中，那条分支就成了没人测的死角。
+        "两侧皆空格的孤立定界符": "正文 ** 正文，这对星号两侧都是空格。",
+        "只有闭合、没有开启": "正文 foo** bar 后续文字。",
+        "表格单元格之间越界配对": "| a | b |\n|---|---|\n| **甲 | 乙** |",
     }
     for label, bad in known_bad.items():
         check(bool(unmatched_strong(bad)), f"门抓得住已知坏样本：{label}")
@@ -2751,31 +2834,30 @@ def test_markdown_emphasis_renders():
         "行内 code 内的星号是字面量": "见 `a ** b` 与 `**kwargs`，非强调。",
         "围栏代码块内的星号": "```\n**not emphasis**\n```",
         "强调紧邻全角括号（可正常闭合）": "各器官的**体积与均值**（按体积降序）如下。",
-        "连续引用行合为一块": "> **合并后的**差异；它们**没有单独隔离\n> 出这一个变量**，故如此写。",
-        "表格行内的强调": "| 项 | **929 PASS / 0 FAIL** | 说明 |",
+        "引用块内含表格与列表": "> **合并后的**差异；\n> \n> | x | **y** |\n> |---|---|\n> | **甲** | 乙 |\n> \n> - **丙**：丁",
+        "同一表格行内多个强调": "| a | b | c |\n|---|---|---|\n| **甲** | 乙 | 丙等**高密度**结构 |",
+        "表格转义竖线": "| 列 | \\|CTF − 1\\| **值** |\n|---|---|\n| 1 | **0.5** |",
     }
     for label, good in known_good.items():
         hit = unmatched_strong(good)
         check(not hit, f"门不过严，放行合法写法：{label}（误报 {hit}）")
 
-    # —— ③ 全部公开 Markdown 必须干净 ——
-    docs = ["README.md", "README.zh-CN.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md",
-            "docs/technical_report.md", "docs/project_report_zh.md", "docs/preprint_recon.md",
-            "docs/ARCHITECTURE.md", "docs/spacing_contract.md",
-            "docs/manual_en.md", "docs/manual_zh.md", "experiments/README.md"]
-    scanned, broken = 0, []
-    for rel in docs:
-        fp = os.path.join(_ROOT, rel)
-        if not os.path.exists(fp):
-            continue
-        scanned += 1
-        for ln, ctx in unmatched_strong(open(fp, encoding="utf-8").read()):
-            broken.append(f"{rel}:{ln} {ctx}")
-    check(scanned == len(docs), f"扫到全部 {len(docs)} 份公开文档（实得 {scanned}）")
+    # —— ③ 全仓库 Markdown 必须干净：枚举，不用清单 ——
+    found, broken = [], []
+    for cur, dirs, files in os.walk(_ROOT):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__pycache__"]
+        for name in files:
+            if not name.endswith(".md"):
+                continue
+            rel = os.path.relpath(os.path.join(cur, name), _ROOT)
+            found.append(rel)
+            for ln, ctx in unmatched_strong(open(os.path.join(cur, name), encoding="utf-8").read()):
+                broken.append(f"{rel}:{ln} {ctx}")
+    check(len(found) >= 12,
+          f"枚举到 {len(found)} 份 Markdown（<12 说明枚举本身坏了，而不是仓库真这么小）")
     check(not broken,
-          f"公开 Markdown 无破损强调（{scanned} 份；违规 {len(broken)} 处："
+          f"全仓库 Markdown 无配不上对的强调（{len(found)} 份；违规 {len(broken)} 处："
           f"{broken[:3] if broken else '无'}）")
-
 
 def test_readme_self_attestation():
     """`docs/project_report_zh.md` 公布的 README diff SHA-256 必须与现算一致。
@@ -2931,6 +3013,95 @@ def test_ordering_claims_hold_on_recompute():
             check(d_org == organ and int(d_n) == n and f"{gain:.3f}" == f"{float(d_gain):.3f}",
                   f"第 {i+1} 名一致（文档 {d_org} +{d_gain} n={d_n} / "
                   f"现算 {organ} +{gain:.3f} n={n}）")
+
+
+def test_dependency_declaration_complete():
+    """产品模块 import 的每个第三方包，都必须在 requirements.txt 里声明。
+
+    由来：干净克隆实测通过后，仍有一件事没有任何机制在查——**产品代码 import 了什么，
+    和我们让别人装什么，是两份互不相干的清单**。既有的 inventory checker 只核对本地
+    模块（`roots & actual`），第三方 import 从未与 `requirements.txt` 对账。少声明一个
+    包，本机因为环境里恰好有而全绿，别人 clone 下来直接 ImportError——一切归零。
+
+    唯一的豁免是 `shiboken6`：它是 PySide6 的硬依赖，随 PySide6 一并装上。豁免不是
+    白名单里加一行就算数——**必须在 import 处写明理由**，本断言会去源码里核实那条注释
+    确实存在，否则豁免无效。这样豁免不能被悄悄扩大。
+    """
+    print("[依赖声明完整性]")
+    import ast
+    import re
+
+    def rd(rel):
+        return open(os.path.join(_ROOT, rel), encoding="utf-8").read()
+
+    def norm(name):
+        return re.split(r"[=<>!~ ;\[]", name.strip())[0].strip().lower().replace("_", "-")
+
+    req = {norm(line) for line in rd("requirements.txt").split("\n")
+           if line.strip() and not line.lstrip().startswith("#")}
+    check(len(req) >= 5, f"requirements.txt 解析出 {len(req)} 个包（<5 说明解析写错了）")
+
+    pj = re.search(r"dependencies\s*=\s*\[(.*?)\]", rd("pyproject.toml"), re.S)
+    check(pj is not None, "pyproject.toml 里能定位 dependencies")
+    pj_deps = {norm(d) for d in re.findall(r'"([^"]+)"', pj.group(1))} if pj else set()
+    check(pj_deps == req,
+          f"pyproject 与 requirements 声明一致（差异 {sorted(pj_deps ^ req) or '无'}）")
+
+    # import 名 → 发行包名（两者不总相同）
+    DIST = {"skimage": "scikit-image", "pyside6": "pyside6"}
+    # 豁免：传递依赖，且理由必须写在源码 import 处
+    TRANSITIVE = {"shiboken6": ("ai_engine.py", "PySide6")}
+
+    prod = sorted(f[:-3] for f in os.listdir(_ROOT) if re.fullmatch(r"[a-z_0-9]+\.py", f))
+    check(len(prod) >= 15, f"扫到 {len(prod)} 个产品顶层模块")
+    third = {}
+    for mod in prod:
+        for node in ast.walk(ast.parse(rd(f"{mod}.py"))):
+            roots = []
+            if isinstance(node, ast.Import):
+                roots = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                roots = [node.module.split(".")[0]]
+            for r in roots:
+                if r not in prod and r not in sys.stdlib_module_names:
+                    third.setdefault(r, set()).add(mod)
+    check(len(third) >= 4, f"产品代码用到 {len(third)} 个第三方包：{sorted(third)}")
+
+    def undeclared(declared, exempt):
+        bad = []
+        for imp, users in sorted(third.items()):
+            if imp.lower() in exempt:
+                continue
+            if DIST.get(imp.lower(), imp.lower()) not in declared:
+                bad.append(f"{imp}（被 {sorted(users)[0]} 等 {len(users)} 个模块 import）")
+        return bad
+
+    missing = undeclared(req, set(TRANSITIVE))
+    check(not missing, f"每个第三方 import 都已声明（未声明：{missing or '无'}）")
+
+    # 豁免必须有写在源码里的理由，否则不成立
+    for imp, (where, parent) in TRANSITIVE.items():
+        src = rd(where)
+        line = next((ln for ln in src.split("\n")
+                     if re.match(rf"\s*import\s+{re.escape(imp)}\b", ln)), None)
+        check(line is not None, f"{where} 里确实 import 了 {imp}（豁免针对的是真实存在的 import）")
+        check(bool(line and parent in line and "#" in line),
+              f"{imp} 的豁免在源码 import 处写明了它随 {parent} 一并安装"
+              f"（该行：{(line or '').strip()[:80]}）")
+
+    # —— 门本身承重 ——
+    check(bool(undeclared(req - {"numpy"}, set(TRANSITIVE))),
+          "从 requirements 拿掉 numpy 会被判为未声明")
+    check(bool(undeclared(req, set())),
+          "撤销 shiboken6 豁免会让它被判为未声明（豁免确实在起作用，不是摆设）")
+    fake = dict(third)
+    fake["requests"] = {"main"}
+    saved, third = third, fake
+    try:
+        check(any("requests" in b for b in undeclared(req, set(TRANSITIVE))),
+              "新引入一个未声明的第三方包会被抓到")
+    finally:
+        third = saved
 
 
 def test_recon_pipeline_helpers():
@@ -6950,6 +7121,7 @@ def main_run():
         test_public_wording_gate()         # 公开口径语义门：纯文本，无 Qt
         test_markdown_emphasis_renders()   # Markdown 强调渲染门：纯文本，无 Qt
         test_ordering_claims_hold_on_recompute()  # 排序/极值断言与产物对账：CSV + 纯 stdlib
+        test_dependency_declaration_complete()  # 第三方 import 与 requirements 对账：纯 stdlib
         test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
         test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据
         test_dl_recon_guard()
@@ -7053,6 +7225,7 @@ def main_run():
         test_public_wording_gate()         # 公开口径语义门：纯文本，无 Qt
         test_markdown_emphasis_renders()   # Markdown 强调渲染门：纯文本，无 Qt
         test_ordering_claims_hold_on_recompute()  # 排序/极值断言与产物对账：CSV + 纯 stdlib
+        test_dependency_declaration_complete()  # 第三方 import 与 requirements 对账：纯 stdlib
         test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
         test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据
         test_dl_recon_guard()
