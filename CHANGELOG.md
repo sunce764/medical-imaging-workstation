@@ -114,6 +114,16 @@ if the listing ever comes back empty, every pattern match trivially passes. The 
 today — 147 tracked files, zero hits in all five categories — but that was previously an unverified
 belief rather than a measurement.
 
+**The self-referential coverage check was not the only one.** After fixing the one the review
+found, a scan for the shape — an assertion comparing a collection against the very list it was
+built from — turned up two more, in the wording gate and in the retraction gate. Both computed
+`len(texts) == len(docs)` where `texts` is built by iterating `docs`, so both would have passed on
+an empty list, silently reducing the two gates that protect retracted scientific claims to zero
+coverage. Both now assert a floor on the list size as well; emptying either list fails. The scan
+also cleared the rest: the other eighteen multi-`len` assertions compare independently produced
+quantities, and the twelve `check(True, …)` calls are the "reached this line without raising"
+idiom, which is load-bearing because the runner records uncaught exceptions as failures.
+
 Local counts move to **1008** full-suite and **897** `SKIP_REAL_DATA=1` checks.
 
 ## Three independent audits, and what they found the axis fix had left behind (2026-08-27)

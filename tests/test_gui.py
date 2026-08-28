@@ -2479,7 +2479,10 @@ def test_public_wording_gate():
         fp = os.path.join(_ROOT, rel)
         if os.path.exists(fp):
             texts[rel] = open(fp, encoding="utf-8").read()
-    check(len(texts) == len(docs), f"语义门覆盖 {len(docs)} 份公开文档（实得 {len(texts)}）")
+    # 下限自检：`texts` 由 `docs` 构建，只比两者长度是拿清单和它自己比——把清单清空，
+    # 断言照样通过、整道门静默降到零覆盖。故先钉住清单本身的规模。
+    check(len(docs) >= 11 and len(texts) == len(docs),
+          f"语义门覆盖 {len(docs)} 份公开文档（实得 {len(texts)}；清单少于 11 份即判失败）")
 
     # (主体词, 断言词, 放行词) —— 主体与断言同行即命中，放行词任一出现即豁免。
     # 放行词要够宽，否则门过严会逼人绕过它——本轮初版就因缺 `discretisation floor`
@@ -5776,7 +5779,9 @@ def test_withdrawn_claims_stay_withdrawn():
         p = os.path.join(root, rel)
         if os.path.exists(p):
             texts[rel] = open(p, encoding="utf-8").read()
-    check(len(texts) == len(docs), f"五份文档齐备（实得 {len(texts)}）")
+    # 同上：只比 len(texts)==len(docs) 是自指，清单被清空时会假绿。
+    check(len(docs) >= 5 and len(texts) == len(docs),
+          f"五份文档齐备（清单 {len(docs)} 份，实得 {len(texts)}；少于 5 份即判失败）")
 
     # ① 两条已撤回结论不得以无限定的形式出现。
     #    【为什么从精确短语改成语义类别】原黑名单是 r"ART is the most robust" 一类的
