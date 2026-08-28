@@ -96,7 +96,7 @@ The visual comparison in `exp_c_gallery.png` fully matches the RMSE: DMR is cove
 
 ## Reconstruction study — one-sentence summary
 
-In low-dose CT, **the answer to "which algorithm/filter" changes with dose**: in the sparse, low-dose regime prefer a constrained iterative method or an apodisation filter over unregularised inversion; in the ample-dose regime the analytic method (FBP + Ram-Lak) is sufficient and faster. **Which** constrained iterative method is a stopping-rule question, not a property (item 1) — and a TV-regularised one (ASD-POCS, `recon_tv.py`) beats both ART and SIRT by 45.1–54.7% at this noise level, an advantage that shrinks monotonically with SNR and turns negative at 60 and 90 views by η ≈ 9% (30 views still gains 6.4%).
+On this tested 2-D phantom grid, **the preferred algorithm and filter depend on angular sampling, noise level, and stopping rule**: constrained iteration or apodisation outperforms unregularised inversion in the sparse-view settings, while FBP + Ram-Lak is sufficient and faster at denser sampling. At η≈0.9%, oracle-stopped ASD-POCS (`recon_tv.py`) beats ART and SIRT by 45.1–54.7%; as noise rises and SNR falls, that advantage shrinks and by η≈9% turns negative at 60 and 90 views (30 views still gains 6.4%). These two-phantom, three-noise-level, inverse-crime measurements do not establish a general low-dose CT policy.
 
 ---
 
@@ -231,14 +231,14 @@ Same case, same inference code, ground truth never interpolated (the prediction 
 
 **+0.0636 — 52% of the gap to baseline recovered.** It does not return all the way, and should not: 3.0 mm data has already lost the information, and upsampling cannot invent it back.
 
-On the bundled RIDER series (0.713 mm in-plane, 1.25 mm slices) the same step is a *down*sampling, 61.1 M voxels → 11.5 M, measured end to end at **100 s / 8.8 GB → 37 s / 3.0 GB**. Accuracy and cost move the same way here, so there is no trade-off to weigh.
+On the bundled RIDER series (0.713 mm in-plane, 1.25 mm slices) the same step is a *down*sampling, 61.1 M voxels → 11.5 M, measured end to end at **100 s / 8.8 GB → 37 s / 3.0 GB**. That series has no ground-truth segmentation here, so this is a cost measurement only. The Dice recovery above comes from a separate TotalSegmentator validation at 3.0 mm; the two cohorts do not establish a same-case accuracy–cost trade-off.
 
 A side effect worth naming: once every volume is resampled to a fixed 1.5 mm, the voxel count depends only on the scanned field of view (≈19 M for a thorax–abdomen study) rather than on the acquisition protocol — inference time and peak memory stop varying between series.
 
 **Direction limit, stated rather than buried.** Only the *coarser* side is testable here. The bundled RIDER series is 0.713 mm in-plane — the *finer* side — and upsampling this case to that spacing multiplies the voxel count by 9.4 (≈360 M), needing >50 GB at inference; the machine has 32 GB. So this ablation establishes *that* the model degrades away from its training spacing and *how fast*, but it does **not** give a number for 0.71 mm.
 
 ## Segmentation study — one-sentence summary
-No guessing — **a single ground-truth-labelled public CT pins down the model's identity, its label mapping, and pipeline correctness all at once**: organs.onnx is TotalSegmentator `class_map_part_organs`, mean Dice ≈ 0.92 — **at the training spacing, which the ablation above shows is where it is measured most favourably**.
+Measurement rather than guessing: one ground-truth-labelled public CT measures an identity mapping for labels 1–21 and mean Dice ≈0.92, while exercising the historical RAS, pre-`2a50e37` inference behaviour at the favourable training spacing. The 20-case follow-up supplies overlap evidence for labels 22–24. Together they measure the label scheme as TotalSegmentator `class_map_part_organs`; they do not cryptographically identify the exact upstream checkpoint or validate the current product DICOM/LPS path.
 
 ---
 

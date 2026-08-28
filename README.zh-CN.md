@@ -50,7 +50,7 @@
 
 **一个 model–inference-path interaction。** 同一份学生权重仅改变张量 extent 就得到 **0.490 或 0.746** Dice：fixed-size / no-augmentation 训练与 zero-padding、`InstanceNorm3d` 相互作用，后者会随 padding extent 改变逐样本空间统计量。放大张量抹掉了 **99.3%** 的预测前景（225,374 → 1,529 体素）。五条针对性对照把机制指向 normalization sensitivity，但没有做 normalization replacement，因此既不能认定唯一因果，也不能写成“评估坏、模型没问题”。
 
-**一次改动了产品的消融。** 引擎此前静默跳过了 nnU-Net 强制要求的、重采样到训练 spacing 这一步。先测量、后修复：Dice **0.684 → 0.840**，配对 **20 例全部改善**（Wilcoxon *p* = 1.9×10⁻⁶）；本机那条 RIDER 序列上的推理从 **100s / 8.8GB 降到 37s / 3.0GB**——同时更准、也更省。
+**一次改动了产品的消融。** 引擎此前静默跳过了 nnU-Net 强制要求的、重采样到训练 spacing 这一步。在 20 例带 ground truth 的样本上，Dice **0.684 → 0.840**，配对 **20 例全部改善**（Wilcoxon *p* = 1.9×10⁻⁶）。另一次未归档的本机成本测量中，RIDER 序列推理由 **100s / 8.8GB 降到 37s / 3.0GB**；两项结果来自不同数据条件，不是在 RIDER 上配对测得的 accuracy–cost 结果。
 
 **一个没能站住的试跑结果。** z 分块这个因子，3 例试跑曾给出 **+0.205**；指定的 61 例 test split 对 student training 留出，但 teacher 很可能训练时见过，且此后已在仓库中多次评估，其中 59 例可评，结果只有 **+0.0133**［+0.0072, +0.0194］。两个数字都留在这个仓库里。跑全样本的意义，正在于拦住离群值成为头条。
 
