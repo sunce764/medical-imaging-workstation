@@ -144,12 +144,12 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 10 个无 Qt 计算模块**；完整的 19-module packaging inventory 以 `pyproject.toml` 为准。
-- **2026-08-27 的一次本机实测**，全套（本地 RIDER 在场）为 **929 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **829 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`；该历史 CI 不覆盖其后的任何 commit。后续远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力，其 run/headSha 应记入仓库外 evidence 或交付摘要，不再制造第二个文档 commit。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
+- **2026-08-28 的一次本机实测**，全套（本地 RIDER 在场）为 **954 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **843 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`；该历史 CI 不覆盖其后的任何 commit。后续远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力，其 run/headSha 应记入仓库外 evidence 或交付摘要，不再制造第二个文档 commit。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
-python tests/test_gui.py                     # 2026-08-27 本机实测：全套 929 项；本地 RIDER 在场
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-27 本机实测：数据无关子集 829 项
+python tests/test_gui.py                     # 2026-08-28 本机实测：全套 954 项；本地 RIDER 在场
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-28 本机实测：数据无关子集 843 项
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```
@@ -176,13 +176,13 @@ coverage run tests/test_gui.py && coverage report
 
 ## 安全边界与已知限制
 
-- **非临床器械：**无监管认证、临床验证档案、审计追踪或访问控制。
-- **仅做显示层脱敏：**屏幕与导出文件名会隐藏 PHI，但不会清洗底层 DICOM 标签和烧录文字。
+- **非临床器械**：无监管认证、临床验证档案、审计追踪或访问控制。
+- **仅做显示层脱敏**：屏幕与导出文件名会隐藏 PHI，但不会清洗底层 DICOM 标签和烧录文字。
 - **HU 单位必须有证据，不能只看 slope/intercept：**每一保留层都必须有 explicit `RescaleType=HU`，或满足 classic CT 的 `ORIGINAL`、非 `LOCALIZER`、非 multi-energy 标准保证，才开放 HU consumer。缺 explicit HU 的 `DERIVED`、未知/非 HU 单位、mixed-unit series 与 multi-energy CT 均只作 raw-value viewer-only。本地 RIDER 序列正属此列——它是 `DERIVED\SECONDARY\PROCESSED` 且无 `RescaleType`，产品因此正确地拒绝把它的数值称作 HU。`tools/declare_rider_hu.py` 从**数据侧**而非放宽闸门来解决：先用物理锚点（空气峰、软组织峰、值域）证明数值确为标准 HU，再写出一份派生副本，其**唯一新增的 tag** 是 explicit `RescaleType=HU`。`ImageType` 有意保持 `DERIVED`——这是该序列的事实，篡改它才是真正的造假；`PixelData` 逐字节原样复制。注意副本会使该序列满足 AI 条件，加载后会自动开始推理。
-- **换序列与 mask 状态 fail-safe：**新序列成功接管后才清旧 HU probe，并用新单位重建 HUD；加载失败则保留旧 readout。AI-pending 全零 placeholder 不会被保存成假 cache hit；只有经确认的全局清空才持久化带 provenance 的 empty mask、作废旧 AI callback，并可在保存前 Ctrl+Z。逐体素 eraser 最终擦成全零尚不归类为 explicit global clear。
-- **AI 泛化仍有未测部分：**肺叶验证 57 例、21 器官验证 20 例，样本量仍小，且全部来自同一个公开数据集（1.5mm 各向同性）、**全部以模型的 RAS 面内约定而非产品 DICOM 的 LPS 喂入**，故度量的是模型而非产品路径；其他扫描协议与设备未经测试，器官间可靠性的差异远大于总体数字（肝 0.98 vs 前列腺 0.55）。spacing 重采样已接入（见证据表），但更细一侧仍属推断而非实测，且扫描范围过大时会被跳过。
-- **重建限于教学范围：**DMR / ART / ASD-POCS 矩阵重建受最小二乘成本限制，实用上限约 64×64。研究 III 使用无噪声合成投影，不能证明低剂量临床表现。
-- **随访为刚性而非形变配准：**平面内配准在测试中将整体平移造成的 MAE 从 321 HU 降至 13 HU，但不会校正呼吸引起的器官形变；差异结果只能作定性参考，不能视为临床变化量。
+- **换序列与 mask 状态 fail-safe**：新序列成功接管后才清旧 HU probe，并用新单位重建 HUD；加载失败则保留旧 readout。AI-pending 全零 placeholder 不会被保存成假 cache hit；只有经确认的全局清空才持久化带 provenance 的 empty mask、作废旧 AI callback，并可在保存前 Ctrl+Z。逐体素 eraser 最终擦成全零尚不归类为 explicit global clear。
+- **AI 泛化仍有未测部分**：肺叶验证 57 例、21 器官验证 20 例，样本量仍小，且全部来自同一个公开数据集（1.5mm 各向同性）、**全部以模型的 RAS 面内约定而非产品 DICOM 的 LPS 喂入**，故度量的是模型而非产品路径；其他扫描协议与设备未经测试，器官间可靠性的差异远大于总体数字（肝 0.98 vs 前列腺 0.55）。spacing 重采样已接入（见证据表），但更细一侧仍属推断而非实测，且扫描范围过大时会被跳过。
+- **重建限于教学范围**：DMR / ART / ASD-POCS 矩阵重建受最小二乘成本限制，实用上限约 64×64。研究 III 使用无噪声合成投影，不能证明低剂量临床表现。
+- **随访为刚性而非形变配准**：平面内配准在测试中将整体平移造成的 MAE 从 321 HU 降至 13 HU，但不会校正呼吸引起的器官形变；差异结果只能作定性参考，不能视为临床变化量。
 
 ## 许可与版权
 

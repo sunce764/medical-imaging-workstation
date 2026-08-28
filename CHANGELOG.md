@@ -2,6 +2,55 @@
 
 This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
+## Bold that never rendered, and two gates for claims nothing was checking (2026-08-28)
+
+**Sixteen bold spans on the public pages were broken, and had been for as long as they existed.**
+`**非临床器械：**无监管认证` renders on GitHub as the literal characters `**非临床器械：**`, not as
+bold. The cause is CommonMark's flanking rule: a closing `**` that sits immediately after a
+punctuation character and immediately before a letter is not right-flanking, so it cannot close.
+Full-width CJK punctuation — `：` and `」` — is punctuation by that definition, and Chinese text puts
+it exactly there. The mirror case breaks openers: `**「加载 DICOM 目录」**` opens with `**` followed by
+`「`, which is not left-flanking after a CJK letter. Six spans in `README.zh-CN.md` and ten in
+`docs/manual_zh.md` failed this way — the Chinese landing page and the Chinese manual, i.e. the
+first thing a Chinese-reading visitor sees. The fix moves the punctuation outside the emphasis
+(`**非临床器械**：`, `「**加载 DICOM 目录**」`), which is also the better typography. Verified against
+GitHub's own `/markdown` rendering endpoint, not only a local parser.
+
+**A seventeenth was mine, and it was invisible precisely because it did not break.** While adding
+the orientation caveat to `docs/technical_report.md` I left `orientation****.` — four asterisks.
+That renders without a stray `**`, because the extra pair silently nested one strong span inside
+another, quietly extending the emphasis over an entire preceding clause. A defect that renders
+cleanly is worse than one that does not: nothing prompts anyone to look.
+
+**Neither would have been caught by anything.** The wording gate reads Markdown as plain text and
+never asked whether it renders. The new gate implements CommonMark 0.30 left/right-flanking plus
+delimiter matching in pure stdlib — `markdown-it-py` is not a product dependency and cannot enter
+the data-independent subset — and was calibrated against that parser across the whole repository
+until the two agreed delimiter for delimiter (12 and 20 in the two broken files, 0 everywhere
+else). It carries four known-bad injections and eight "not too strict" probes, including inline
+code, fenced blocks, cross-line emphasis and table rows. Reverting one fix reproduces a failure.
+
+**The project's only cryptographic self-attestation now has a gate.** `docs/project_report_zh.md`
+invites the reader to recompute a SHA-256 over the README diff against a fixed baseline. That value
+had already gone stale once — the document says so itself — and the write-up's own recommendation
+was that nothing enforced recomputation. It does now, and deliberately does not reimplement the
+recipe: the baseline SHA and the command are parsed out of the document, the command's shape is
+asserted to match what the test computes, and only then is the digest compared. Full suite only:
+it needs the baseline object, and CI's `actions/checkout@v4` is a shallow clone.
+
+**One ordering claim was false and a second was not.** "The gallbladder is the structure most
+fragile to spacing ablation" does not survive recomputation from
+`seg_spacing_per_organ.csv` — the left adrenal gland drops 0.346 against the gallbladder's 0.272,
+so the gallbladder is second. Applying the same rule to `experiments/README.md`'s five largest
+per-organ gains first produced a contradiction (every organ at `n=1` against a documented `n=52`),
+which turned out to be a BOM in the CSV header collapsing the join key in the *checking* script,
+not an error in the document: with the encoding handled, `+0.0479 / +0.0256 / +0.0247 / +0.0239 /
++0.0238` reproduces the documented five to three decimals, along with two losing organs and 54 of
+59 cases improving. Superlatives are a claim class that recomputing individual numbers does not
+test, since every number in the sentence can be right while the ranking is wrong.
+
+Local counts move to **954** full-suite and **843** `SKIP_REAL_DATA=1` checks.
+
 ## Three independent audits, and what they found the axis fix had left behind (2026-08-27)
 
 Three read-only reviews ran in parallel over documentation, test effectiveness and freeze-readiness.

@@ -4,7 +4,7 @@
 **报告日期：** 2026-08-26<br>
 **报告用途：** 研究生申请与算法作品集审阅、项目阶段复盘、后续研究决策<br>
 **软件定位：** 教学 / 科研工具，非医疗器械，不得用于临床诊断<br>
-**审计基线：** 固定 Git baseline `2e9b7005b33aed9012b7707ba89b4d0d26bb315d`。中英文 README 相对该 baseline 的 unified diff SHA-256 为 `11bc18360f7bca7485fc01383fa7f4de2039bb9ec6e9db5537615dfe32891adc`；该 hash 只绑定两份 README 的当前内容，不声称它们已 push 或经远端 CI 覆盖。**该值曾一度失效**：上一版发布的是 `08825d60…`，而其后又有一次提交改动了两份 README 却未重算，于是本文件第 11 行邀请读者执行的复算命令会给出不同的值——全项目唯一的密码学自证点当时是失败的。此处已重算并核验通过，但目前没有任何断言在 README 改动时强制重算，见 §10 的建议。
+**审计基线：** 固定 Git baseline `2e9b7005b33aed9012b7707ba89b4d0d26bb315d`。中英文 README 相对该 baseline 的 unified diff SHA-256 为 `98acf04b468b5788e47d6b6a6c19148b4a55026b2dff035f0ef30a3054c96302`；该 hash 只绑定两份 README 的当前内容，不声称它们已 push 或经远端 CI 覆盖。**该值曾一度失效**：上一版发布的是 `08825d60…`，而其后又有一次提交改动了两份 README 却未重算，于是本文件第 11 行邀请读者执行的复算命令会给出不同的值——全项目唯一的密码学自证点当时是失败的。此处已重算并核验通过，但目前没有任何断言在 README 改动时强制重算，见 §10 的建议。
 
 > 本报告刻意区分四类信息：**本次实测**、**可由仓库产物复算**、**历史实测但未归档**、**推断或未测项**。数值不因叙事需要而跨越这些边界。
 
@@ -23,7 +23,7 @@ README diff 的 canonical 复算命令为：`git -c color.ui=false --no-pager di
 3. 研究不仅保留正结果，也保留被大样本推翻的试跑结果和被后续测量撤回的结论；
 4. 数据、模型、许可、软著快照和当前代码之间的边界均被显式记录。
 
-截至本报告日期，项目已经具备较强的**作品集展示价值和工程可信度**：2026-08-27 的一次本机实测，全套回归 **929 PASS / 0 FAIL**，数据无关子集 **829 PASS / 0 FAIL**；这些是 local evidence，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run 32833860765](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、coverage 81%、Ruff PASS，`event=workflow_dispatch`。该历史 CI 不覆盖其后的任何 commit；后续远端结果必须绑定具体 run 与精确 `headSha`。项目仍然不是临床产品，也还不是一项已完成的临床研究：分割验证来自单一公开数据源，教师模型很可能见过该数据；学习式重建使用无噪声合成投影；部分历史性能数字没有归档原始日志。
+截至本报告日期，项目已经具备较强的**作品集展示价值和工程可信度**：2026-08-28 的一次本机实测，全套回归 **954 PASS / 0 FAIL**，数据无关子集 **843 PASS / 0 FAIL**；这些是 local evidence，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run 32833860765](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、coverage 81%、Ruff PASS，`event=workflow_dispatch`。该历史 CI 不覆盖其后的任何 commit；后续远端结果必须绑定具体 run 与精确 `headSha`。项目仍然不是临床产品，也还不是一项已完成的临床研究：分割验证来自单一公开数据源，教师模型很可能见过该数据；学习式重建使用无噪声合成投影；部分历史性能数字没有归档原始日志。
 
 综合判断：这是一个“**产品实现 + 算法研究 + 证据治理**”结合得较完整的医学影像算法作品集。其可信度主要来自对错误结论的主动撤回、对推理路径的同口径比较，以及对不可复现部分的明确承认，而不是来自单个最高 Dice 或功能数量。
 
@@ -323,7 +323,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 | Student path 0.4903→0.7457 | 同一 weights、24 validation cases；两条 inference path | B，需外部 data / weight | [`seg3d_diag_ch8d3_33600s_zslab.json`](../experiments/results/seg3d_diag_ch8d3_33600s_zslab.json)、[`seg3d_diag_ch8d3_33600s_sliding.json`](../experiments/results/seg3d_diag_ch8d3_33600s_sliding.json) · [`seg3d_diag.py`](../experiments/seg3d_diag.py) |
 | Historical A/B（A=回移前无重叠 / B=boundary-anchored+25% 重叠）+0.0133 / 1.18×，非重叠单独增益 | 59 paired all-organ case means；time 由同一批 per-case `sec` 重算 | B，需外部 data / weight | [`seg3d_infer_bias_bench_A.csv`](../experiments/results/seg3d_infer_bias_bench_A.csv)、[`seg3d_infer_bias_bench_B.csv`](../experiments/results/seg3d_infer_bias_bench_B.csv) · [`seg3d_infer_bias.py`](../experiments/seg3d_infer_bias.py) `bench` |
 | Teacher–student `zslab` −0.4500 | 234 matched `(case, lobe)` rows；正文 CI 是 instance bootstrap | B，需外部 data / weight | [`seg3d_teacher_dice.csv`](../experiments/results/seg3d_teacher_dice.csv)、[`seg3d_student_ch8d3_33600s_zslab.csv`](../experiments/results/seg3d_student_ch8d3_33600s_zslab.csv) · [`seg3d_report.py`](../experiments/seg3d_report.py) |
-| 929 full / 829 subset | 2026-08-27 本机实测；commands 见 §11 | A | 本地 runner exit 0 与 PASS count；不是 fresh-clone、coverage 或远端 CI evidence |
+| 954 full / 843 subset | 2026-08-28 本机实测；commands 见 §11 | A | 本地 runner exit 0 与 PASS count；不是 fresh-clone、coverage 或远端 CI evidence |
 | 100s/8.8GB→37s/3.0GB；8.44→9.09GB | 各为历史单机 run | C | 文档中的 terminal record；没有可独立复核 artifact |
 | Exact upstream checkpoint、noisy-CT hallucination、cross-scanner generalisation | 未形成直接 measurement | D | 明确保持 unresolved，不由 checksum 或现有 Dice 推断 |
 
@@ -335,8 +335,8 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 
 | 检查 | 结果 | 解释 |
 |---|---:|---|
-| Full regression with local RIDER | **929 PASS / 0 FAIL** | 2026-08-27 本机实测；真实 DICOM 在场；本地 RIDER export 为 `DERIVED` 且无 explicit HU，故产品路径 viewer-only；标准 HU consumer 由 synthetic classic CT 覆盖；未重跑整卷 AI inference。测试始终读原始 `肺癌/`，不读 `tools/declare_rider_hu.py` 生成的 HU-declared 副本，故该副本不改变本行计数 |
-| `SKIP_REAL_DATA=1` local subset | **829 PASS / 0 FAIL** | 2026-08-27 本机实测；合成 DICOM、synthetic event、pure compute 与本地 artifact guard |
+| Full regression with local RIDER | **954 PASS / 0 FAIL** | 2026-08-28 本机实测；真实 DICOM 在场；本地 RIDER export 为 `DERIVED` 且无 explicit HU，故产品路径 viewer-only；标准 HU consumer 由 synthetic classic CT 覆盖；未重跑整卷 AI inference。测试始终读原始 `肺癌/`，不读 `tools/declare_rider_hu.py` 生成的 HU-declared 副本，故该副本不改变本行计数 |
+| `SKIP_REAL_DATA=1` local subset | **843 PASS / 0 FAIL** | 2026-08-28 本机实测；合成 DICOM、synthetic event、pure compute 与本地 artifact guard |
 | Fresh local clone | **该 snapshot 未运行** | 不把旧 clean-clone 计数当作该 snapshot 的证据 |
 | Ruff | **PASS** | 2026-08-27 本机执行 `ruff check .`，exit 0 |
 | Pre-commit snapshot coverage | **未运行** | 新增 geometry/safety 代码后不沿用旧 denominator 或 module percentages |

@@ -2652,6 +2652,192 @@ def test_public_wording_gate():
               f"带限定的同义改写被正确放行（门不过严）：{_k}")
 
 
+def test_markdown_emphasis_renders():
+    """公开 Markdown 的 `**强调**` 必须真的渲染成粗体，而不是原样吐出 `**`。
+
+    由来：README 中文版与中文说明书里共 **16 处**加粗在 GitHub 上是坏的，肉眼可见——
+    根因是 CommonMark 的 flanking 规则。闭合定界符紧跟在全角标点之后（`**非临床器械：**无`）
+    既不能闭合、又因后接汉字而被判成开启；开启定界符紧接全角引号（`**「配准」**`）同理。
+    两者都退化成孤立定界符，整段加粗失效。同一轮还查出一处 `orientation****.`——那是
+    插入方位限定时留下的残留，四星把两层强调套在一起，加粗范围远超本意。
+
+    判定按 CommonMark 0.30 的 left/right-flanking 加定界符配对**自行实现**：
+    `markdown-it-py` 不是产品依赖，不能进数据无关子集。该实现已与它在全仓库逐处对账
+    一致（两份问题文档 12 / 20 处逐一吻合，其余文档同为 0），修复后双方均归零。
+    """
+    print("[Markdown 强调渲染门]")
+    import re
+    import unicodedata
+
+    _PCAT = {"Pc", "Pd", "Pe", "Pf", "Pi", "Po", "Ps"}          # CommonMark 0.30 的标点类别
+    _ASCII_P = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+    _NEWBLK = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s|>|\||#{1,6}\s)")
+
+    def _punct(ch):
+        return ch is not None and (ch in _ASCII_P or unicodedata.category(ch) in _PCAT)
+
+    def _space(ch):
+        return ch is None or ch.isspace()
+
+    def _blocks(src):
+        """切块：强调不跨块。列表项 / 表格行 / 标题各自成块；连续 `>` 行合为一块。"""
+        out, buf, start, fence, prev_q = [], [], 1, False, False
+        def flush(_s=lambda: None):
+            nonlocal buf
+            if buf:
+                out.append((start, "\n".join(buf)))
+                buf = []
+        for i, line in enumerate(src.split("\n"), 1):
+            if line.lstrip().startswith("```"):
+                fence = not fence
+                flush(); prev_q = False
+                continue
+            if fence:
+                continue
+            if not line.strip():
+                flush(); prev_q = False
+                continue
+            quote = line.lstrip().startswith(">")
+            if _NEWBLK.match(line) and not (quote and prev_q):
+                flush(); start = i
+            elif not buf:
+                start = i
+            buf.append(line)
+            prev_q = quote
+        flush()
+        return out
+
+    def unmatched_strong(src):
+        """返回会以字面 `**` 漏进渲染结果的定界符 [(行号, 上下文)]。"""
+        hits = []
+        for start, blk in _blocks(src):
+            inside = set()
+            for cm in re.finditer(r"`[^`\n]*`", blk):      # 行内 code 里的 ** 是字面量
+                inside.update(range(cm.start(), cm.end()))
+            stack = []
+            for dm in re.finditer(r"(?<!\*)\*\*(?!\*)", blk):
+                if dm.start() in inside:
+                    continue
+                prev = blk[dm.start() - 1] if dm.start() else None
+                nxt = blk[dm.end()] if dm.end() < len(blk) else None
+                # 相邻字符取原文：cmark 判 flanking 用的就是源码里真实的前后字符
+                op = not _space(nxt) and (not _punct(nxt) or _space(prev) or _punct(prev))
+                cl = not _space(prev) and (not _punct(prev) or _space(nxt) or _punct(nxt))
+                if cl and stack:
+                    stack.pop()
+                elif op:
+                    stack.append(dm.start())
+                else:
+                    hits.append(start + blk.count("\n", 0, dm.start()))
+            hits.extend(start + blk.count("\n", 0, p) for p in stack)
+        lines = src.split("\n")
+        return [(ln, lines[ln - 1].strip()[:90]) for ln in sorted(hits)]
+
+    # —— ① 门本身承重：已知坏样本必须被抓到 ——
+    known_bad = {
+        "闭合定界符紧跟全角冒号": "- **非临床器械：**无监管认证、临床验证档案。",
+        "开启定界符紧接全角引号": "单击右侧面板顶部的**「加载 DICOM 目录」**按钮，选择目录。",
+        "插入残留的四星": "which also **exercised the pipeline **on RAS input, never on LPS****. Tail.",
+        "跨列表项的孤立定界符": "- **甲：**乙丙丁。\n- **戊：**己庚辛。",
+    }
+    for label, bad in known_bad.items():
+        check(bool(unmatched_strong(bad)), f"门抓得住已知坏样本：{label}")
+
+    # —— ② 门不过严：合法写法一律放行 ——
+    known_good = {
+        "全角标点在强调之外": "- **非临床器械**：无监管认证、临床验证档案。",
+        "引号在强调之外": "单击「**加载 DICOM 目录**」按钮，选择目录。",
+        "强调跨行（同一段落内合法）": "证据 **zero\ntimes** 出现。",
+        "行内 code 内的星号是字面量": "见 `a ** b` 与 `**kwargs`，非强调。",
+        "围栏代码块内的星号": "```\n**not emphasis**\n```",
+        "强调紧邻全角括号（可正常闭合）": "各器官的**体积与均值**（按体积降序）如下。",
+        "连续引用行合为一块": "> **合并后的**差异；它们**没有单独隔离\n> 出这一个变量**，故如此写。",
+        "表格行内的强调": "| 项 | **929 PASS / 0 FAIL** | 说明 |",
+    }
+    for label, good in known_good.items():
+        hit = unmatched_strong(good)
+        check(not hit, f"门不过严，放行合法写法：{label}（误报 {hit}）")
+
+    # —— ③ 全部公开 Markdown 必须干净 ——
+    docs = ["README.md", "README.zh-CN.md", "CHANGELOG.md", "THIRD_PARTY_NOTICES.md",
+            "docs/technical_report.md", "docs/project_report_zh.md", "docs/preprint_recon.md",
+            "docs/ARCHITECTURE.md", "docs/spacing_contract.md",
+            "docs/manual_en.md", "docs/manual_zh.md", "experiments/README.md"]
+    scanned, broken = 0, []
+    for rel in docs:
+        fp = os.path.join(_ROOT, rel)
+        if not os.path.exists(fp):
+            continue
+        scanned += 1
+        for ln, ctx in unmatched_strong(open(fp, encoding="utf-8").read()):
+            broken.append(f"{rel}:{ln} {ctx}")
+    check(scanned == len(docs), f"扫到全部 {len(docs)} 份公开文档（实得 {scanned}）")
+    check(not broken,
+          f"公开 Markdown 无破损强调（{scanned} 份；违规 {len(broken)} 处："
+          f"{broken[:3] if broken else '无'}）")
+
+
+def test_readme_self_attestation():
+    """`docs/project_report_zh.md` 公布的 README diff SHA-256 必须与现算一致。
+
+    该 hash 是全项目**唯一的密码学自证点**：文档邀请读者自己跑一条命令复算。它曾经失效过
+    一次——README 改了而 hash 没重算，于是文档请读者执行的命令给出的是另一个值。当时的
+    结论是「目前没有任何断言在 README 改动时强制重算」，这里把它补上。
+
+    刻意不自己另立一套算法：baseline 与命令都**从文档正文里解析出来**，再用同一个
+    baseline 现算 diff 的 SHA-256。这样文档改了命令而没改实现（或反之）同样会被抓到。
+
+    仅进全套：需要完整 git 历史，而 CI 的 `actions/checkout@v4` 是浅克隆，baseline
+    object 在那里并不存在。
+    """
+    print("[README 自证点]")
+    import hashlib
+    import re
+    import subprocess
+
+    doc = os.path.join(_ROOT, "docs", "project_report_zh.md")
+    text = open(doc, encoding="utf-8").read()
+
+    hashes = set(re.findall(r"\b[0-9a-f]{64}\b", text))
+    check(len(hashes) == 1, f"文档中恰有一个 64 位摘要（实得 {len(hashes)}：{sorted(hashes)}）")
+    if len(hashes) != 1:
+        return
+    documented = hashes.pop()
+
+    cmds = [c for c in re.findall(r"`([^`]+)`", text) if "shasum -a 256" in c]
+    check(len(cmds) == 1, f"文档中恰有一条复算命令（实得 {len(cmds)}）")
+    if len(cmds) != 1:
+        return
+    cmd = cmds[0]
+
+    base = re.search(r"\b[0-9a-f]{40}\b", cmd)
+    check(base is not None, f"复算命令里带完整 baseline SHA（命令：{cmd[:80]}）")
+    if base is None:
+        return
+    baseline = base.group(0)
+
+    # 命令的形状必须与下面的现算等价——只要有一侧改了，这里就不再成立
+    for frag in ("--no-ext-diff", "--binary", "README.md", "README.zh-CN.md", "shasum -a 256"):
+        check(frag in cmd, f"复算命令包含 `{frag}`（保证与现算同口径）")
+
+    proc = subprocess.run(
+        ["git", "-c", "color.ui=false", "--no-pager", "diff", "--no-ext-diff", "--binary",
+         baseline, "--", "README.md", "README.zh-CN.md"],
+        cwd=_ROOT, capture_output=True)
+    check(proc.returncode == 0,
+          f"能对 baseline {baseline[:7]} 取 diff（git rc={proc.returncode}；"
+          f"{proc.stderr.decode(errors='replace').strip()[:90]}）")
+    if proc.returncode != 0:
+        return
+    check(len(proc.stdout) > 0,
+          f"diff 非空（{len(proc.stdout)} 字节）——为空说明比对的不是预期的两份 README")
+
+    actual = hashlib.sha256(proc.stdout).hexdigest()
+    check(actual == documented,
+          f"文档记载的自证 hash 与现算一致（文档 {documented[:16]}… / 现算 {actual[:16]}…）"
+          + ("" if actual == documented else "；改过 README 就必须重算并更新该行"))
+
+
 def test_recon_pipeline_helpers():
     """重建预处理/上采样纯函数直接单测——合成数组，无 Qt / 真实数据 / 系统矩阵。"""
     print("[重建预处理/上采样纯函数]")
@@ -6667,6 +6853,7 @@ def main_run():
         test_hu_declaration_tool_contract()  # HU 声明工具的差异面白名单与判据 fail-closed：合成 DICOM，无 Qt
         test_hu_declaration_tool_roundtrip()  # HU 声明工具的通过路径与 CLI 分支：合成 CT，无 Qt
         test_public_wording_gate()         # 公开口径语义门：纯文本，无 Qt
+        test_markdown_emphasis_renders()   # Markdown 强调渲染门：纯文本，无 Qt
         test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
         test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据
         test_dl_recon_guard()
@@ -6768,6 +6955,7 @@ def main_run():
         test_hu_declaration_tool_contract()  # HU 声明工具的差异面白名单与判据 fail-closed：合成 DICOM，无 Qt
         test_hu_declaration_tool_roundtrip()  # HU 声明工具的通过路径与 CLI 分支：合成 CT，无 Qt
         test_public_wording_gate()         # 公开口径语义门：纯文本，无 Qt
+        test_markdown_emphasis_renders()   # Markdown 强调渲染门：纯文本，无 Qt
         test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
         test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据
         test_dl_recon_guard()
@@ -6777,6 +6965,8 @@ def main_run():
         test_model_checksums()        # 权重摘要清单与文档一致：纯文本 + 已入库 .onnx
         test_performance_artifact_contract()  # 性能产物 provenance 合约：纯 stdlib + 临时文件
         test_doc_code_consistency()   # 文档与代码一致性：纯文本，无 Qt / 真实数据
+        # 仅全套：需完整 git 历史，CI 浅克隆里没有 baseline object
+        test_readme_self_attestation()  # README diff 自证点：git + 纯 stdlib
     total, passed = len(_CHECKS), sum(_CHECKS)
     # 这一行是计数的权威口径：报测试数请用它，不要数日志里的 PASS 行。
     print(f"\nCHECKS total={total} passed={passed} failed={total - passed}")
