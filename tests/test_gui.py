@@ -5643,6 +5643,10 @@ def test_model_card():
         check(cjk != en, f"{'英文' if en else '中文'}卡片语言正确（含中文={cjk}）")
         check(('Known limitations' if en else '已知局限') in txt, "  局限段在场")
         check(('spacing' in txt.lower()), "  点名 spacing 未重采样这一硬伤")
+        # 卡片是直接展示给用户的界面，方位这一维必须在它自己身上可见，而不是只写在
+        # 仓库文档里：卡片上每个 Dice 都产自 RAS 路径，产品读的却是 DICOM(LPS)。
+        check(('RAS' in txt) and ('DICOM' in txt),
+              "  点名 Dice 测自 RAS 输入、产品读的是 DICOM（方位维度在卡片上可见）")
         # 样本量必须写明，但不锁死具体数字——多器官验证已从 n=1 扩到 20 例，
         # 早期那条「必须出现 n=1」的断言会在扩样本后反过来阻止如实更新。
         has_n = ('n=1' in txt) or re.search(r'\b\d+ (cases|例)', txt)

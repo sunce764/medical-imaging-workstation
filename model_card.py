@@ -349,12 +349,24 @@ def build_model_card(is_english=False):
         limit2_en = ("<b>2. The multi-organ figure is n=1.</b> One case cannot support a "
                      "general claim.<br>")
 
+    # 【方位维度必须在卡片上出现】上面每一个 Dice 都产自 experiments 的 RAS 输入路径，
+    # 而产品从 DICOM 读入时面内两轴与模型相反。2026-08-27 之前不翻转，成对器官标签整体
+    # 互换（实测肺叶五标签 Dice 全 0.000、肝 0.181）；修复后有回归测试，但上列数字并未
+    # 在产品自己的 DICOM 路径上重测。卡片是直接展示给用户的，这条不能只写在仓库文档里。
+    axis_en = ("<b>3. These Dice figures were measured on RAS input.</b> The product reads DICOM, "
+               "whose two in-plane axes run opposite to the model's. Volumes are flipped as a pair "
+               "before inference (corrected 2026-08-27, covered by a regression test), but the "
+               "numbers above come from the experiments' RAS path and have not been re-measured on "
+               "the product's own path.<br>")
+    axis_zh = ("<b>3. 上列 Dice 测自 RAS 方位的输入。</b>产品从 DICOM 读入，其面内两轴与模型相反；"
+               "推理前后已成对翻转（2026-08-27 修正，有回归测试覆盖），但上述数字来自 experiments "
+               "的 RAS 路径，并未在产品自己的 DICOM 路径上重测。<br>")
     L.append(
-        spacing_en + limit2_en +
-        "<b>3. Not a medical device.</b> Educational and research use only; never for diagnosis."
+        spacing_en + limit2_en + axis_en +
+        "<b>4. Not a medical device.</b> Educational and research use only; never for diagnosis."
         if en else
-        spacing_zh + limit2_zh +
-        "<b>3. 非医疗器械。</b>仅供教学与科研，绝不可用于诊断。")
+        spacing_zh + limit2_zh + axis_zh +
+        "<b>4. 非医疗器械。</b>仅供教学与科研，绝不可用于诊断。")
     return "".join(L)
 
 

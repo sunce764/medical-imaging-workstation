@@ -51,7 +51,7 @@ Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开
 |:---:|:---:|
 | ![轴位分割](docs/img/gui_axial_segmentation.png) | ![三平面 MPR](docs/img/gui_mpr_triplanar.png) |
 
-**每一项定量都附带逐体素置信度。** 每个器官行给出模型的 softmax 最大类概率及其 5% 分位——低分位才是关键，因为误差集中在边界。最大类概率低于 0.9 的条目会被标出——这一次运行里恰好有一个：前列腺 `conf 0.82`，可在上方的三平面图中看到。在面板能列出的那些行里，胆囊（`conf 0.91 / p5 0.59`）的 5% 分位最低：它的均值很稳，最没把握的那些体素却不稳，而它恰好也是 spacing 消融独立测出的最脆弱结构。
+**每一项定量都附带逐体素置信度。** 每个器官行给出模型的 softmax 最大类概率及其 5% 分位——低分位才是关键，因为误差集中在边界。最大类概率低于 0.9 的条目会被标出。本轮有两个：前列腺 `0.82` 与甲状腺 `0.37`——后者只有**三个体素**、0.01 mL，那正是一个模型几乎拒绝预测的标签被标出时的样子。在面板能列出的那些行里，胆囊（`conf 0.91 / p5 0.59`）的 5% 分位最低：它的均值很稳，最没把握的那些体素却不稳，而它恰好也是 spacing 消融独立测出的最脆弱结构。
 
 ![AI 分割与逐体素置信度](docs/img/gui_confidence.png)
 
@@ -144,12 +144,12 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 10 个无 Qt 计算模块**；完整的 19-module packaging inventory 以 `pyproject.toml` 为准。
-- **2026-08-27 的一次本机实测**，全套（本地 RIDER 在场）为 **927 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **827 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`；该历史 CI 不覆盖其后的任何 commit。后续远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力，其 run/headSha 应记入仓库外 evidence 或交付摘要，不再制造第二个文档 commit。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
+- **2026-08-27 的一次本机实测**，全套（本地 RIDER 在场）为 **929 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **829 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`；该历史 CI 不覆盖其后的任何 commit。后续远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力，其 run/headSha 应记入仓库外 evidence 或交付摘要，不再制造第二个文档 commit。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
-python tests/test_gui.py                     # 2026-08-27 本机实测：全套 927 项；本地 RIDER 在场
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-27 本机实测：数据无关子集 827 项
+python tests/test_gui.py                     # 2026-08-27 本机实测：全套 929 项；本地 RIDER 在场
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-27 本机实测：数据无关子集 829 项
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```
