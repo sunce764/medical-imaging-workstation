@@ -6,23 +6,47 @@
 
 <p align="center">
   <a href="https://github.com/sunce764/medical-imaging-workstation/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/sunce764/medical-imaging-workstation/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/sunce764/medical-imaging-workstation/tree/v1.1.0"><img alt="版本 v1.1.0" src="https://img.shields.io/badge/version-v1.1.0-2563eb"></a>
+  <a href="https://github.com/sunce764/medical-imaging-workstation/actions/runs/33156906344"><img alt="v1.1.0 exact-SHA CI：878 PASS，coverage 87%" src="https://img.shields.io/badge/v1.1.0_CI-878_PASS_%C2%B7_87%25_coverage-16a34a"></a>
   <img alt="Python 3.10" src="https://img.shields.io/badge/Python-3.10-3776AB?logo=python&amp;logoColor=white">
   <img alt="PySide6 / Qt6" src="https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-41CD52?logo=qt&amp;logoColor=white">
   <a href="LICENSE"><img alt="专有许可" src="https://img.shields.io/badge/License-Proprietary-lightgrey"></a>
   <img alt="仅供教学科研" src="https://img.shields.io/badge/⚠️-教学%2F科研·非医疗器械-critical">
 </p>
 
+<p align="center">
+  <a href="#项目快照">项目快照</a> ·
+  <a href="#界面">界面</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#量化证据">量化证据</a> ·
+  <a href="#文档">文档</a>
+</p>
+
 **三维多器官 CT 分割与断层重建**，封装在一个临床式 DICOM 工作站里（PySide6/Qt6，CPU-only）。
 
 - **按第一性原理自行实现**——基于中心切片定理的直接傅里叶重建、解析 Shepp-Logan 模体，以及 DMR / ART / SIRT / ASD-POCS 迭代求解器。
 - **两个网络从零训练**——用于稀疏视角重建的 1.9M 残差 U-Net，与用于肺叶分割的 0.35M 3D U-Net。
-- **随软件发布的分割模型来路无任何文档**——其标签方案由本项目实测识别，并在公开真值上验证：21 器官 20 例、肺叶 57 例，抽自一个 297 例的公开数据集。
-- **四项量化研究、两项多例验证，以及一次促成产品改动的消融**——重建类研究直接 `import recon`（工作站的数值模块）；被测求解器（含 ASD-POCS）全部可在 GUI 的重建实验室里选用。分割类研究跑的是同一个 `organs.onnx`，或复现 `ai_engine` 的管线、或直接调用它——但其中大部分测量早于 `2a50e37` 对末窗处理的修改，故那几行属历史（修复前）证据，不是当前 shipped path 的逐步等价。哪个 arm 落在哪一侧按产物逐条记载，不用一句话总括（见「量化证据」一节）。
+- **用测量恢复一份未文档化的 segmentation contract**——多器官 mapping 在 20 例上评估；另一项五肺叶分析覆盖 57 例，样本均来自同一个 297 例公开数据集。
+- **四条量化研究与产品代码相连**——重建直接调用工作站数值模块；分割证据逐 producer 追溯：部分研究复现 shipped teacher 的 inference contract，部分在运行时调用它，而 Study IV student 是独立模型。早于末窗修复的证据逐产物标作 historical，不包装成当前路径的等价测量（见「量化证据」）。
 
 > [!WARNING]
 > **仅供教学与科研。** 本软件不是经认证的医疗器械，不得用于临床诊断。AI 分割和器官定量均为自动估计，不构成临床结论。
 
-## 只看一节的话，看这三个结果
+## 项目快照
+
+| 维度 | 当前状态 |
+|---|---|
+| **产品** | 已固化作品集版本 [`v1.1.0`](https://github.com/sunce764/medical-imaging-workstation/tree/v1.1.0)；19 个顶层产品模块，支持 classic single-frame CT，CPU-only |
+| **研究** | 四条量化主线，覆盖 reconstruction、segmentation provenance、learned reconstruction 与 3-D student compression |
+| **验证** | `v1.1.0` exact-SHA CI：**878 PASS / 0 FAIL**、coverage **87%**、Ruff PASS；2026-08-28 本机：full **1008/0**、数据无关层 **897/0** |
+| **证据边界** | measured、inferred、historical、unmeasured 分开表达；未分发权重和未归档单机数字均明确点名 |
+| **状态** | 工程/作品集版本已冻结；软著登记仍在等待；不作临床或论文完成声明 |
+
+| AI 多器官分割 | 三平面 MPR + 十字线联动 |
+|:---:|:---:|
+| ![轴位分割](docs/img/gui_axial_segmentation.png) | ![三平面 MPR](docs/img/gui_mpr_triplanar.png) |
+
+## 定义这个项目的三个故事
 
 **一个 model–inference-path interaction。** 同一份学生权重仅改变张量 extent 就得到 **0.490 或 0.746** Dice：fixed-size / no-augmentation 训练与 zero-padding、`InstanceNorm3d` 相互作用，后者会随 padding extent 改变逐样本空间统计量。放大张量抹掉了 **99.3%** 的预测前景（225,374 → 1,529 体素）。五条针对性对照把机制指向 normalization sensitivity，但没有做 normalization replacement，因此既不能认定唯一因果，也不能写成“评估坏、模型没问题”。
 
@@ -32,7 +56,16 @@
 
 Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开去标识研究 CT · **仓库不提交 PHI**。
 
-### 作为算法作品集来看？先看这四个文件
+## 按目标选择审阅路径
+
+| 想评估什么 | 从这里开始 | 再看 |
+|---|---|---|
+| **产品与交互设计** | [界面](#界面)与[核心能力](#核心能力) | [中文说明书](docs/manual_zh.md) · [Architecture](docs/ARCHITECTURE.md) |
+| **算法与科研判断** | [三个故事](#定义这个项目的三个故事)与[量化证据](#量化证据) | [Technical report](docs/technical_report.md) · [Experiments](experiments/README.md) |
+| **工程质量** | [工程与测试](#工程与测试) | [`tests/test_gui.py`](tests/test_gui.py) · [Changelog](CHANGELOG.md) |
+| **完整中文审计** | [项目综合报告](docs/project_report_zh.md) | [中文说明书](docs/manual_zh.md) · [English README](README.md) |
+
+### 核心算法文件
 
 | 文件 | 里面是什么 | 支撑产物 |
 |---|---|---|
@@ -46,10 +79,6 @@ Python 3.10 · PySide6/Qt6 · **CPU-only，无需 GPU** · 合成模体与公开
 上面多数数字可由已提交的 CSV 重算——但并非全部，故把例外逐个点名而非一笔带过。参数量来自已入库的两个 `.onnx` 计算图；207/29/61 来自 `seg3d_data.split()` 对 manifest 的划分。另有三个成本数字属于**单机实测但未归档**：研究四的 `8.44 / 9.09 GB`，以及本机 RIDER 序列的 `100s / 8.8GB` → `37s / 3.0GB`。它们是实测而非估计，但 `results/` 里没有任何东西能让读者核验。**披露只集中在本段**——上文出现这些数字的地方并未逐处重复该提示。
 
 ## 界面
-
-| AI 多器官分割 | 三平面 MPR + 十字线联动 |
-|:---:|:---:|
-| ![轴位分割](docs/img/gui_axial_segmentation.png) | ![三平面 MPR](docs/img/gui_mpr_triplanar.png) |
 
 **每一项定量都附带逐体素置信度。** 每个器官行给出模型的 softmax 最大类概率及其 5% 分位——低分位才是关键，因为误差集中在边界。最大类概率低于 0.9 的条目会被标出。本轮有两个：前列腺 `0.82` 与甲状腺 `0.37`——后者只有**三个体素**、0.01 mL，那正是一个模型几乎拒绝预测的标签被标出时的样子。在面板能列出的那些行里，胆囊（`conf 0.91 / p5 0.59`）的 5% 分位最低：它的均值很稳，最没把握的那些体素却不稳。spacing 消融独立测出的结果与之呼应：胆囊属于退化最快的那几个结构之一（1.5→3.0mm 跌 0.272），但并非跌幅最大的——左肾上腺跌 0.346。
 
@@ -178,7 +207,7 @@ coverage 现由上面那个 exact-SHA run 直接发布，不再沿用旧数字�
 
 - **非临床器械**：无监管认证、临床验证档案、审计追踪或访问控制。
 - **仅做显示层脱敏**：屏幕与导出文件名会隐藏 PHI，但不会清洗底层 DICOM 标签和烧录文字。
-- **HU 单位必须有证据，不能只看 slope/intercept：**每一保留层都必须有 explicit `RescaleType=HU`，或满足 classic CT 的 `ORIGINAL`、非 `LOCALIZER`、非 multi-energy 标准保证，才开放 HU consumer。缺 explicit HU 的 `DERIVED`、未知/非 HU 单位、mixed-unit series 与 multi-energy CT 均只作 raw-value viewer-only。本地 RIDER 序列正属此列——它是 `DERIVED\SECONDARY\PROCESSED` 且无 `RescaleType`，产品因此正确地拒绝把它的数值称作 HU。`tools/declare_rider_hu.py` 从**数据侧**而非放宽闸门来解决：先用物理锚点（空气峰、软组织峰、值域）证明数值确为标准 HU，再写出一份派生副本，其**唯一新增的 tag** 是 explicit `RescaleType=HU`。`ImageType` 有意保持 `DERIVED`——这是该序列的事实，篡改它才是真正的造假；`PixelData` 逐字节原样复制。注意副本会使该序列满足 AI 条件，加载后会自动开始推理。
+- **HU 单位必须有证据，不能只看 slope/intercept**：每一保留层都必须有 explicit `RescaleType=HU`，或满足 classic CT 的 `ORIGINAL`、非 `LOCALIZER`、非 multi-energy 标准保证，才开放 HU consumer。缺 explicit HU 的 `DERIVED`、未知/非 HU 单位、mixed-unit series 与 multi-energy CT 均只作 raw-value viewer-only。本地 RIDER 序列正属此列——它是 `DERIVED\SECONDARY\PROCESSED` 且无 `RescaleType`，产品因此正确地拒绝把它的数值称作 HU。`tools/declare_rider_hu.py` 从**数据侧**而非放宽闸门来解决：先用物理锚点（空气峰、软组织峰、值域）证明数值确为标准 HU，再写出一份派生副本，其**唯一新增的 tag** 是 explicit `RescaleType=HU`。`ImageType` 有意保持 `DERIVED`——这是该序列的事实，篡改它才是真正的造假；`PixelData` 逐字节原样复制。注意副本会使该序列满足 AI 条件，加载后会自动开始推理。
 - **换序列与 mask 状态 fail-safe**：新序列成功接管后才清旧 HU probe，并用新单位重建 HUD；加载失败则保留旧 readout。AI-pending 全零 placeholder 不会被保存成假 cache hit；只有经确认的全局清空才持久化带 provenance 的 empty mask、作废旧 AI callback，并可在保存前 Ctrl+Z。逐体素 eraser 最终擦成全零尚不归类为 explicit global clear。
 - **AI 泛化仍有未测部分**：肺叶验证 57 例、21 器官验证 20 例，样本量仍小，且全部来自同一个公开数据集（1.5mm 各向同性）、**全部以模型的 RAS 面内约定而非产品 DICOM 的 LPS 喂入**，故度量的是模型而非产品路径；其他扫描协议与设备未经测试，器官间可靠性的差异远大于总体数字（肝 0.98 vs 前列腺 0.55）。spacing 重采样已接入（见证据表），但更细一侧仍属推断而非实测，且扫描范围过大时会被跳过。
 - **重建限于教学范围**：DMR / ART / ASD-POCS 矩阵重建受最小二乘成本限制，实用上限约 64×64。研究 III 使用无噪声合成投影，不能证明低剂量临床表现。

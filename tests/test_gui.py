@@ -2803,6 +2803,11 @@ def test_markdown_emphasis_renders():
                 nxt = blk[dm.end()] if dm.end() < len(blk) else None
                 op = not _space(nxt) and (not _punct(nxt) or _space(prev) or _punct(prev))
                 cl = not _space(prev) and (not _punct(prev) or _space(nxt) or _punct(nxt))
+                # `**标题：**正文` 的第二个定界符不能闭合，却能作为新 opener；若后文还有
+                # 合法强调，旧实现会把这些 opener/closer 错位配平，最终星号数仍成对而假绿。
+                # 在已有 opener 时遇到「标点 + ** + 非空白」的只开不闭定界符，必须立即记错。
+                if stack and op and not cl and _punct(prev) and not _space(nxt):
+                    hits.append(start + blk.count("\n", 0, dm.start()))
                 if cl and stack:
                     stack.pop()
                 elif op:
@@ -2817,6 +2822,10 @@ def test_markdown_emphasis_renders():
     # —— ① 门本身承重：已知坏样本必须被抓到 ——
     known_bad = {
         "闭合定界符紧跟全角冒号": "- **非临床器械：**无监管认证、临床验证档案。",
+        "坏闭合被后续合法强调吸收": (
+            "- **HU 单位必须有证据：**每一层都要验证；工具从**数据侧**解决，"
+            "其**唯一新增的 tag** 是 RescaleType。"
+        ),
         "开启定界符紧接全角引号": "单击右侧面板顶部的**「加载 DICOM 目录」**按钮，选择目录。",
         "插入残留的四星": "which also **exercised the pipeline **on RAS input, never on LPS****. Tail.",
         "跨列表项的孤立定界符": "- **甲：**乙丙丁。\n- **戊：**己庚辛。",

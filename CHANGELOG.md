@@ -2,7 +2,7 @@
 
 This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
-**Version 1.1.0** (annotated tag `v1.1.0`, 2026-08-28) freezes the state described by the newest entry below. It is a local freeze: the tag records what was measured on this machine, not a remote-CI result, and says nothing about the copyright registration, which remains under review. The earlier `v1.0-copyright` tag marks the separate snapshot submitted for that registration.
+**Version 1.1.0** (annotated tag `v1.1.0`, 2026-08-28) freezes the state described by the newest entry below. Its measurements began as a local freeze and are now separately backed by the exact-tag CI recorded in the next section; neither fact says anything about the copyright registration, which remains under review. The earlier `v1.0-copyright` tag marks the separate snapshot submitted for that registration.
 
 ## The tagged release is the first one remote CI actually covers (2026-08-28)
 
@@ -71,6 +71,12 @@ injections, zero misses, zero false positives. The one apparent false positive t
 the *oracle's* error, not the detector's: `MarkdownIt("commonmark")` does not parse tables, so it
 paired emphasis across table rows. GitHub, which does parse them, leaks the delimiters exactly
 where the detector said it would.
+
+**A later GitHub-renderer check found a third failure shape that those mutations never generated.**
+In `**HU …：**每一层`, the punctuation-adjacent delimiter cannot close but can open; later valid
+strong spans can then absorb and balance it, leaving no unmatched `**` even though GitHub bolds a
+long unintended range. A target-shaped known-bad first made the gate fail. The detector now reports
+that opener immediately; affected punctuation in the README and manual now sits outside emphasis.
 
 **The project's only cryptographic self-attestation now has a gate.** `docs/project_report_zh.md`
 invites the reader to recompute a SHA-256 over the README diff against a fixed baseline. That value

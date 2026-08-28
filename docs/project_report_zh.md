@@ -1,14 +1,21 @@
 # 医学影像工作站软件项目综合报告
 
 **项目名称：** 医学影像工作站软件（Medical Imaging Workstation + Reconstruction Lab）<br>
-**报告日期：** 2026-08-26<br>
+**报告日期：** 2026-08-28<br>
 **报告用途：** 研究生申请与算法作品集审阅、项目阶段复盘、后续研究决策<br>
 **软件定位：** 教学 / 科研工具，非医疗器械，不得用于临床诊断<br>
-**审计基线：** 固定 Git baseline `2e9b7005b33aed9012b7707ba89b4d0d26bb315d`。中英文 README 相对该 baseline 的 unified diff SHA-256 为 `fcc204ce95d3e476fba4c8b6e2a99d2bbedbd9dc7773df9e1a952e2d872db09c`；该 hash 只绑定两份 README 的当前内容，不声称它们已 push 或经远端 CI 覆盖。**该值曾一度失效**：上一版发布的是 `08825d60…`，而其后又有一次提交改动了两份 README 却未重算，于是本文件第 11 行邀请读者执行的复算命令会给出不同的值——全项目唯一的密码学自证点当时是失败的。此处已重算并核验通过，但目前没有任何断言在 README 改动时强制重算，见 §10 的建议。
+**审计基线：** 固定 Git baseline `2e9b7005b33aed9012b7707ba89b4d0d26bb315d`。中英文 README 相对该 baseline 的 unified diff SHA-256 为 `fa916a5242085fa7a342ae90a2e83457cf1746abbc67504eafa29425161ba78e`；该 hash 只绑定两份 README 的当前内容，不声称它们已 push 或经远端 CI 覆盖。回归套件会解析本段的 baseline 与 canonical command 后独立复算，README 变化而本行未同步时即失败。
 
 > 本报告刻意区分四类信息：**本次实测**、**可由仓库产物复算**、**历史实测但未归档**、**推断或未测项**。数值不因叙事需要而跨越这些边界。
 
 README diff 的 canonical 复算命令为：`git -c color.ui=false --no-pager diff --no-ext-diff --binary 2e9b7005b33aed9012b7707ba89b4d0d26bb315d -- README.md README.zh-CN.md | shasum -a 256`。须在包含上述 README 内容的 checkout 上执行；hash 用于确认相对固定 baseline 的同一 patch，不替代 patch 内容本身。**任何后续 README 修改都必须重新计算并更新第 7 行**——该规则此前被违反过一次（见第 7 行）。
+
+<details>
+<summary>为什么这个 hash 需要自动门控</summary>
+
+它曾在 README 后续修改后未同步更新：文档给出的值与 canonical command 输出不同，但普通链接与内容检查仍然全绿。现在测试直接解析并重算，避免把失效的自证点继续公开。
+
+</details>
 
 ---
 
@@ -52,7 +59,7 @@ README diff 的 canonical 复算命令为：`git -c color.ui=false --no-pager di
 
 | 事项 | 当前状态 | 证据与说明 |
 |---|---|---|
-| 产品代码 | 版本标记 `1.1.0`，对应本地 annotated tag `v1.1.0` | [`pyproject.toml`](../pyproject.toml)；该 tag 是否已推送、是否被远端 CI 覆盖，须另按 exact headSha 核实，不由本行担保 |
+| 产品代码 | 版本标记 `1.1.0`；remote annotated tag `v1.1.0` 指向 `5c5e80741e7290ca8eee430e82f29ee179d85fa0` | [`pyproject.toml`](../pyproject.toml)；截至 2026-08-28，[run 33156906344](https://github.com/sunce764/medical-imaging-workstation/actions/runs/33156906344) 的 `headSha` 与该 tag commit 逐字符一致 |
 | GitHub 仓库 | **PUBLIC** | 本报告日通过 GitHub CLI 实查；[repository](https://github.com/sunce764/medical-imaging-workstation) 为 review-only proprietary license |
 | 软著登记 | 据项目方提交记录，截至 2026-08-25 已提交，两位著作权人尚未收到正式受理通知；不是“登记成功” | [`LICENSE`](../LICENSE) 是项目方状态声明，不是 CPCC 官方受理证明 |
 | 软著 V1.0 快照 | 仓库可验证快照形成于 2026-07-08，source builder 列出 13 个产品模块 | 据项目方记录，该快照用于登记提交；`experiments/` 未包含在提交的源码或说明书材料中 |
@@ -508,7 +515,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 |---|---|
 | 作品集展示 | **强**：功能、代码、结果、失败案例与审计链完整 |
 | 教学科研工具 | **可用**：关键流程可运行，边界写明 |
-| 工程可信度 | **较强**：full/subset 本地回归通过（exit 0，计数见 §5.1），且本地计数已按「本地全套 / 本地 `SKIP_REAL_DATA` 子集」分层标注，不与 clean-clone 或远端结果混用。**commit / push / exact-SHA CI 属仓库外的可变交付状态，本报告不固化**——核验时请实时比较 live `main` 与目标 GitHub Actions run 的 `headSha`，两者逐字符一致才算远端门通过。仍然没有 fresh-clone 计数、也未重算 coverage：这两项无论远端状态如何都不由本报告代言。binary packaging 不在该 snapshot 范围 |
+| 工程可信度 | **较强**：2026-08-28 本地 full/subset 均 exit 0（计数见 §5.1）；`v1.1.0` 另有 exact-SHA GitHub Actions clean-clone 结果 878/0、coverage 87% 与 Ruff PASS。本报告所在 candidate 相对 tag 未改变产品运行代码；tag 后差异限于公开文档与文档展示回归门，因此该 run 只证明 tag 中的产品代码，不覆盖 candidate 的文档与回归门变化。binary packaging 不在该 snapshot 范围 |
 | 学术发表准备 | **探索阶段**：已有可写结果，但 venue、研究问题与外部验证尚未锁定 |
 | 临床转化 | **不具备**：缺监管、独立临床验证、数据治理与部署体系 |
 
@@ -532,7 +539,7 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 
 ### 工程冻结与外部等待
 
-1. **commit / push / exact-SHA CI 都属仓库外的可变交付状态，本报告只按 snapshot 标注、不作为当前状态固化**——文中出现的 SHA、run id 与 URL 一律限定为「截至某 snapshot 的历史证据」，不得读作 live `main` 或当前远端门的状态（§7 的审计 baseline 是刻意固定的 diff 基准，与此不同）。把它们**当作当前状态**写死，这正是本节曾经犯过的错。核验方式是实时比较：`git ls-remote origin refs/heads/main` 给出的 live `main`，与目标 GitHub Actions run 的 `headSha`，两者逐字符一致才算远端门通过。自动 `push` trigger 历史上不可靠，故该门只接受 manual `workflow_dispatch` 产生的 run。tag 与 release 仍不在本次范围。
+1. **`v1.1.0` 已形成 remote annotated tag，并由一次 exact-SHA manual CI 覆盖。** 它是当前稳定作品集锚点；`main` 可以继续承载文档整理，但不得把 tag 的 CI 写成 tag 之后 commit 的证据。GitHub Release 尚未创建，是否创建只影响发布呈现，不影响该 tag 的可核验性。
 2. 自动 `push` trigger 根因不再是 P0，不阻塞本地工程冻结，也不主动深挖。
 3. 只有获得新的明确授权才可重开 performance run；届时必须使用已接入的 JSON provenance 合约，并核对 machine、configuration、wall time、process peak 与完整 model hashes。
 4. 继续冻结项目方提交记录所指向的 `docs/*.pdf` 与签章材料；等待 CPCC 期间不重建 V1.0 snapshot，状态变化只更新非冻结 Markdown。

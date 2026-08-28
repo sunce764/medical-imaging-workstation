@@ -6,23 +6,47 @@
 
 <p align="center">
   <a href="https://github.com/sunce764/medical-imaging-workstation/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/sunce764/medical-imaging-workstation/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/sunce764/medical-imaging-workstation/tree/v1.1.0"><img alt="Version v1.1.0" src="https://img.shields.io/badge/version-v1.1.0-2563eb"></a>
+  <a href="https://github.com/sunce764/medical-imaging-workstation/actions/runs/33156906344"><img alt="v1.1.0 exact-SHA CI: 878 PASS, 87% coverage" src="https://img.shields.io/badge/v1.1.0_CI-878_PASS_%C2%B7_87%25_coverage-16a34a"></a>
   <img alt="Python 3.10" src="https://img.shields.io/badge/Python-3.10-3776AB?logo=python&amp;logoColor=white">
   <img alt="PySide6 / Qt6" src="https://img.shields.io/badge/GUI-PySide6%20%2F%20Qt6-41CD52?logo=qt&amp;logoColor=white">
   <a href="LICENSE"><img alt="Proprietary license" src="https://img.shields.io/badge/License-Proprietary-lightgrey"></a>
   <img alt="Teaching and research only" src="https://img.shields.io/badge/⚠️-teaching%2Fresearch%20·%20not%20a%20medical%20device-critical">
 </p>
 
+<p align="center">
+  <a href="#project-snapshot">Snapshot</a> ·
+  <a href="#interface">Interface</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#measured-evidence">Evidence</a> ·
+  <a href="#documentation">Documentation</a>
+</p>
+
 **3D multi-organ CT segmentation and tomographic reconstruction**, wrapped in a clinical-style DICOM workstation (PySide6/Qt6, CPU-only).
 
 - **Written from first principles** — direct Fourier reconstruction via the central-slice theorem, the analytic Shepp-Logan phantom, and the DMR / ART / SIRT / ASD-POCS iterative solvers.
 - **Two networks trained from scratch** — a 1.9 M residual U-Net for sparse-view reconstruction, and a 0.35 M 3D U-Net for lung lobes.
-- **A shipped model that arrived with no documented origin** — its **label scheme** identified by measurement, then validated against public ground truth on 20- and 57-case samples drawn from a 297-case public dataset.
-- **Four quantitative studies, two multi-case validations, and an ablation that changed the product** — the reconstruction studies directly `import recon`, the workstation's numerical module; every studied solver, ASD-POCS included, is selectable in the GUI's reconstruction lab. The segmentation studies run the very same `organs.onnx`, either by replicating `ai_engine`'s pipeline or by calling it — but most of that evidence was measured before `2a50e37` changed the product's last-window handling, so those rows are historical pre-fix evidence rather than a step-for-step equivalent of the shipped path. Which arm sits on which side is recorded per artifact, not asserted in one line (§Measured evidence).
+- **An undocumented segmentation contract recovered by measurement** — the multi-organ mapping was evaluated on 20 cases; a separate five-lobe analysis covered 57 cases, all drawn from the same 297-case public dataset.
+- **Four quantitative studies tied to product code** — reconstruction directly imports the workstation's numerical module; segmentation evidence is traced per producer—some studies replicate the shipped teacher's inference contract, others call its runtime, and Study IV's student is a separate model. Evidence predating the last-window fix is labelled historical per artifact rather than presented as current-path equivalence (§Measured evidence).
 
 > [!WARNING]
 > **Teaching and research only.** This software is not a certified medical device and must not be used for clinical diagnosis. AI segmentation and organ measurements are automated estimates, not clinical findings.
 
-## Three results, if you only read one section
+## Project snapshot
+
+| Surface | Current state |
+|---|---|
+| **Product** | Tagged portfolio version [`v1.1.0`](https://github.com/sunce764/medical-imaging-workstation/tree/v1.1.0); 19 top-level product modules, classic single-frame CT scope, CPU-only |
+| **Research** | Four quantitative studies spanning reconstruction, segmentation provenance, learned reconstruction and 3-D student compression |
+| **Verification** | `v1.1.0` exact-SHA CI: **878 PASS / 0 FAIL**, **87% coverage**, Ruff PASS; 2026-08-28 local runs: **1008/0** full and **897/0** data-independent |
+| **Evidence boundary** | Measured, inferred, historical and unmeasured claims are separated; undistributed weights and unarchived single-machine measurements are named explicitly |
+| **Status** | Engineering/portfolio version frozen; copyright registration remains pending; no clinical or publication claim |
+
+| AI multi-organ segmentation | Tri-planar MPR with linked cross-hairs |
+|:---:|:---:|
+| ![Axial segmentation](docs/img/gui_axial_segmentation.png) | ![Tri-planar MPR](docs/img/gui_mpr_triplanar.png) |
+
+## Three stories that define the project
 
 **A model–inference-path interaction.** The same student weights score **0.490 or 0.746** Dice when only the tensor extent changes: fixed-size/no-augmentation training meets zero-padding and `InstanceNorm3d`, whose per-sample spatial statistics change with the padded extent. Enlarging the tensor erased **99.3 %** of predicted foreground (225,374 → 1,529 voxels). Five targeted controls narrow the mechanism toward normalisation sensitivity, but no replacement-normalisation experiment was run, so they do not establish a unique cause or show that the model itself is sound.
 
@@ -32,7 +56,16 @@
 
 Python 3.10 · PySide6/Qt6 · **CPU-only, no GPU** · synthetic phantoms and de-identified public research CTs · **no PHI is committed**.
 
-### Reviewing this as an algorithm portfolio? Start with these four files
+## Choose a review path
+
+| You want to assess | Start here | Continue with |
+|---|---|---|
+| **Product and interaction design** | [Interface](#interface) and [core capabilities](#core-capabilities) | [User manual](docs/manual_en.md) · [Architecture](docs/ARCHITECTURE.md) |
+| **Algorithms and research judgement** | [Three stories](#three-stories-that-define-the-project) and [measured evidence](#measured-evidence) | [Technical report](docs/technical_report.md) · [Experiments](experiments/README.md) |
+| **Engineering quality** | [Engineering and testing](#engineering-and-testing) | [`tests/test_gui.py`](tests/test_gui.py) · [Changelog](CHANGELOG.md) |
+| **Full Chinese audit** | [综合项目报告](docs/project_report_zh.md) | [中文说明书](docs/manual_zh.md) · [中文 README](README.zh-CN.md) |
+
+### Core algorithm files
 
 | File | What it holds | Backing artefacts |
 |---|---|---|
@@ -46,10 +79,6 @@ For a long-form Chinese audit of the product, four studies, evidence levels, rep
 Most figures above are recomputable from the committed CSVs — but not all, so the exceptions are named rather than waved at. Parameter counts come from the two committed `.onnx` graphs; the 207/29/61 split from `seg3d_data.split()` over the manifest. Three cost figures are **single-machine measurements that were never archived**: the `8.44 / 9.09 GB` pair in Study IV, and the `100 s / 8.8 GB` → `37 s / 3.0 GB` pair for the local RIDER series. They were measured, not estimated, but nothing in `results/` lets a reader check them. This paragraph is the single place that discloses it — the figures themselves appear in the sections above without a repeated caveat attached to each one.
 
 ## Interface
-
-| AI multi-organ segmentation | Tri-planar MPR with linked cross-hairs |
-|:---:|:---:|
-| ![Axial segmentation](docs/img/gui_axial_segmentation.png) | ![Tri-planar MPR](docs/img/gui_mpr_triplanar.png) |
 
 **Per-voxel confidence alongside every measurement.** Each organ row carries the model's softmax max-class probability and its 5th percentile — the low percentile is the revealing one, since errors concentrate at boundaries. Entries whose max-class probability falls below 0.9 are flagged. Two are in this run: the prostate (`0.82`) and the thyroid (`0.37`) — the latter is **three voxels**, 0.01 mL, which is what the flag looks like on a label the model has all but declined to predict. Among the rows the panel has room to show, the gallbladder (`conf 0.91 / p5 0.59`) has the lowest 5th percentile: its mean is comfortable while its least-confident voxels are not. The spacing ablation independently puts it among the fastest-degrading structures — a 0.272 Dice drop from 1.5 to 3.0 mm — though not the largest: the left adrenal falls 0.346.
 
