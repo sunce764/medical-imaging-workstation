@@ -144,7 +144,7 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 10 个无 Qt 计算模块**；完整的 19-module packaging inventory 以 `pyproject.toml` 为准。
-- **2026-08-28 的一次本机实测**，全套（本地 RIDER 在场）为 **1008 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **897 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、**coverage 81%**、**Ruff PASS**，`event=workflow_dispatch`；该历史 CI 不覆盖其后的任何 commit。后续远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力，其 run/headSha 应记入仓库外 evidence 或交付摘要，不再制造第二个文档 commit。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
+- **2026-08-28 的一次本机实测**，全套（本地 RIDER 在场）为 **1008 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **897 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone 或 coverage evidence。已固化的那个版本**确有**远端 CI 覆盖：[run `33156906344`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/33156906344) 的 `headSha` 为 `5c5e80741e7290ca8eee430e82f29ee179d85fa0`，与打了 **`v1.1.0`** 标签的 commit 逐字符相同，报告 **878 PASS / 0 FAIL**、**coverage 87%**、**Ruff PASS**，`event=workflow_dispatch`。它比本地子集少 19 项是**构造使然、不是有测试被跳过**：8 项权重摘要核验与 11 项学习式重建检查需要本仓库不分发的产物。其它远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力——这一个覆盖 `v1.1.0`，不覆盖其后任何 commit，**包括记录它的这个文档 commit 本身**。此前的做法是把 run 记在仓库外以回避该递归；此处改为写进来，因为标签不可变，且该递归被明写而非隐去。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
@@ -157,7 +157,7 @@ coverage run tests/test_gui.py && coverage report
 <details>
 <summary><strong>覆盖率详情</strong></summary>
 
-2026-08-26 的这批改动未重算 coverage。截至该 snapshot，上面的最新 exact-SHA 远端 baseline 报告 **81%**；新增 geometry/safety 代码后，其 denominator 与各模块百分比都不能作为当前代码的证据。未来应由新的 exact-SHA run 重新发布 coverage，而不是沿用旧数字。
+coverage 现由上面那个 exact-SHA run 直接发布，不再沿用旧数字：`v1.1.0` 处为 **87%**，分母 4,005 条语句。该 denominator 与各模块百分比只对那一个 commit 成立；其后的任何提交都需要自己的 exact-SHA run，不能复用此数。
 
 </details>
 

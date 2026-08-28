@@ -4,6 +4,30 @@ This file collects the systematic rounds of defect investigation on the **Medica
 
 **Version 1.1.0** (annotated tag `v1.1.0`, 2026-08-28) freezes the state described by the newest entry below. It is a local freeze: the tag records what was measured on this machine, not a remote-CI result, and says nothing about the copyright registration, which remains under review. The earlier `v1.0-copyright` tag marks the separate snapshot submitted for that registration.
 
+## The tagged release is the first one remote CI actually covers (2026-08-28)
+
+`v1.1.0` is tagged at `5c5e80741e7290ca8eee430e82f29ee179d85fa0`, and GitHub Actions run
+`33156906344` carries that exact 40-character `headSha` — not a short-SHA approximation. It reports
+878 PASS / 0 FAIL, 87% coverage over 4,005 statements, and Ruff PASS, with both jobs green under
+`workflow_dispatch` (the repository's `push` trigger still does not fire; every green run to date
+has been dispatched by hand). The previous exact-SHA evidence was `2e9b700` at 520 PASS and 81%
+coverage, and it covered nothing after itself.
+
+**The 19-check shortfall against the local subset's 897 is structural, and it reproduces a number
+measured independently.** A clean clone checked out earlier in the same round ran 848 against a
+local 867 — also 19 — and that gap decomposes into eight weight-checksum checks and eleven
+learned-reconstruction checks that need artifacts the repository does not distribute. Two
+independent measurements agreeing on the same decomposition is stronger than either alone: nothing
+is being silently skipped.
+
+**Recording this in the repository contradicts the practice the README itself had recommended**,
+which was to keep the run and `headSha` out of the tree so that documenting a CI result does not
+create a commit the result cannot cover. That regress is real and does not go away here — the
+commit carrying these very words is not covered by run `33156906344`. What changes the calculus is
+that the evidence now attaches to an immutable tag rather than to a moving branch: `v1.1.0` stays
+verifiable regardless of what documentation is written afterwards. The README now says so
+explicitly instead of leaving the reader to notice.
+
 ## Bold that never rendered, and two gates for claims nothing was checking (2026-08-28)
 
 **Sixteen bold spans on the public pages were broken, and had been for as long as they existed.**

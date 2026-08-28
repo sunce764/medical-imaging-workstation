@@ -4,7 +4,7 @@
 **报告日期：** 2026-08-26<br>
 **报告用途：** 研究生申请与算法作品集审阅、项目阶段复盘、后续研究决策<br>
 **软件定位：** 教学 / 科研工具，非医疗器械，不得用于临床诊断<br>
-**审计基线：** 固定 Git baseline `2e9b7005b33aed9012b7707ba89b4d0d26bb315d`。中英文 README 相对该 baseline 的 unified diff SHA-256 为 `ad936fa9cc4a880b90efc107c74cb42520b0c05a5fd5ee0cef9af7367ecd58f1`；该 hash 只绑定两份 README 的当前内容，不声称它们已 push 或经远端 CI 覆盖。**该值曾一度失效**：上一版发布的是 `08825d60…`，而其后又有一次提交改动了两份 README 却未重算，于是本文件第 11 行邀请读者执行的复算命令会给出不同的值——全项目唯一的密码学自证点当时是失败的。此处已重算并核验通过，但目前没有任何断言在 README 改动时强制重算，见 §10 的建议。
+**审计基线：** 固定 Git baseline `2e9b7005b33aed9012b7707ba89b4d0d26bb315d`。中英文 README 相对该 baseline 的 unified diff SHA-256 为 `fcc204ce95d3e476fba4c8b6e2a99d2bbedbd9dc7773df9e1a952e2d872db09c`；该 hash 只绑定两份 README 的当前内容，不声称它们已 push 或经远端 CI 覆盖。**该值曾一度失效**：上一版发布的是 `08825d60…`，而其后又有一次提交改动了两份 README 却未重算，于是本文件第 11 行邀请读者执行的复算命令会给出不同的值——全项目唯一的密码学自证点当时是失败的。此处已重算并核验通过，但目前没有任何断言在 README 改动时强制重算，见 §10 的建议。
 
 > 本报告刻意区分四类信息：**本次实测**、**可由仓库产物复算**、**历史实测但未归档**、**推断或未测项**。数值不因叙事需要而跨越这些边界。
 
@@ -23,7 +23,7 @@ README diff 的 canonical 复算命令为：`git -c color.ui=false --no-pager di
 3. 研究不仅保留正结果，也保留被大样本推翻的试跑结果和被后续测量撤回的结论；
 4. 数据、模型、许可、软著快照和当前代码之间的边界均被显式记录。
 
-截至本报告日期，项目已经具备较强的**作品集展示价值和工程可信度**：2026-08-28 的一次本机实测，全套回归 **1008 PASS / 0 FAIL**，数据无关子集 **897 PASS / 0 FAIL**；这些是 local evidence，不是 fresh-clone、coverage 或 remote-CI evidence。截至该 snapshot，已有 exact-SHA 远端证据仍为 baseline **`2e9b700`** 的 [run 32833860765](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765)：**520 PASS / 0 FAIL**、coverage 81%、Ruff PASS，`event=workflow_dispatch`。该历史 CI 不覆盖其后的任何 commit；后续远端结果必须绑定具体 run 与精确 `headSha`。项目仍然不是临床产品，也还不是一项已完成的临床研究：分割验证来自单一公开数据源，教师模型很可能见过该数据；学习式重建使用无噪声合成投影；部分历史性能数字没有归档原始日志。
+截至本报告日期，项目已经具备较强的**作品集展示价值和工程可信度**：2026-08-28 的一次本机实测，全套回归 **1008 PASS / 0 FAIL**，数据无关子集 **897 PASS / 0 FAIL**；这些是 local evidence，不是 fresh-clone 或 coverage evidence。已固化版本另有 exact-SHA 远端覆盖：[run 33156906344](https://github.com/sunce764/medical-imaging-workstation/actions/runs/33156906344) 的 `headSha` 为 `5c5e80741e7290ca8eee430e82f29ee179d85fa0`，即打了 `v1.1.0` 标签的那个 commit，报告 **878 PASS / 0 FAIL**、coverage 87%、Ruff PASS，`event=workflow_dispatch`；比本地子集少的 19 项是构造使然（8 项权重摘要 + 11 项学习式重建检查需要不分发的产物），非跳过。该 run 不覆盖其后的任何 commit，**包括记录它的这个文档 commit**；后续远端结果必须另绑定具体 run 与精确 `headSha`。项目仍然不是临床产品，也还不是一项已完成的临床研究：分割验证来自单一公开数据源，教师模型很可能见过该数据；学习式重建使用无噪声合成投影；部分历史性能数字没有归档原始日志。
 
 综合判断：这是一个“**产品实现 + 算法研究 + 证据治理**”结合得较完整的医学影像算法作品集。其可信度主要来自对错误结论的主动撤回、对推理路径的同口径比较，以及对不可复现部分的明确承认，而不是来自单个最高 Dice 或功能数量。
 
@@ -340,8 +340,8 @@ Teacher 与 student 在同一 `zslab` path 上的 paired difference 为 **−0.4
 | Fresh local clone | **该 snapshot 未运行** | 不把旧 clean-clone 计数当作该 snapshot 的证据 |
 | Ruff | **PASS** | 2026-08-27 本机执行 `ruff check .`，exit 0 |
 | Pre-commit snapshot coverage | **未运行** | 新增 geometry/safety 代码后不沿用旧 denominator 或 module percentages |
-| As-of-snapshot exact-SHA remote baseline | **`2e9b700`** | 截至该 snapshot 的最新远端证据；后续远端状态必须另绑定 run / `headSha` |
-| Historical remote CI | [run 32833860765](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765) 覆盖 `2e9b700` | **520 PASS / 0 FAIL**，coverage 81%，Ruff PASS；`event=workflow_dispatch`；不覆盖其后的任何 commit |
+| As-of-snapshot exact-SHA remote baseline | **`5c5e807`**（= tag `v1.1.0`） | 截至该 snapshot 的最新远端证据；后续远端状态必须另绑定 run / `headSha` |
+| As-of-snapshot remote CI | [run 33156906344](https://github.com/sunce764/medical-imaging-workstation/actions/runs/33156906344) 覆盖 `5c5e807` | **878 PASS / 0 FAIL**，coverage 87%，Ruff PASS；`event=workflow_dispatch`；少于本地子集的 19 项为构造性差额，非跳过；不覆盖其后的任何 commit |
 
 审计基线的 coverage run 曾发出一条 `signature_bootstrap.py` 无源 warning。后续诊断确认它是 PySide6 / shiboken 注入的虚拟模块：`__file__` 只有相对名，coverage 因而误解析为仓库根文件。配置现已精确 omit 该虚拟 basename，并移除 `ignore_errors=true`；修复前后实际产品 totals 不变，复跑为 **0 ghost warning**，未来未知无源条目也不会被静默吞掉。同次复跑发现一处 synthetic fixture 使 Qt slot 抛 `IndexError`却仍 exit 0；fixture 已修正，runner 已把未捕获 Qt slot exception 统一转为 FAIL，并用已知坏 probe 自检。
 

@@ -144,7 +144,7 @@ Three-dimensional medical volumes make memory and I/O the binding constraint lon
 ## Engineering and testing
 
 - The original God-object is decomposed into **5 UI mixins + 10 Qt-free compute modules**; the complete 19-module packaging inventory is declared in `pyproject.toml`.
-- A **local run on 2026-08-28** recorded **1008 PASS / 0 FAIL** for the full suite with the local RIDER series present and **897 PASS / 0 FAIL** for `SKIP_REAL_DATA=1`. These are local results, not fresh-clone, coverage, or remote-CI evidence. As of that snapshot, the latest exact-SHA remote evidence was baseline **`2e9b700`**, [run `32833860765`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/32833860765), with **520 PASS / 0 FAIL**, **81% coverage**, **Ruff PASS**, and `event=workflow_dispatch`; that historical CI does not cover any commit after it. Any later remote result is evidence only when its `headSha` exactly matches the commit under review. Its run/headSha should be recorded outside the repository or in the delivery summary rather than creating a second documentation commit. The custom runner promotes uncaught Qt signal/slot exceptions to failures, so a printed traceback can no longer coexist with exit code 0.
+- A **local run on 2026-08-28** recorded **1008 PASS / 0 FAIL** for the full suite with the local RIDER series present and **897 PASS / 0 FAIL** for `SKIP_REAL_DATA=1`. These are local results, not fresh-clone or coverage evidence. Remote CI does cover the tagged release: [run `33156906344`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/33156906344) carries `headSha` `5c5e80741e7290ca8eee430e82f29ee179d85fa0`, which is exactly the commit tagged **`v1.1.0`**, and reports **878 PASS / 0 FAIL**, **87% coverage**, **Ruff PASS**, `event=workflow_dispatch`. The 19-check gap against the local subset is structural rather than a skipped test: eight weight-checksum checks and eleven learned-reconstruction checks require artifacts this repository does not distribute. Any other remote result is evidence only when its `headSha` exactly matches the commit under review — this one covers `v1.1.0` and nothing after it, **the documentation commit that records it included**. Earlier practice was to keep the run out of the repository to avoid that regress; it is recorded here because the tag is immutable and the regress is stated rather than hidden. The custom runner promotes uncaught Qt signal/slot exceptions to failures, so a printed traceback can no longer coexist with exit code 0.
 - Reconstruction tests assert numerical correctness, not merely finite output; DICOM loading is defensive against malformed metadata.
 
 ```bash
@@ -157,7 +157,7 @@ coverage run tests/test_gui.py && coverage report
 <details>
 <summary><strong>Coverage detail</strong></summary>
 
-Coverage was not recomputed for the 2026-08-26 changes. As of that snapshot, the latest exact-SHA remote baseline above reported **81%**; its denominator and per-module percentages are not evidence for the current tree after the new geometry and safety code. A future exact-SHA run should publish the updated report rather than carrying forward stale figures.
+Coverage is now published by the exact-SHA run above rather than carried forward: **87%** over 4,005 statements at `v1.1.0`. That denominator and those per-module percentages are evidence for that commit only; anything committed after it needs its own exact-SHA run rather than reuse of this figure.
 
 </details>
 
