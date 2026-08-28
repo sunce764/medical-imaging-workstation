@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "medical-imaging-workstation"
 # V1.0 是软著提交的快照（2026-07-08，13 个模块）；工作树已刻意领先于它，
 # 故不写 1.0.0——那会暗示当前代码就是被登记的那一版。
-version = "1.1.0.dev0"
+version = "1.1.0"
 description = "Desktop CT imaging workstation (PySide6): clinical MPR viewer, a tomographic reconstruction lab whose DFR/DMR/ART/SIRT/ASD-POCS solvers and analytic phantom are written from first principles (Radon/FBP call scikit-image), and AI multi-organ segmentation."
 readme = "README.md"
 requires-python = ">=3.10"

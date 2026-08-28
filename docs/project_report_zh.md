@@ -52,7 +52,7 @@ README diff 的 canonical 复算命令为：`git -c color.ui=false --no-pager di
 
 | 事项 | 当前状态 | 证据与说明 |
 |---|---|---|
-| 产品代码 | 持续演进，版本标记 `1.1.0.dev0` | [`pyproject.toml`](../pyproject.toml) |
+| 产品代码 | 版本标记 `1.1.0`，对应本地 annotated tag `v1.1.0` | [`pyproject.toml`](../pyproject.toml)；该 tag 是否已推送、是否被远端 CI 覆盖，须另按 exact headSha 核实，不由本行担保 |
 | GitHub 仓库 | **PUBLIC** | 本报告日通过 GitHub CLI 实查；[repository](https://github.com/sunce764/medical-imaging-workstation) 为 review-only proprietary license |
 | 软著登记 | 据项目方提交记录，截至 2026-08-25 已提交，两位著作权人尚未收到正式受理通知；不是“登记成功” | [`LICENSE`](../LICENSE) 是项目方状态声明，不是 CPCC 官方受理证明 |
 | 软著 V1.0 快照 | 仓库可验证快照形成于 2026-07-08，source builder 列出 13 个产品模块 | 据项目方记录，该快照用于登记提交；`experiments/` 未包含在提交的源码或说明书材料中 |

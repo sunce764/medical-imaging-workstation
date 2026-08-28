@@ -2,6 +2,8 @@
 
 This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
+**Version 1.1.0** (annotated tag `v1.1.0`, 2026-08-28) freezes the state described by the newest entry below. It is a local freeze: the tag records what was measured on this machine, not a remote-CI result, and says nothing about the copyright registration, which remains under review. The earlier `v1.0-copyright` tag marks the separate snapshot submitted for that registration.
+
 ## Bold that never rendered, and two gates for claims nothing was checking (2026-08-28)
 
 **Sixteen bold spans on the public pages were broken, and had been for as long as they existed.**
