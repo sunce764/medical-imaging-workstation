@@ -5007,7 +5007,11 @@ def test_phantom():
         # 剩余差异来自参考实现是 400² 位图再插值，本实现为解析生成（边界更锐）
         check(ncc > 0.94, f"与 skimage 参考的归一化互相关 NCC={ncc:.4f} > 0.94")
     except ImportError:
-        check(True, "skimage 参考不可用，跳过互相关比对")
+        # 【跳过不计为 PASS】check(True) 会把「没跑」记成一条通过，而 PASS 数是对外
+        # 公布的证据。scikit-image 是 requirements.txt 锁定的产品依赖，缺席属环境异常
+        # 而非正常分支，故只打印、不计数（同 test_dl_recon_guard 的处理）。
+        print("    skimage 参考不可用（scikit-image 已在 requirements 锁定，缺席属异常），"
+              "本轮跳过互相关比对")
 
 
 def test_phantom_recon_flow(app):
