@@ -2838,6 +2838,101 @@ def test_readme_self_attestation():
           + ("" if actual == documented else "；改过 README 就必须重算并更新该行"))
 
 
+def test_ordering_claims_hold_on_recompute():
+    """文档里的排序 / 极值断言必须与已提交 CSV 现算的排名一致。
+
+    由来：「胆囊是 spacing 消融最脆弱的结构」在两份 README 里挂了很久才被发现是假的——
+    左肾上腺跌 0.346，胆囊 0.272，只排第二。这一类**逐个数字都对、排名却错**的断言，
+    既有的「数值可复算」检查按构造发现不了：它只验证每个数出现过，不验证谁比谁大。
+    同一轮用这条规则重扫，又抓到「其余各叶出现在 50–53 例」——`lung_middle_lobe_right`
+    实为 48 例。
+
+    三组断言都从 `experiments/results/` 的已提交 CSV 现算，再与文档正文比对；
+    第三组连文档里那句话本身都解析出来逐项核对，文档与产物任一侧漂移都会失败。
+    纯 stdlib + 已入库 CSV，无 Qt / 无真实数据。
+    """
+    print("[排序类断言与产物对账]")
+    import collections
+    import csv
+    import re
+
+    res = os.path.join(_ROOT, "experiments", "results")
+
+    def rows(name):
+        # 表头带 BOM：用 utf-8-sig，否则第一列的键会变成 '﻿case'，join key 静默退化
+        with open(os.path.join(res, name), encoding="utf-8-sig") as fh:
+            return list(csv.DictReader(fh))
+
+    readmes = {rel: open(os.path.join(_ROOT, rel), encoding="utf-8").read()
+               for rel in ("README.md", "README.zh-CN.md")}
+    exp_readme = open(os.path.join(_ROOT, "experiments", "README.md"), encoding="utf-8").read()
+
+    # —— ① spacing 消融：谁跌得最多 ——
+    sp = sorted(rows("seg_spacing_per_organ.csv"),
+                key=lambda r: -float(r["drop_vs_baseline"]))
+    check(len(sp) >= 5, f"spacing 消融逐器官产物非空（{len(sp)} 行）")
+    top1, top2 = sp[0], sp[1]
+    check(top1["organ"] == "adrenal_L",
+          f"跌幅最大的是左肾上腺（现算第一为 {top1['organ']} {float(top1['drop_vs_baseline']):.4f}）")
+    check(top2["organ"] == "gallbladder",
+          f"胆囊排第二而非第一（现算第二为 {top2['organ']} {float(top2['drop_vs_baseline']):.4f}）")
+    for rel, text in readmes.items():
+        for who, row in (("左肾上腺/left adrenal", top1), ("胆囊/gallbladder", top2)):
+            val = f"{float(row['drop_vs_baseline']):.3f}"
+            check(val in text, f"{rel} 引用现算跌幅 {val}（{who}）")
+    # 语义闸门：不得再把胆囊写成跌幅最大的那个
+    worst_gb = re.compile(r"(gallbladder|胆囊)[^。.\n]{0,60}"
+                          r"(most fragile|largest drop|falls the most|最脆弱|跌幅最大)", re.I)
+    for rel, text in {**readmes, "experiments/README.md": exp_readme}.items():
+        hit = worst_gb.search(text)
+        check(hit is None, f"{rel} 未把胆囊写成跌幅最大（违规：{hit.group(0)[:60] if hit else '无'}）")
+
+    # —— ② 五肺叶：最弱与最少见 ——
+    lobes = collections.defaultdict(list)
+    cases = set()
+    for r in rows("seg3d_teacher_dice.csv"):
+        lobes[r["organ"]].append(float(r["dice"]))
+        cases.add(r["case"])
+    means = {o: sum(v) / len(v) for o, v in lobes.items()}
+    check(len(means) == 5, f"teacher 产物覆盖五个肺叶（实得 {len(means)}）")
+    weakest = min(means, key=means.get)
+    strongest = max(means, key=means.get)
+    check(weakest == "lung_upper_lobe_right",
+          f"最弱者为右上叶（现算 {weakest} {means[weakest]:.4f}）")
+    check(strongest == "lung_lower_lobe_right",
+          f"最高者为右下叶（现算 {strongest} {means[strongest]:.4f}）")
+    others = sorted(len(v) for o, v in lobes.items() if o != weakest)
+    check(len(lobes[weakest]) < others[0],
+          f"右上叶同时最少见（{len(lobes[weakest])} 例 vs 其余最少 {others[0]} 例）")
+    claim = re.search(r"present in (\d+) of (\d+) cases against (\d+)[–-](\d+) for the others",
+                      exp_readme)
+    check(claim is not None, "experiments/README 里能解析出该出现率断言")
+    if claim:
+        n_w, n_all, lo, hi = (int(g) for g in claim.groups())
+        check((n_w, n_all, lo, hi) == (len(lobes[weakest]), len(cases), others[0], others[-1]),
+              f"出现率断言与现算一致（文档 {n_w}/{n_all}、其余 {lo}–{hi}；"
+              f"现算 {len(lobes[weakest])}/{len(cases)}、其余 {others[0]}–{others[-1]}）")
+
+    # —— ③ per-organ 增益前五：连文档那句话一起解析 ——
+    a = {(r["case"], r["organ"]): float(r["dice"]) for r in rows("seg3d_infer_bias_bench_A.csv")}
+    b = {(r["case"], r["organ"]): float(r["dice"]) for r in rows("seg3d_infer_bias_bench_B.csv")}
+    shared = set(a) & set(b)
+    check(len(shared) > 900, f"A/B 两臂按 (case, organ) 配上 {len(shared)} 对（BOM 若未处理会退化到逐器官 1 对）")
+    per = collections.defaultdict(list)
+    for k in shared:
+        per[k[1]].append(b[k] - a[k])
+    top5 = sorted(((sum(v) / len(v), o, len(v)) for o, v in per.items()), reverse=True)[:5]
+    sent = re.search(r"The five largest per-organ gains are (.+?)\.\s", exp_readme, re.S)
+    check(sent is not None, "experiments/README 里能解析出「五个最大增益」那句")
+    if sent:
+        doc5 = re.findall(r"`([a-z_]+)`\s*\+([0-9.]+)\s*\(n=(\d+)\)", sent.group(1))
+        check(len(doc5) == 5, f"该句列出五项（实得 {len(doc5)}）")
+        for i, ((gain, organ, n), (d_org, d_gain, d_n)) in enumerate(zip(top5, doc5, strict=False)):
+            check(d_org == organ and int(d_n) == n and f"{gain:.3f}" == f"{float(d_gain):.3f}",
+                  f"第 {i+1} 名一致（文档 {d_org} +{d_gain} n={d_n} / "
+                  f"现算 {organ} +{gain:.3f} n={n}）")
+
+
 def test_recon_pipeline_helpers():
     """重建预处理/上采样纯函数直接单测——合成数组，无 Qt / 真实数据 / 系统矩阵。"""
     print("[重建预处理/上采样纯函数]")
@@ -6854,6 +6949,7 @@ def main_run():
         test_hu_declaration_tool_roundtrip()  # HU 声明工具的通过路径与 CLI 分支：合成 CT，无 Qt
         test_public_wording_gate()         # 公开口径语义门：纯文本，无 Qt
         test_markdown_emphasis_renders()   # Markdown 强调渲染门：纯文本，无 Qt
+        test_ordering_claims_hold_on_recompute()  # 排序/极值断言与产物对账：CSV + 纯 stdlib
         test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
         test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据
         test_dl_recon_guard()
@@ -6956,6 +7052,7 @@ def main_run():
         test_hu_declaration_tool_roundtrip()  # HU 声明工具的通过路径与 CLI 分支：合成 CT，无 Qt
         test_public_wording_gate()         # 公开口径语义门：纯文本，无 Qt
         test_markdown_emphasis_renders()   # Markdown 强调渲染门：纯文本，无 Qt
+        test_ordering_claims_hold_on_recompute()  # 排序/极值断言与产物对账：CSV + 纯 stdlib
         test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
         test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据
         test_dl_recon_guard()

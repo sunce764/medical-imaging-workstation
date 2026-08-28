@@ -49,7 +49,20 @@ not an error in the document: with the encoding handled, `+0.0479 / +0.0256 / +0
 59 cases improving. Superlatives are a claim class that recomputing individual numbers does not
 test, since every number in the sentence can be right while the ranking is wrong.
 
-Local counts move to **954** full-suite and **843** `SKIP_REAL_DATA=1` checks.
+**Turning that rule into a gate immediately found a third.** `experiments/README.md` said the right
+upper lobe is "present in 31 of 57 cases against 50–53 for the others" — `lung_middle_lobe_right`
+appears in 48, so the range is 48–53. The claim it supports (that lobe is both weakest and rarest)
+survives; the bracket was simply wrong. The new gate recomputes three ordering claims from the
+committed CSVs — which organ degrades most under spacing ablation, which lobe is weakest and
+rarest, and the five largest per-organ gains — and compares them against the documents, parsing the
+five-gain sentence out of the prose so that drift on either side fails. It also keeps a semantic
+guard so the retracted "gallbladder is the most fragile" wording cannot return by paraphrase.
+Reverting the bracket, reinstating the gallbladder wording, and changing one `n` each produce a
+failure. The gate reads the CSVs with `utf-8-sig`: their headers carry a BOM, which had already
+silently collapsed a join key once during checking and produced a contradiction that looked like a
+documentation error but was not.
+
+Local counts move to **978** full-suite and **867** `SKIP_REAL_DATA=1` checks.
 
 ## Three independent audits, and what they found the axis fix had left behind (2026-08-27)
 
