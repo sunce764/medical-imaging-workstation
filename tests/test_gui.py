@@ -3104,6 +3104,63 @@ def test_dependency_declaration_complete():
         third = saved
 
 
+def test_repository_contains_no_restricted_files():
+    """被 git 跟踪的文件里不得出现 PHI / 权重 / 外部数据 / 私人法律文件。
+
+    这是本仓库最归零级的一条：它是 **public** 仓库，一次泄漏就让整件事作废，而在此之前
+    没有任何自动检查——`git ls-files` 在整套测试里出现 0 次，全靠人不犯错和 `.gitignore`。
+    而 `.gitignore` 只挡未跟踪的新文件：已被跟踪的文件它不再过问，强制加入索引也能绕过它。
+
+    判据取自 `git ls-files`（工作区里合法存在的本地数据不该被误判，所以看的是**跟踪状态**
+    而不是磁盘）。先断言跟踪文件数量的下限：该命令一旦返回空（不在仓库里、git 不可用），
+    逐条匹配自然全部通过——那正是「解析出 0 条却通过」那一类假绿。
+    """
+    print("[仓库禁区文件]")
+    import re
+    import subprocess
+
+    RESTRICTED = (
+        ("DICOM 影像", r"\.dcm$"),
+        ("外部权重 blob", r"\.onnx\.data$"),
+        ("外部数据 NIfTI/npy", r"\.(nii|nii\.gz|npy|npz)$"),
+        ("私人法律文件", r"(合作开发协议|签章页)"),
+        ("数据 / 导出目录", r"^(肺癌|Exported_Lesions|RIDER_HU_declared)/"),
+    )
+
+    proc = subprocess.run(["git", "ls-files", "-z"], cwd=_ROOT, capture_output=True)
+    check(proc.returncode == 0,
+          f"能列出被跟踪文件（git rc={proc.returncode}；"
+          f"{proc.stderr.decode(errors='replace').strip()[:80]}）")
+    if proc.returncode != 0:
+        return
+    tracked = [p for p in proc.stdout.decode("utf-8").split("\0") if p]
+    check(len(tracked) >= 100,
+          f"跟踪文件 {len(tracked)} 个（下限自检：为 0 时下面每条都会「通过」，属假绿）")
+
+    def offenders(paths):
+        out = []
+        for label, pat in RESTRICTED:
+            hit = [p for p in paths if re.search(pat, p)]
+            if hit:
+                out.append(f"{label}: {hit[:3]}{'…' if len(hit) > 3 else ''}")
+        return out
+
+    bad = offenders(tracked)
+    check(not bad, f"无禁区文件被提交（{len(tracked)} 个跟踪文件；违规：{bad or '无'}）")
+
+    # 门本身承重：合成一份含各类禁区的清单，必须逐类被拒
+    for label, sample in (("DICOM", "肺癌/000000.dcm"), ("权重", "models/organs.onnx.data"),
+                          ("外部数据", "experiments/x.nii"), ("私人文件", "docs/签章页.pdf"),
+                          ("导出目录", "Exported_Lesions/a_mask.npz")):
+        check(bool(offenders(tracked + [sample])),
+              f"门抓得住已知禁区样本：{label}（{sample}）")
+
+    # `.gitignore` 是第一道防线，缺项时新文件会悄悄变成可提交状态
+    ignored = open(os.path.join(_ROOT, ".gitignore"), encoding="utf-8").read()
+    for token in ("*.dcm", "*.onnx.data", "肺癌", "Exported_Lesions"):
+        check(token in ignored, f".gitignore 仍列有 `{token}`")
+
+
 def test_recon_pipeline_helpers():
     """重建预处理/上采样纯函数直接单测——合成数组，无 Qt / 真实数据 / 系统矩阵。"""
     print("[重建预处理/上采样纯函数]")
@@ -7122,6 +7179,7 @@ def main_run():
         test_markdown_emphasis_renders()   # Markdown 强调渲染门：纯文本，无 Qt
         test_ordering_claims_hold_on_recompute()  # 排序/极值断言与产物对账：CSV + 纯 stdlib
         test_dependency_declaration_complete()  # 第三方 import 与 requirements 对账：纯 stdlib
+        test_repository_contains_no_restricted_files()  # 禁区文件未被提交：git + 纯 stdlib
         test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
         test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据
         test_dl_recon_guard()
@@ -7226,6 +7284,7 @@ def main_run():
         test_markdown_emphasis_renders()   # Markdown 强调渲染门：纯文本，无 Qt
         test_ordering_claims_hold_on_recompute()  # 排序/极值断言与产物对账：CSV + 纯 stdlib
         test_dependency_declaration_complete()  # 第三方 import 与 requirements 对账：纯 stdlib
+        test_repository_contains_no_restricted_files()  # 禁区文件未被提交：git + 纯 stdlib
         test_compare_registration_label_truth()  # 配准状态如实标注：合成数组，无真实数据
         test_3d_track_failure_is_visible()       # 3D 追踪失败可区分：合成体数据，无真实数据
         test_dl_recon_guard()

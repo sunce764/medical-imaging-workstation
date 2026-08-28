@@ -104,7 +104,17 @@ checker only reconciles local modules. `shiboken6` is imported directly and is n
 arrives as a hard dependency of PySide6, and the new gate accepts that only because the reason is
 written at the import site, which it verifies.
 
-Local counts move to **996** full-suite and **885** `SKIP_REAL_DATA=1` checks.
+**The most zero-grade property of all had no check at all.** This repository is public; a single
+committed DICOM slice, weight blob, external dataset file or private agreement voids everything
+else in it. Nothing verified that — `git ls-files` appeared zero times in the entire suite, and
+`.gitignore` does not cover the case that matters, since it stops governing a file once that file
+is tracked. The new gate reads the tracked file list and rejects five categories, with a synthetic
+sample per category proving each one is live, and asserts a lower bound on the tracked count first:
+if the listing ever comes back empty, every pattern match trivially passes. The repository is clean
+today — 147 tracked files, zero hits in all five categories — but that was previously an unverified
+belief rather than a measurement.
+
+Local counts move to **1008** full-suite and **897** `SKIP_REAL_DATA=1` checks.
 
 ## Three independent audits, and what they found the axis fix had left behind (2026-08-27)
 
