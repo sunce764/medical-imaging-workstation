@@ -15,7 +15,7 @@
 **Introduction**: This software is a desktop CT medical imaging workstation built on PySide6 (Qt6), aimed at imaging teaching and research. It integrates three major parts — **clinical reading tools**, **AI multi-organ segmentation**, and a **CT tomographic-reconstruction teaching lab**. The software supports loading DICOM images, multi-planar reformation (MPR) reading, window width / window level adjustment, measurement and annotation, AI automatic organ segmentation and quantification, dual-series follow-up comparison, and a complete teaching demonstration from projection to reconstruction.
 **Verified environment**: local macOS with Python 3.10; the data-independent suite had also passed historically on a GitHub Actions Ubuntu runner as of the snapshot below. Windows was not verified in that snapshot and no platform-compatibility claim is made for it. Dependencies include PySide6, pydicom, NumPy, SciPy, scikit-image, and ONNX Runtime.
 **Development language**: Python.
-**Software scale**: application code is split across UI mixins and Qt-free compute modules. A local run on 2026-08-28 recorded 1008 full-suite checks and 897 `SKIP_REAL_DATA=1` checks; these are local results, not fresh-clone, coverage, or remote-CI evidence.
+**Software scale**: application code is split across UI mixins and Qt-free compute modules. A local run on 2026-08-30 recorded 1013 full-suite checks and 902 `SKIP_REAL_DATA=1` checks; these are local results, not fresh-clone, coverage, or remote-CI evidence.
 **Positioning statement**: This software is a **teaching / research tool for imaging**, **not a certified medical device, and must not be used for clinical diagnosis**; AI segmentation and quantification results are automated inferences, for reference only.
 
 ---
@@ -158,7 +158,7 @@ The "Automated AI engine" area lists each detected organ's **volume (mL) and mea
 
 The panel also reports each organ's **confidence** (the model's softmax max-class probability) together with its **5th percentile**: the mean is pulled up by the large confident interior of an organ, whereas segmentation errors concentrate at boundaries, so the low percentile is the more revealing number; entries below 0.9 are flagged in orange. If an organ has been edited with the brush or 3D tracking, a **model-decided share** is shown as well — hand-edited voxels are excluded from the confidence statistics, because their stored value is the model's judgement about *the label that was there before the edit*, which says nothing about the current one. The manual tracking layer reports no confidence at all, since the model never judged it.
 
-The **"Model card: provenance & limits"** button sets out how the model's origin was established by measurement, how far it has been validated, and what its known limits are. Every number on the card is read live from the experiment outputs under `experiments/results/`, so re-running an experiment updates the card.
+The **"Model card: provenance & limits"** button sets out how the label mapping was recovered by measurement, why the model's identity as a particular upstream release remains an inference rather than a proof, how far it has been validated, and what its known limits are. Every number on the card is read live from the experiment outputs under `experiments/results/`, so re-running an experiment updates the card.
 
 ### 7.5 3D Surface Reconstruction
 

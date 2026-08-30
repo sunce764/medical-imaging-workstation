@@ -38,7 +38,7 @@
 |---|---|
 | **产品** | 已固化作品集版本 [`v1.1.0`](https://github.com/sunce764/medical-imaging-workstation/tree/v1.1.0)；19 个顶层产品模块，支持 classic single-frame CT，CPU-only |
 | **研究** | 四条量化主线，覆盖 reconstruction、segmentation provenance、learned reconstruction 与 3-D student compression |
-| **验证** | `v1.1.0` exact-SHA CI：**878 PASS / 0 FAIL**、coverage **87%**、Ruff PASS；2026-08-28 本机：full **1008/0**、数据无关层 **897/0** |
+| **验证** | `v1.1.0` exact-SHA CI：**878 PASS / 0 FAIL**、coverage **87%**、Ruff PASS；2026-08-30 本机：full **1013/0**、数据无关层 **902/0** |
 | **证据边界** | measured、inferred、historical、unmeasured 分开表达；未分发权重和未归档单机数字均明确点名 |
 | **状态** | 工程/作品集版本已冻结；软著登记仍在等待；不作临床或论文完成声明 |
 
@@ -158,7 +158,7 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 | **研究 III —— 学习式稀疏角重建** | 自实现 1.9M 参数残差 U-Net 将 RMSE 降低 **3–6 倍**，病灶对比度保留率从 0.87 提升至 **0.957–0.996**，分布外增益比为 0.81。**60 组无噪声 synthetic paired phantoms** 上，20%-of-lesion threshold 的 false-structure rate 为 **1.67%**，30% 与 50% threshold 均为 **0%**。 | 未加入 photon noise。1.67% 对 low-dose CT 既不是上界也不是下界；方向与幅度均未测，因此不声称 low SNR 是 dominant driver。 |
 | **研究 IV —— 压缩分割模型与 model–inference-path interaction** | 从零训练的 0.35M 3D U-Net 对照 31.2M teacher。学生暴露出 tensor extent / zero-padding × `InstanceNorm3d` × fixed-size/no-augmentation training 的 interaction：同一权重得 **0.490 或 0.746**。对照把机制指向 normalization sensitivity，但未做 normalization replacement，不能认定唯一因果。 | 学生 input-size collapse 与产品 teacher 的 z-overlap/seam A/B 是两件事。后者覆盖全部 24 器官、**test 集 61 例中的 59 例**，一次 historical A/B 记录到 Dice **+0.0133**［+0.0072, +0.0194］、耗时 1.18×——那是回移前无重叠的 A 与 boundary-anchored 25% 重叠的 B **合并后**的差异，不是重叠单独的增益，也不是当前 shipped path 上的增量；同时出现的 +0.65GB 至今未归档；同为 `zslab` path 时，学生比 teacher 低 **0.4500**［-0.4877, -0.4118］（234 个叶次）。[`seg3d_infer_bias.py`](experiments/seg3d_infer_bias.py) · [完整记述](experiments/README.md) |
 | **消融 —— spacing 契约** | 引擎此前跳过了 nnU-Net 必需的「重采样到训练 spacing」。先测代价（spacing 偏离一倍时平均 Dice 由 0.9219 掉到 0.7995，小器官最先垮且非单调），再据此实现。**20 例配对**下同一份失配输入由 **0.684 回升到 0.840**，**20/20 例全部改善**（Wilcoxon *p* = 1.9×10⁻⁶）；同一条本机序列的推理由 100s / 8.8GB 降至 **37s / 3.0GB**。 | 32GB 机器只测得到变粗方向，更细一侧是据「属降采样」推断而非实测。蒙版边界现按 1.5mm 网格量化——结构级准确度升、像素级边界精度降。[`seg_spacing.py`](experiments/seg_spacing.py) |
-| **扩展验证 —— 肺叶** | 57 例公开 CT 的五肺叶平均 Dice 为 **0.8867**（95% CI **[0.859, 0.914]**）；右肺上叶为 0.727，而原单例为 0.967。 | 只验证五个肺叶。该结论被独立印证：另一次 20 例运行用不同脚本、不同抽样，把同一个右肺上叶测为 0.773。[`seg3d_teacher.py`](experiments/seg3d_teacher.py) |
+| **扩展验证 —— 肺叶** | 57 例公开 CT 的五肺叶平均 Dice 为 **0.8867**（95% CI **[0.859, 0.914]**）；右肺上叶在 57 例中含该叶的 31 例上为 0.727，而原单例为 0.967。 | 只验证五个肺叶。该结论被独立印证：另一次 20 例运行用不同脚本、不同抽样，把同一个右肺上叶测为 0.773。[`seg3d_teacher.py`](experiments/seg3d_teacher.py) |
 
 ## 在真实约束下把它跑起来
 
@@ -173,12 +173,12 @@ python main.py --data /path/to/dicom_dir # 或启动时加载 DICOM 目录
 ## 工程与测试
 
 - 原 God-object 已拆分为 **5 个 UI mixin + 10 个无 Qt 计算模块**；完整的 19-module packaging inventory 以 `pyproject.toml` 为准。
-- **2026-08-28 的一次本机实测**，全套（本地 RIDER 在场）为 **1008 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **897 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone 或 coverage evidence。已固化的那个版本**确有**远端 CI 覆盖：[run `33156906344`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/33156906344) 的 `headSha` 为 `5c5e80741e7290ca8eee430e82f29ee179d85fa0`，与打了 **`v1.1.0`** 标签的 commit 逐字符相同，报告 **878 PASS / 0 FAIL**、**coverage 87%**、**Ruff PASS**，`event=workflow_dispatch`。它比本地子集少 19 项是**构造使然、不是有测试被跳过**：8 项权重摘要核验与 11 项学习式重建检查需要本仓库不分发的产物。其它远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力——这一个覆盖 `v1.1.0`，不覆盖其后任何 commit，**包括记录它的这个文档 commit 本身**。此前的做法是把 run 记在仓库外以回避该递归；此处改为写进来，因为标签不可变，且该递归被明写而非隐去。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
+- **2026-08-30 的一次本机实测**，全套（本地 RIDER 在场）为 **1013 PASS / 0 FAIL**，`SKIP_REAL_DATA=1` 子集为 **902 PASS / 0 FAIL**。这些只是本地结果，不是 fresh-clone 或 coverage evidence。已固化的那个版本**确有**远端 CI 覆盖：[run `33156906344`](https://github.com/sunce764/medical-imaging-workstation/actions/runs/33156906344) 的 `headSha` 为 `5c5e80741e7290ca8eee430e82f29ee179d85fa0`，与打了 **`v1.1.0`** 标签的 commit 逐字符相同，报告 **878 PASS / 0 FAIL**、**coverage 87%**、**Ruff PASS**，`event=workflow_dispatch`。它比**当时那个 commit 的**本地子集（897）少 19 项，是**构造使然、不是有测试被跳过**：8 项权重摘要核验与 11 项学习式重建检查需要本仓库不分发的产物。其它远端结果只有在 `headSha` 精确匹配被审阅 commit 时才具证据力——这一个覆盖 `v1.1.0`，不覆盖其后任何 commit，**包括记录它的这个文档 commit 本身**。此前的做法是把 run 记在仓库外以回避该递归；此处改为写进来，因为标签不可变，且该递归被明写而非隐去。自定义 runner 会把 Qt signal/slot 未捕获异常计为失败，不能出现“打印 traceback 但 exit 0”的假绿。
 - 重建算法测试断言数值正确性，而非只检查输出“有限”；DICOM 读取对畸形元数据作防御处理。
 
 ```bash
-python tests/test_gui.py                     # 2026-08-28 本机实测：全套 1008 项；本地 RIDER 在场
-SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-28 本机实测：数据无关子集 897 项
+python tests/test_gui.py                     # 2026-08-30 本机实测：全套 1013 项；本地 RIDER 在场
+SKIP_REAL_DATA=1 python tests/test_gui.py    # 2026-08-30 本机实测：数据无关子集 902 项
 ruff check .                                 # 静态检查
 coverage run tests/test_gui.py && coverage report
 ```

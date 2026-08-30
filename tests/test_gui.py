@@ -2710,9 +2710,13 @@ def test_markdown_emphasis_renders():
     不是产品依赖，不能进数据无关子集。该实现与它逐处对账：对全部公开 `.md` 的每一处真实
     `**X**` 注入两种已知失效形状（全角冒号、全角引号）共 2842 次，漏报 0、误报 0。
 
-    **已知边界，不声称覆盖**：裸 HTML 块内的 `**` 不识别（本仓库无暴露面，行首 HTML 全用
-    `<strong>`）；`**` 与单星或三星混排不在判定范围内——定界符正则有意只取**恰好两星**的
-    那种，混排的歧义留给解析器，不在此处判定。
+    单星 `*` **同样判定**：`technical_report.md` 曾有一处 `the *one of the smallest gains`，
+    裸露的单星在 GitHub 上原样漏出，而本门早先只判 `**`、把它放行了。反斜杠转义的星号
+    （脚注标记）与列表行首的 `*` 都不算定界符——该仓库的两处转义脚注实测被正确放行。
+
+    **已知边界，不声称覆盖**：裸 HTML 块内的星号不识别（本仓库无暴露面，行首 HTML 全用
+    `<strong>`）；单星与双星**混排**的歧义不在判定范围内——两种定界符各自独立配对，
+    交叉消耗的情形留给解析器。
 
     扫描对象由 `os.walk` **枚举**得到，不维护清单——早先版本用硬编码列表加一句
     `scanned == len(docs)` 自我核对，那是拿列表和它自己比：把列表清空，套件照样全绿、
@@ -2787,7 +2791,7 @@ def test_markdown_emphasis_renders():
         flush(); flush_quote()
         return out
 
-    def unmatched_strong(src):
+    def unmatched_emphasis(src, run=2):
         """返回配不上对的 `**` 定界符 [(行号, 上下文)]。"""
         hits = []
         for start, blk in _units(src):
@@ -2795,8 +2799,13 @@ def test_markdown_emphasis_renders():
             for cm in re.finditer(r"`[^`\n]*`", blk):      # 行内 code 里的 ** 是字面量
                 inside.update(range(cm.start(), cm.end()))
             stack = []
-            for dm in re.finditer(r"(?<!\*)\*\*(?!\*)", blk):
+            marker = re.match(r"\s*\*\s", blk)          # 列表行首的 * 不是定界符
+            delim = (r"(?<![*\\])\*(?!\*)" if run == 1
+                     else r"(?<![*\\])\*\*(?!\*)")     # 反斜杠转义的星号同样不是
+            for dm in re.finditer(delim, blk):
                 if dm.start() in inside:
+                    continue
+                if marker and dm.start() == marker.end() - 2:
                     continue
                 # 相邻字符取原文：cmark 判 flanking 用的就是源码里真实的前后字符
                 prev = blk[dm.start() - 1] if dm.start() else None
@@ -2834,9 +2843,13 @@ def test_markdown_emphasis_renders():
         "两侧皆空格的孤立定界符": "正文 ** 正文，这对星号两侧都是空格。",
         "只有闭合、没有开启": "正文 foo** bar 后续文字。",
         "表格单元格之间越界配对": "| a | b |\n|---|---|\n| **甲 | 乙** |",
+        # 单星：technical_report.md 曾真实出现过这一处，早先只判双星的版本放行了它
+        "裸露的单星（斜体开了不闭）":
+            "the single case (+0.064) turned out to be the *one of the smallest gains here.",
     }
     for label, bad in known_bad.items():
-        check(bool(unmatched_strong(bad)), f"门抓得住已知坏样本：{label}")
+        check(bool(unmatched_emphasis(bad)) or bool(unmatched_emphasis(bad, 1)),
+              f"门抓得住已知坏样本：{label}")
 
     # —— ② 门不过严：合法写法一律放行 ——
     known_good = {
@@ -2849,9 +2862,13 @@ def test_markdown_emphasis_renders():
         "引用块内含表格与列表": "> **合并后的**差异；\n> \n> | x | **y** |\n> |---|---|\n> | **甲** | 乙 |\n> \n> - **丙**：丁",
         "同一表格行内多个强调": "| a | b | c |\n|---|---|---|\n| **甲** | 乙 | 丙等**高密度**结构 |",
         "表格转义竖线": "| 列 | \\|CTF − 1\\| **值** |\n|---|---|\n| 1 | **0.5** |",
+        "合法的单星斜体": "Wilcoxon *p* = 1.9×10⁻⁶ over the twenty paired cases.",
+        "反斜杠转义的星号（脚注标记）":
+            "| Spacing | 1.5 mm (training)\\* |\n|---|---|\n| Dice | 0.92 |",
+        "列表行首的星号不是定界符": "* first item\n* second item",
     }
     for label, good in known_good.items():
-        hit = unmatched_strong(good)
+        hit = unmatched_emphasis(good) + unmatched_emphasis(good, 1)
         check(not hit, f"门不过严，放行合法写法：{label}（误报 {hit}）")
 
     # —— ③ 全仓库 Markdown 必须干净：枚举，不用清单 ——
@@ -2863,8 +2880,10 @@ def test_markdown_emphasis_renders():
                 continue
             rel = os.path.relpath(os.path.join(cur, name), _ROOT)
             found.append(rel)
-            for ln, ctx in unmatched_strong(open(os.path.join(cur, name), encoding="utf-8").read()):
-                broken.append(f"{rel}:{ln} {ctx}")
+            text = open(os.path.join(cur, name), encoding="utf-8").read()
+            for run in (2, 1):
+                for ln, ctx in unmatched_emphasis(text, run):
+                    broken.append(f"{rel}:{ln} [{'**' if run == 2 else '*'}] {ctx}")
     check(len(found) >= 12,
           f"枚举到 {len(found)} 份 Markdown（<12 说明枚举本身坏了，而不是仓库真这么小）")
     check(not broken,

@@ -4,6 +4,55 @@ This file collects the systematic rounds of defect investigation on the **Medica
 
 **Version 1.1.0** (annotated tag `v1.1.0`, 2026-08-28) freezes the state described by the newest entry below. Its measurements began as a local freeze and are now separately backed by the exact-tag CI recorded in the next section; neither fact says anything about the copyright registration, which remains under review. The earlier `v1.0-copyright` tag marks the separate snapshot submitted for that registration.
 
+## Four public-claim boundaries tightened, and the emphasis gate extended to single asterisks (2026-08-30)
+
+An external multi-axis review of the repository found, among a larger set of presentation
+suggestions, four places where a public claim reached past what the surrounding text had
+established. Only those were acted on; the presentation items were deliberately left alone rather
+than widening the freeze.
+
+**`experiments/README.md` summarised what its own table refuses to summarise.** The opening scope
+note said flatly that "the segmentation experiments replicate `ai_engine`'s preprocessing and
+sliding-window inference", while the per-producer table 106 lines below records that `seg_multi.py`
+and `seg_spacing.py` *call* `ai_engine` at runtime and that their committed artifacts predate
+`2a50e37`. The opening note now carries the same per-producer split the table does.
+
+**The technical report's conclusions outran its own sections in three places.** It listed
+"saturation, filter inversion, iterative robustness" as reproduced qualitative conclusions, when
+§3.2(a) had reinterpreted the saturation as a discretisation floor and §3.2(c) had withdrawn the
+ART-over-SIRT ranking. Note what is and is not withdrawn: the saturation *is* real and *is*
+measured — what does not follow from it is a dose operating point. The ordering is a property of
+the fixed iteration counts, not of the solvers. Separately, "validate the pipeline" and "validates
+its pipeline" both appeared unqualified in a document whose §4.1 states that no segmentation
+evidence ever ran on the product's DICOM (LPS) orientation; both now name the RAS path they were
+measured on.
+
+**Two README claims.** "The model's identity was established by measurement" overstated what the
+same file calls a strong inference two sections later — what measurement established is the label
+mapping; the step to a particular upstream release remains an inference. The identical sentence in
+`docs/manual_en.md` was corrected with it, since fixing one and leaving the other is the failure
+mode this project has recorded before. And the right-upper-lobe Dice of 0.727 sat in a row opening
+"Across 57 public CTs" without its own denominator; recomputed from `seg3d_teacher_dice.csv`, that
+lobe is present in 31 of the 57, and both READMEs now say so.
+
+**The emphasis gate only ever checked `**`, and said so.** Its docstring named single asterisks as
+out of scope — but a bare `*` leaks a literal asterisk into GitHub's output exactly as an unpaired
+`**` does, and `docs/technical_report.md:93` carried one (`the *one of the smallest gains`, which
+was also missing an article). The gate now runs the same flanking-and-pairing pass at both
+delimiter lengths. Escaped `\*` footnote markers and list-item bullets are not delimiters and are
+excluded: the repository's two escaped markers at `technical_report.md:85` and `:89` are correctly
+passed, and were the only apparent hits before that exclusion was added. Calibrated against
+`markdown-it-py` across all fifteen Markdown files — zero unpaired delimiters at either length.
+Reverting the detector to `**`-only fails the new known-bad sample; writing the stray asterisk back
+into the report fails the repository scan.
+
+The preprint's Limitations list was also renumbered — its items ran (i) (ii) (iii) (iv) (vi) (vii)
+(v), with (v) last.
+
+No experiment was re-run, no result, model, PDF or product code was touched. Local counts move to
+**1013** full-suite and **902** `SKIP_REAL_DATA=1` checks; the 19-check CI shortfall quoted earlier
+is now bound to the commit it was measured at, since the local subset has since grown.
+
 ## The tagged release is the first one remote CI actually covers (2026-08-28)
 
 `v1.1.0` is tagged at `5c5e80741e7290ca8eee430e82f29ee179d85fa0`, and GitHub Actions run
