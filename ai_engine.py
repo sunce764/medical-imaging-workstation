@@ -282,7 +282,9 @@ class AutoAIEngineThread:
         orig_shape = norm_vol.shape
         plan = self._plan_resample()
         if plan is not None:
-            f, _ = plan
+            _, target_shape = plan
+            # zoom 直接使用原比例会把极短轴 round 到 0；必须兑现计划中的非空网格。
+            f = tuple(n / old for n, old in zip(target_shape, orig_shape, strict=True))
             # order=1：图像用线性插值。归一化后的体积是连续量，最近邻会产生阶梯伪影。
             norm_vol = ndimage.zoom(norm_vol, f, order=1, prefilter=False).astype(np.float32)
             self.resampled_from = (orig_shape, norm_vol.shape)
@@ -318,6 +320,9 @@ class AutoAIEngineThread:
                 print(f"AI 推理在应用拆卸期间中断（非模型故障）: {e}")
                 self._cancelled = True   # 宿主已在拆卸，无需再做数学降级，让线程尽早退出
             except Exception as e:
+                # 回映射也可能失败，此时已有的 mask/confidence 仍在模型网格，不能回传。
+                final_mask = None
+                self.confidence = None
                 print(f"ONNX 推理失败，降级为数学算法: {e}")
 
         # 推理被作废（用户已切换到新数据）：直接退出，不回调、不做数学降级，释放内存

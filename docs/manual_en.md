@@ -188,11 +188,13 @@ Click **"Load comparison series"** and select the prior DICOM directory. Dual-vi
 
 After registration, the V2 title bar reports the HU difference for the current slice in real time: **Δ mean** (current − prior; positive means denser now), **mean absolute difference**, and **RMSE**. Switching to the quad-view layout shows a **difference map** in V3: warm colours where density has increased, cool where it has decreased, transparent where there is no change.
 
-When the two series have different matrix sizes, the software **states plainly that they are not comparable rather than force-resampling them** — interpolation would introduce error and create the illusion of a valid comparison.
+If matrix sizes or row/column pixel spacing differ, or the current slice is outside the prior series' z coverage, the software marks the pair as incomparable, skips registration and difference quantification, and clears any previous difference map. Both images remain available side by side; an out-of-coverage prior image is explicitly labelled as the nearest endpoint, not a corresponding slice.
 
 ### 8.2 In-plane rigid registration
 
 The **"Register"** checkbox in the top toolbar (**enabled only in comparison mode**; disabled until a prior series is loaded) rigidly aligns the prior slice to the current one before comparing: translation is estimated by **phase correlation**, then rotation is searched within ±6° in 0.5° steps, keeping whichever maximises normalised cross-correlation (NCC). The title bar reports the estimated angle, translation and the NCC before/after.
+
+This angle search applies only to square pixels. With matching spacing but non-square pixels, only translation is estimated and the title states that limitation: rotation in pixel-index coordinates is not directly a rigid rotation in physical space.
 
 - **Safety valve**: if NCC does not improve (mismatched levels, anatomy changed too much), the transform is **rejected** and the title says so — better no registration than an alignment that makes things worse.
 - **Measured effect**: for a prior series shifted by (12, −9), mean absolute difference drops from **321 HU to 13 HU**, NCC 0.85 → 0.99.

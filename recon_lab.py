@@ -115,7 +115,11 @@ class ReconLabMixin:
         img_windowed = np.ascontiguousarray(img_windowed)
         h, w = img_windowed.shape
         qimg = QImage(img_windowed.data, w, h, w, QImage.Format_Grayscale8).copy()
-        self.views[1]['view'].set_image(QPixmap.fromImage(qimg))
+        # V1 回到源轴位切片，不能沿用进入重建前冠/矢状面的 (z, in-plane) 间距。
+        ds = self.dicom_datasets[z]
+        spacing = (tuple(self._dcm_float(ds, 'PixelSpacing', 1.0, idx=i) for i in (0, 1))
+                   if self.inplane_spacing_valid else (1.0, 1.0))
+        self.views[1]['view'].set_image(QPixmap.fromImage(qimg), pixel_spacing=spacing)
         self.views[1]['view'].clear_annotations()
         self.set_view_title(1, "V1 [Ground Truth]" if self.is_english else "V1 [真实切片]")
         # 仅当切片真正改变时才重置重建流水线；调窗等其他刷新不应清掉已生成的弦图/重建结果

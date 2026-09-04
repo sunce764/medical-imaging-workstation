@@ -178,12 +178,16 @@ def mesh_shape_stats(verts: np.ndarray, faces: np.ndarray) -> dict:
 
 
 def _rotation(azimuth_deg: float, elevation_deg: float) -> np.ndarray:
-    """绕 z 轴转 azimuth、再绕 x 轴转 elevation 的 3×3 旋转矩阵。"""
+    """将 (z,y,x)=(Superior,Posterior,Left) 投影到 (深度,屏幕上,屏幕右)。
+
+    方位角 0/90/180/270 分别从患者右/前/左/后观察；正俯仰朝头侧。
+    不能把 marching-cubes 的 zyx 顶点当 xyz 旋转，否则俯仰仅变成屏幕内滚转。
+    """
     az, el = np.deg2rad(azimuth_deg), np.deg2rad(elevation_deg)
     ca, sa, ce, se = np.cos(az), np.sin(az), np.cos(el), np.sin(el)
-    rz = np.array([[ca, -sa, 0], [sa, ca, 0], [0, 0, 1]], np.float32)
-    rx = np.array([[1, 0, 0], [0, ce, -se], [0, se, ce]], np.float32)
-    return rx @ rz
+    return np.array([[se, -sa * ce, -ca * ce],
+                     [ce, sa * se, ca * se],
+                     [0, -ca, sa]], np.float32)
 
 
 def render_mesh(verts: np.ndarray, faces: np.ndarray, size: int = 400,

@@ -134,14 +134,27 @@ class CompareMixin:
             z2 = min(Z2 - 1, max(0, int(round(z / max(1, Z1 - 1) * (Z2 - 1)))))
             reg = "比例" if not self.is_english else "ratio"
         prior = self.compare_volume[z2]
+        cur_spacing = self._comparison_pixel_spacing(1)
+        prior_spacing = self._comparison_pixel_spacing(2)
+        grid_ok, grid_reason = followup.can_compare(self.volume_hu[z], prior)
+        if grid_ok and not followup.same_pixel_spacing(cur_spacing, prior_spacing):
+            grid_reason = ("pixel spacing differs; resampling required" if self.is_english
+                           else "像素间距不同，需先重采样")
+        if (self._primary_zpos is not None and self._compare_zpos is not None
+                and not self._compare_zpos[0] - 1e-3 <= self._primary_zpos[z] <= self._compare_zpos[-1] + 1e-3):
+            grid_reason = "outside prior z coverage" if self.is_english else "超出既往序列 z 覆盖范围"
+            reg = "nearest endpoint" if self.is_english else "最近端点，非同层"
+        # 像素空间旋转只有方形像素才是物理刚性旋转；非方形像素先限制为平移。
+        translation_only = not np.isclose(cur_spacing[0], cur_spacing[1], rtol=1e-3, atol=1e-4)
         rtag = ''
         # 平面内刚性配准：勾选后先把既往层对齐到当前层，再显示与算差异。
         # 只在同尺寸时尝试；registration 内部带安全阀，NCC 不升则不采用（applied=False），
         # 此时 rtag 明确标出"未采用"，避免用户以为已配准。
         applied_reg = False       # 真实采用状态，供 _compare_stat_text 如实标注
         if getattr(self, 'chk_register', None) is not None and self.chk_register.isChecked():
-            if prior.shape == self.volume_hu[z].shape:
-                r = registration.register_rigid(self.volume_hu[z], prior)
+            if not grid_reason:
+                r = registration.register_rigid(self.volume_hu[z], prior,
+                                                **({'max_angle': 0} if translation_only else {}))
                 if r['applied']:
                     applied_reg = True
                     prior = registration.apply_rigid(prior, r['angle_deg'], r['shift_yx'])
@@ -151,13 +164,15 @@ class CompareMixin:
                             f" · 配准 {r['angle_deg']:+.1f}° ({dy:+d},{dx:+d}) NCC {r['ncc_before']:.2f}→{r['ncc_after']:.2f}")
                 else:
                     rtag = " · reg not applied" if self.is_english else " · 配准未采用"
+                if translation_only:
+                    rtag += " · translation only (non-square pixels)" if self.is_english else " · 仅平移（非方形像素）"
             else:
-                rtag = " · reg n/a (size)" if self.is_english else " · 配准不适用（尺寸不同）"
+                rtag = f" · reg n/a ({grid_reason})" if self.is_english else f" · 配准不适用（{grid_reason}）"
         self._show_windowed(2, prior, ww, wl)
         # 标题带既往检查日期（脱敏时隐去——检查日期属可识别信息）
         date = '' if self.anonymize else (str(getattr(self.compare_datasets[0], 'StudyDate', '')) if self.compare_datasets else '')
         dtag = f" {date[:4]}-{date[4:6]}-{date[6:8]}" if len(date) == 8 else ''
-        stat = self._compare_stat_text(self.volume_hu[z], prior, applied_reg)
+        stat = self._compare_stat_text(self.volume_hu[z], prior, applied_reg, grid_reason)
         self.set_view_title(2, (f"V2 [Prior{dtag} {z2 + 1}/{Z2} · {reg}]{rtag}{stat}" if self.is_english
                                 else f"V2 [既往{dtag} {z2 + 1}/{Z2} · {reg}]{rtag}{stat}"))
         # 【V4 必须清空】对比模式只用到 V1/V2（V3 是差值图，由 _compare_stat_text 在可见时
@@ -172,7 +187,7 @@ class CompareMixin:
             self.set_view_title(4, "V4 [unused in comparison mode]" if self.is_english
                                 else "V4 [对比模式下未使用]")
 
-    def _compare_stat_text(self, cur, prev, applied_reg=False):
+    def _compare_stat_text(self, cur, prev, applied_reg=False, unavailable_reason=''):
         """本层 HU 差异定量，返回可直接拼进 V2 标题的一段文字（无差异可比时返回提示）。
 
         计算全在无 Qt 的 followup 模块，本方法只做取值与格式化。
@@ -193,7 +208,12 @@ class CompareMixin:
         scope = ("rigid-aligned, no deformable" if registered else "z-aligned only") if e else \
                 ("已刚性配准，无形变校正" if registered else "仅z轴对齐")
         ok, why = followup.can_compare(cur, prev)
-        if not ok:
+        if not ok or unavailable_reason:
+            why = unavailable_reason or why
+            if 3 in self.views:
+                v3 = self.views[3]['view']
+                v3.set_image(QPixmap()); v3.set_overlay({}, {}); v3.clear_annotations()
+                self.set_view_title(3, "V3 [Difference unavailable]" if e else "V3 [差值不可用]")
             return f" · Δ n/a ({why})" if e else f" · Δ 不可比（{why}）"
         s = followup.compare_slices(cur, prev)
         # 差值图叠加到 V3——仅在它确实可见时才做（默认双窗布局下 V3 隐藏）
@@ -210,6 +230,12 @@ class CompareMixin:
         return (f" · Δ{s['mean_diff']:+.0f} MAE {s['mae']:.0f} RMSE {s['rmse']:.0f} HU ({scope})" if e
                 else f" · Δ{s['mean_diff']:+.0f} 绝对差 {s['mae']:.0f} RMSE {s['rmse']:.0f} HU（{scope}）")
 
+    def _comparison_pixel_spacing(self, vid):
+        datasets = self.compare_datasets if vid == 2 else self.dicom_datasets
+        ds = datasets[0] if datasets else None
+        # 没有 DICOM 的独立数值图按像素显示；真实对比入口已验证两份序列几何。
+        return tuple(self._dcm_float(ds, 'PixelSpacing', 1.0, idx=i) for i in (0, 1))
+
     def _show_windowed(self, vid, hu2d, ww, wl):
         """把 2D HU 切片按窗位映射为灰度显示到指定视图（对比模式用，不叠加蒙版/标注/四角信息）。"""
         img = np.clip(hu2d, wl - ww / 2, wl + ww / 2)
@@ -220,6 +246,6 @@ class CompareMixin:
         h, w = img.shape
         qimg = QImage(img.data, w, h, w, QImage.Format_Grayscale8).copy()
         v = self.views[vid]['view']
-        v.set_image(QPixmap.fromImage(qimg))
+        v.set_image(QPixmap.fromImage(qimg), pixel_spacing=self._comparison_pixel_spacing(vid))
         v.set_overlay({}, {})
         v.clear_annotations()

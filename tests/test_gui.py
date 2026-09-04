@@ -412,7 +412,8 @@ def test_compare(v, app):
     finally:
         shutil.rmtree(compare_dir, ignore_errors=True)
     v.compare_volume = np.zeros((10, 64, 64), np.float32)
-    v.compare_datasets = [type('D', (), {'StudyDate': '20200115'})()]
+    v.compare_datasets = [type('D', (), {'StudyDate': '20200115',
+                                        'PixelSpacing': v.dicom_datasets[0].PixelSpacing})()]
     v.compare_mode_active = True
     v._primary_zpos = np.arange(v.volume_hu.shape[0]).astype(float)
     v._compare_zpos = np.array([40, 45, 50, 55, 60, 65, 70, 75, 80, 85.])
@@ -432,7 +433,9 @@ def test_compare(v, app):
     # 构造既往 = 当前 + 40 HU，则 Δ 必为 -40、MAE/RMSE 必为 40，可精确验算。
     Zp = v.volume_hu.shape[0]
     v.compare_volume = v.volume_hu + 40.0
-    v.compare_datasets = [type('D', (), {'StudyDate': '20200115'})()]
+    # 合成既往像素由主序列平移/加常数得到，保留同一个物理网格，而非缺省 1 mm。
+    v.compare_datasets = [type('D', (), {'StudyDate': '20200115',
+                                        'PixelSpacing': v.dicom_datasets[0].PixelSpacing})()]
     v._primary_zpos = np.arange(Zp).astype(float)
     v._compare_zpos = np.arange(Zp).astype(float)
     v.current_3d_pos[0] = Zp // 2
@@ -2625,6 +2628,9 @@ def test_compare_registration_label_truth():
 
         def _show_windowed(self, vid, hu2d, ww, wl):
             pass                          # 渲染不在本测试范围内
+
+        def _comparison_pixel_spacing(self, vid):
+            return (1.0, 1.0)             # 本测试的两份合成数组位于相同的方形像素网格
 
     rs = _np.random.RandomState(0)
     cur = rs.rand(4, 24, 24).astype(_np.float32) * 400
@@ -7656,8 +7662,278 @@ def test_mirrored_pipeline_feeds_model_identically(app):
               f"seg3d_teacher 的差异同样只落在末块（{tdiff2}）——两个复刻处在同一侧")
 
 
+def test_spatial_ai_boundary_chain(app):
+    """极薄 / 奇数矩阵穿过实际重采样、轴变换、模型适配和回调。"""
+    from unittest.mock import patch
+
+    import ai_engine
+
+    print("[空间链路：薄体积、非方阵、模型故障后的回退]")
+    class ConstantSession:
+        def get_inputs(self): return [type('Input', (), {'name': 'x'})()]
+        def run(self, _, feed):
+            b = feed['x']
+            out = np.zeros((1, 25, *b.shape[2:]), np.float32)
+            out[:, 5] = 20
+            return [out]
+
+    for shape, spacing in (((2, 7, 11), (0.25, 0.6, 1.2)),
+                           ((1, 3, 5), (0.1, 0.2, 0.3)),
+                           ((33, 7, 11), (2.1, 0.7, 1.8))):
+        got = {}
+        eng = ai_engine.AutoAIEngineThread(np.zeros(shape, np.float32),
+            lambda mask, ms, result=got: result.update(mask=mask), spacing=spacing)
+        expected_shape = eng._plan_resample()[1]
+        with patch.object(ai_engine, '_get_session', return_value=ConstantSession()):
+            eng._run_body()
+        check(eng.resampled_from[1] == expected_shape,
+              f"{shape} 重采样实际尺寸与非空计划一致（{eng.resampled_from[1]} vs {expected_shape}）")
+        check(got.get('mask') is not None and got['mask'].shape == shape
+              and bool((got['mask'] == 5).all()) and eng.confidence.shape == shape,
+              f"{shape} 标签与 confidence 回到完整原网格，不回传零层结果")
+
+    # 已生成 mask 后，回映射异常仍应清除半成品，真正执行 fallback。
+    eng = ai_engine.AutoAIEngineThread(np.zeros((3, 5, 7), np.float32),
+                                       lambda *a: None, spacing=(3, 3, 3))
+    real_zoom = ai_engine.ndimage.zoom
+    calls = []
+    def broken_return(array, *a, **kw):
+        calls.append(kw.get('order'))
+        if kw.get('order') == 0: raise ValueError('synthetic return-grid failure')
+        return real_zoom(array, *a, **kw)
+    with patch.object(ai_engine, '_get_session', return_value=ConstantSession()), \
+         patch.object(ai_engine.ndimage, 'zoom', side_effect=broken_return):
+        eng._run_body()
+    check(0 in calls and eng.used_fallback and eng.confidence is None,
+          "回映射失败时真实降级并清掉错误网格 confidence，不把半成品当成功")
+
+
+def test_mesh_patient_directions(app):
+    """顶点为 (S,P,L) 顺序；按钮名称必须对应真实观察方向与纵横比例。"""
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QPushButton
+
+    import mesh3d
+    from annotation_lab import MeshView
+
+    print("[三维相机：解剖方向、俯仰、非对称形状]")
+    for name, az, el, direction in (
+            ('Right', 0, 0, (0, 0, -1)), ('Left', 180, 0, (0, 0, 1)),
+            ('Anterior', 90, 0, (0, -1, 0)), ('Posterior', 270, 0, (0, 1, 0)),
+            ('Superior', 90, 89, (1, 0, 0))):
+        check(np.allclose(mesh3d._rotation(az, el)[0], direction, atol=0.018),
+              f"{name} 的深度轴指向对应患者方位")
+    check(not np.allclose(mesh3d._rotation(30, 0)[0], mesh3d._rotation(30, 50)[0]),
+          "俯仰改变观察方向，而不是只在屏幕内旋转")
+    vol = np.zeros((12, 26, 42), np.uint8); vol[1:11, 1:25, 1:41] = 5
+    verts, faces = mesh3d.extract_surface(vol, 5, (1, 1, 1), step=1, smooth=0, decimate_grid=0)
+    viewer = m.MedicalViewer(); viewer._organ_stats = [{'id': 5, 'name_zh': '长方体', 'name_en': 'Cuboid'}]
+    ratios = {}
+    def inspect():
+        dlg = app.activeModalWidget(); mv = dlg.findChild(MeshView)
+        for button in dlg.findChildren(QPushButton):
+            if button.text() in ('前', '右', '上'):
+                button.click()
+                im = mv.pixmap().toImage()
+                coords = [(x, y) for y in range(im.height()) for x in range(im.width())
+                          if im.pixelColor(x, y).alpha() > 0]
+                xy = np.array(coords); span = np.ptp(xy, axis=0) + 1
+                ratios[button.text()] = span[0] / span[1]
+        dlg.accept()
+    try:
+        QTimer.singleShot(50, inspect)
+        viewer._show_mesh_dialog(5, verts, faces, mesh3d.mesh_shape_stats(verts, faces))
+        for label, ratio in (('前', 4), ('右', 2.4), ('上', 40 / 24)):
+            check(label in ratios and abs(ratios[label] - ratio) < 0.12,
+                  f"真实 {label} 视角按钮得到长方体宽高比 {ratio}（{ratios.get(label)}）")
+    finally:
+        viewer.close(); app.processEvents()
+
+
+def test_compare_physical_grid_chain(app):
+    import tempfile
+    from unittest.mock import patch
+
+    from pydicom.uid import generate_uid
+
+    import registration
+    print("[随访链路：MPR 后比例、不同物理网格、无重叠层面]")
+    with tempfile.TemporaryDirectory() as root:
+        paths = []
+        for k, spacing in enumerate(((0.6, 1.2), (0.6, 1.2), (1.2, 2.4))):
+            path = os.path.join(root, str(k)); os.mkdir(path); paths.append(path)
+            sid = generate_uid()
+            for z in range(3):
+                fp = os.path.join(path, f'{z}.dcm')
+                _write_min_dcm(fp, (9, 13), sid, z * 2.5, z + 1,
+                               pixels=np.arange(117).reshape(9, 13) + 1024)
+                ds = m.pydicom.dcmread(fp); ds.PixelSpacing = list(spacing); ds.save_as(fp)
+        v = m.MedicalViewer(); v._kickoff_ai = lambda: None
+        try:
+            v.load_data(paths[0]); v.show(); v.combo_layout.setCurrentIndex(2)
+            v.views[1]['cb_plane'].setCurrentIndex(SAGITTAL)
+            v.views[2]['cb_plane'].setCurrentIndex(CORONAL)
+            v.compare_volume, v.compare_datasets = v._read_compare_dir(paths[1])
+            v._enter_compare_mode(); v.combo_layout.setCurrentIndex(2); app.processEvents()
+            check(all(v.views[i]['view'].pixel_spacing == (0.6, 1.2) for i in (1, 2, 3)),
+                  "对比三幅轴向图显式安装当前序列的行列间距，不沿用 MPR 比例")
+            check(all(np.isclose(v.views[i]['view'].transform().m22() /
+                                 v.views[i]['view'].transform().m11(), 0.5) for i in (1, 2, 3)),
+                  "对比图实际纵横缩放比与 0.6/1.2 mm 物理比例一致")
+            # 同网格但像素非方形，二维像素旋转不是物理刚性旋转；仅能做平移。
+            with patch.object(registration, 'register_rigid', wraps=registration.register_rigid) as reg:
+                v.chk_register.setChecked(True); v.update_display()
+                check(reg.called and all(c.kwargs.get('max_angle') == 0 for c in reg.call_args_list),
+                      "各向异性像素不做错误的像素空间角度旋转")
+            v._exit_compare_mode()
+            v.compare_volume, v.compare_datasets = v._read_compare_dir(paths[2])
+            with patch.object(registration, 'register_rigid', wraps=registration.register_rigid) as reg:
+                v._enter_compare_mode(); v.combo_layout.setCurrentIndex(2); app.processEvents()
+                check(not reg.called and 'RMSE' not in v.views[2]['title_label'].text(),
+                      "同形状但不同 spacing 的图不伪装为可刚性配准或差值为零")
+            check(v.views[2]['view'].pixel_spacing == (1.2, 2.4)
+                  and v.views[3]['view'].image_item.pixmap().isNull(),
+                  "既往图使用自己的 spacing；不可比较时清掉上一幅差值图")
+            v._exit_compare_mode()
+            v.compare_volume, v.compare_datasets = v._read_compare_dir(paths[1])
+            for ds in v.compare_datasets: ds.ImagePositionPatient[2] += 100
+            v._enter_compare_mode(); v.combo_layout.setCurrentIndex(2); app.processEvents()
+            check('RMSE' not in v.views[2]['title_label'].text()
+                  and v.views[3]['view'].image_item.pixmap().isNull(),
+                  "z 范围无重叠时不把最近端点冒充同层差值")
+        finally:
+            v.close(); app.processEvents()
+
+
+def test_spatial_landmark_roundtrips(app):
+    """三组非方阵：乱序 DICOM→三平面像素/蒙版/探针→定量→缓存往返。"""
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtTest import QTest
+
+    from constants import LABEL_LUT
+
+    print("[空间链路：三组不对称 landmark、物理比例与持久化往返]")
+    for seed, shape in enumerate(((5, 7, 11), (7, 9, 13), (9, 11, 15))):
+        with tempfile.TemporaryDirectory() as root:
+            data = os.path.join(root, 'data'); os.mkdir(data)
+            cache = os.path.join(root, 'cache'); os.mkdir(cache)
+            Z, H, W = shape
+            zz, yy, xx = np.indices(shape)
+            truth = (100 * zz + 10 * yy + xx).astype(np.int16)
+            row, col, dz = 0.6 + 0.1 * seed, 1.3 + 0.2 * seed, 2.5 + seed
+            sid = generate_uid()
+            for z in np.random.default_rng(seed).permutation(Z):
+                _write_min_dcm(os.path.join(data, f'{Z - z}.dcm'), (H, W), sid,
+                    100 + z * dz, Z - int(z), slope=1, intercept=0,
+                    pixel_spacing=(row, col), pixels=truth[z])
+            v = m.MedicalViewer(); kickoffs = []; v._kickoff_ai = lambda calls=kickoffs: calls.append(True)
+            v.persistence_dir = cache; v.export_dir = cache
+            try:
+                v.resize(1200 + seed * 80, 800); v.show(); v.load_data(data)
+                check(np.array_equal(v.volume_hu, truth) and np.isclose(v._slice_spacing(), dz),
+                      f"seed {seed} 乱文件名/InstanceNumber 按 patient-space 重建正确 zyx 数组")
+                z, y, x = Z - 2, 1, W - 2
+                mask = np.zeros(shape, np.uint8); mask[z, y, x] = 5; mask[1, H - 2, 1] = 10
+                v.volume_mask = mask.copy(); v._update_organ_stats()
+                stats = next(s for s in v._organ_stats if s['id'] == 5)
+                check(np.isclose(stats['volume_ml'], row * col * dz / 1000)
+                      and stats['mean_hu'] == truth[z, y, x],
+                      f"seed {seed} 标签位置传到 HU 统计和三轴体素体积")
+                v.current_3d_pos = [z, y, x]; v.slider_slice.setValue(z); v.set_window(2000, 500)
+                expected = ((AXIAL, truth[z], mask[z], (x, y), (row, col)),
+                            (CORONAL, truth[::-1, y, :], mask[::-1, y, :], (x, Z - 1 - z), (dz, col)),
+                            (SAGITTAL, truth[::-1, :, x], mask[::-1, :, x], (y, Z - 1 - z), (dz, row)))
+                for plane, values, labels, pixel, spacing in expected:
+                    v.views[1]['cb_plane'].setCurrentIndex(plane)
+                    v.combo_layout.setCurrentIndex(2); v.resize(1180 + plane * 90, 780)
+                    QTest.qWait(40); v.update_display(); QTest.qWait(30)
+                    view = v.views[1]['view']; im = view.image_item.pixmap().toImage()
+                    actual = np.array([[im.pixelColor(i, j).red() for i in range(im.width())]
+                                       for j in range(im.height())])
+                    wanted = ((values.astype(float) + 500) / 2000 * 255).astype(np.uint8)
+                    check(np.array_equal(actual, wanted),
+                          f"seed {seed} plane {plane} 每个像素与独立 zyx oracle 相等")
+                    mi = view.mask_item.pixmap().toImage()
+                    alpha = np.array([[mi.pixelColor(i, j).alpha() for i in range(mi.width())]
+                                      for j in range(mi.height())])
+                    check(np.array_equal(alpha, LABEL_LUT[labels, 3]),
+                          f"seed {seed} plane {plane} 蒙版与显示方向逐像素同源")
+                    check(np.isclose(view.transform().m22() / view.transform().m11(), spacing[0] / spacing[1]),
+                          f"seed {seed} plane {plane} 延迟布局/resize 后仍保留物理纵横比")
+                    pos = view.mapFromScene(QPointF(pixel[0] + 0.5, pixel[1] + 0.5))
+                    v.measure_hu(pos, 1)
+                    check(f"{truth[z, y, x]:.1f} HU" in v.lbl_hu_value.text(),
+                          f"seed {seed} plane {plane} 屏幕点击逆映射返回原 landmark HU")
+                v.tabs.setCurrentIndex(1); QTest.qWait(40)
+                view = v.views[1]['view']
+                check(view.pixel_spacing == (row, col)
+                      and np.isclose(view.transform().m22() / view.transform().m11(), row / col),
+                      f"seed {seed} 从 MPR 进入重建，轴位参考图重新安装行列间距")
+                v.tabs.setCurrentIndex(0)
+                v.global_annotations = {z: [{'id': f'seed-{seed}', 'type': 'ruler',
+                                             'p1': [1, 1], 'p2': [3, 4]}], 'all': []}
+                v.save_project(); kickoffs.clear(); v.load_data(data)
+                check(np.array_equal(v.volume_mask, mask) and not kickoffs
+                      and v.global_annotations[z][0]['id'] == f'seed-{seed}',
+                      f"seed {seed} 非对称蒙版和标注保存/恢复保持逐体素位置，不启动新 AI")
+                for filename in os.listdir(data):
+                    fp = os.path.join(data, filename); ds = m.pydicom.dcmread(fp)
+                    ds.PixelSpacing = [row * 1.1, col]; ds.save_as(fp)
+                v.load_data(data)
+                check(not v.volume_mask.any() and not any(v.global_annotations.values()),
+                      f"seed {seed} UID/shape 不变但物理间距改变时拒绝旧蒙版和标注")
+            finally:
+                v.close(); app.processEvents()
+
+
+def test_signed_dicom_orientation_chain(app):
+    """24 种正交有向面内轴实际落盘加载；不把非 canonical 数据当轴位重建。"""
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    print("[DICOM 方向链路：24 种有向轴组合]")
+    basis = [axis * sign for axis in np.eye(3) for sign in (1, -1)]
+    failures = []
+    count = 0
+    with tempfile.TemporaryDirectory() as root:
+        v = m.MedicalViewer(); calls = []; v._kickoff_ai = lambda: calls.append(True)
+        v.persistence_dir = root
+        try:
+            for col_axis in basis:
+                for row_axis in basis:
+                    if np.dot(col_axis, row_axis) != 0: continue
+                    normal = np.cross(col_axis, row_axis)
+                    iop = np.r_[col_axis, row_axis]
+                    path = os.path.join(root, str(count)); os.mkdir(path); uid = generate_uid()
+                    for z in (2, 0, 3, 1):
+                        _write_min_dcm(os.path.join(path, f'{4-z}.dcm'), (5, 7), uid, None,
+                            4-z, iop=iop, ipp=np.array([12, -35, 68]) + z * 2.3 * normal,
+                            pixel_spacing=(0.7, 1.1), pix=z * 100, slope=1, intercept=0)
+                    calls.clear(); v.load_data(path)
+                    canonical = np.array_equal(iop, [1, 0, 0, 0, 1, 0])
+                    if not (np.array_equal(v.volume_hu[:, 0, 0], [0, 100, 200, 300])
+                            and v.volume_hu.shape == (4, 5, 7)
+                            and np.isclose(v._slice_spacing(), 2.3)
+                            and v.canonical_orientation == canonical
+                            and v.btn_mpr.isEnabled() == canonical
+                            and bool(calls) == canonical):
+                        failures.append(iop.tolist())
+                    count += 1
+            check(count == 24 and not failures,
+                  f"24/24 方向组合排序、间距和能力门一致（实测 {count}，异常 {failures}）")
+        finally:
+            v.close(); app.processEvents()
+
+
 def main_run():
     app = QApplication([])
+    test_spatial_ai_boundary_chain(app)
+    test_mesh_patient_directions(app)
+    test_compare_physical_grid_chain(app)
+    test_spatial_landmark_roundtrips(app)
+    test_signed_dicom_orientation_chain(app)
     test_runner_catches_qt_slot_exceptions()
     test_raw_display_window_limits()
     test_ct_preview_rescale_contract()

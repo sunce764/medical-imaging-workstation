@@ -182,5 +182,184 @@
     "checks_total": 1010,
     "checks_passed": 1010,
     "scope": "Local data-independent subset, with existing optional DL model weights; not equivalent to remote CI without weights."
+  },
+  "spatial_reaudit": {
+    "date": "2026-09-04",
+    "base_commit": "913d423f9f40410b01e9ba7ea27cb348f43558fa",
+    "state": "local pre-commit candidate; does not attest push or remote CI",
+    "candidate_source_sha256": {
+      "ai_engine.py": "a5eb2c12ddf8c8719d035f90dfc5b9b1d36d9846754849569f78f4cf8049e1d4",
+      "annotation_lab.py": "cf5dbb6308d5d098f60b8ad0388553e9cf5bc31b45f96b40f7ba6bb34c507e10",
+      "compare_lab.py": "9c2342d7ac115ec02de0d0293e73a7f7db882eb8e6c03b835656d7f49e480b8e",
+      "constants.py": "e94542d5cb132a48539b558c043d4c1f845134e74215b58b1eb6b4e27db4ee64",
+      "dicom_geometry.py": "1764acee466586a9410af35b20e73c8ca8c09eab905e05c1b99d1ebb3874775f",
+      "followup.py": "3a91a415074c440606a22319fdaadeb2a4bb16655d22126f05822a0bc3a78597",
+      "graphics_view.py": "cfe2dfbd9892f0d63198a7662d92e99768a60b2551f8a2b2f6823a973d80ee07",
+      "interaction.py": "80a4a7ef75b8b7a0e8f0e560508f461051e380740f96998f5f0a6b9c5448f3f6",
+      "main.py": "a50bc9b0cc2975dcf8f9aa4bcb6995e8a0babfeeb12e32f45ea35330425bdd08",
+      "mesh3d.py": "407313143a6849ae4dd36c3c1bbebd11bfaf40a59ef1651e39e4f56cf5f90ba5",
+      "model_card.py": "6e83b64506c5c4c883b0fc433bcef7d142911586004e7da8e4c56d40b204ce9b",
+      "mpr_geometry.py": "4852cd4d353cfd8773a7a0d8efddc26a3a6bef603cd3a0d2bf8ae1a83e15759c",
+      "projection.py": "e667575f525aa1200f8151c4d97189ab4751bcaa19650c46856e33852b7f6133",
+      "quantify.py": "37b1947cfc48119dbe883db0e6dc8b70213c42a3f44dd6b533e215ab0000a9e4",
+      "recon.py": "356ecfdf4dbff445289da4c80f03c10e095347b4e02406fff226ef40f5eb79de",
+      "recon_lab.py": "4c5b28a4028ccca01057a66c12d6f957425cd9c2a60a1dd58fef036662cfcea8",
+      "registration.py": "1bbd16a10d34fe0c8ff6302357b77acfa45003dc429a8120c1628134bf722fad",
+      "segmentation.py": "943430e9591f6914f5013ff67ee5cc6dc912de945c541f269e5b74df2ae7245a",
+      "ui_builder.py": "a38d4e8cb7afd8ff12ec98cba5e6254d369fb4145a86e1d72d820ab365e2cc4b",
+      "windowing.py": "a19015a8605e593b498852fcd235b2993d1ec3b2a935dbb029915e406d3108da",
+      "tests/test_gui.py": "cea82aa6f927af49e8058264ebd922414aefa934edf200389aea71cd66528792"
+    },
+    "scope": "dimensions, patient directions, physical display, comparison, resampling, UI and persistence paths",
+    "new_check_count": 74,
+    "known_bad": [
+      {
+        "log": "/tmp/gui-spatial-red.log",
+        "total": 22,
+        "failed": 16,
+        "exit_code": 1
+      },
+      {
+        "log": "/tmp/gui-spatial-recon-spacing-red.log",
+        "total": 51,
+        "failed": 3,
+        "exit_code": 1
+      }
+    ],
+    "full_suite": {
+      "command": "COVERAGE_FILE=/tmp/gui-spatial-final.coverage python -m coverage run tests/test_gui.py",
+      "total": 1195,
+      "passed": 1195,
+      "failed": 0,
+      "exit_code": 0,
+      "coverage": {
+        "covered_lines": 4007,
+        "num_statements": 4284,
+        "percent_covered": 93.53408029878618,
+        "percent_covered_display": "94",
+        "missing_lines": 277,
+        "excluded_lines": 0,
+        "percent_statements_covered": 93.53408029878618,
+        "percent_statements_covered_display": "94"
+      }
+    },
+    "local_subset": {
+      "command": "SKIP_REAL_DATA=1 python tests/test_gui.py",
+      "total": 1084,
+      "passed": 1084,
+      "failed": 0,
+      "exit_code": 0,
+      "external_dl_weights_available": true
+    },
+    "landmark_shapes_zyx": [
+      [
+        5,
+        7,
+        11
+      ],
+      [
+        7,
+        9,
+        13
+      ],
+      [
+        9,
+        11,
+        15
+      ]
+    ],
+    "landmark_scope": "independent encoded values: unsorted DICOM to MPR pixel/mask identity, physical viewport transforms, inverse probe, quantification, reconstruction reference and mask/annotation roundtrip",
+    "negative_cache_case": "same UID and shape, changed PixelSpacing: mask and annotations rejected on all three shapes",
+    "orthogonal_iop_cases": {
+      "total": 24,
+      "passed": 24,
+      "aggregate_assertions": 1,
+      "scope": "real disk loads, projection ordering, z spacing, shape and canonical-only MPR/AI gates"
+    },
+    "real_data_resampling_parity": {
+      "scope": "Read-only existing HU-declared RIDER copy; no ONNX inference or calibration proof",
+      "volume_shape": [
+        233,
+        512,
+        512
+      ],
+      "iop": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "spacing_zyx": [
+        1.25,
+        0.712891,
+        0.712891
+      ],
+      "decoded_slices_checked": [
+        0,
+        116,
+        232
+      ],
+      "resample_shape": [
+        194,
+        243,
+        243
+      ],
+      "old_new_resample_exact_equal": true,
+      "max_absolute_difference": 0.0,
+      "ai_engine_sha256": "a5eb2c12ddf8c8719d035f90dfc5b9b1d36d9846754849569f78f4cf8049e1d4"
+    },
+    "native_cocoa": {
+      "1280": {
+        "1": 1.0,
+        "2": 1.7534237351853228,
+        "3": 1.7534237351853228
+      },
+      "1600": {
+        "1": 1.0,
+        "2": 1.7534237351853226,
+        "3": 1.7534237351853228
+      },
+      "MPR to recon axial ratio": 1,
+      "front": {
+        "azimuth": 90.0,
+        "elevation": 0.0,
+        "visible_aspect_ratio": 3.948051948051948
+      },
+      "right": {
+        "azimuth": 0.0,
+        "elevation": 0.0,
+        "visible_aspect_ratio": 2.393700787401575
+      },
+      "superior": {
+        "azimuth": 90.0,
+        "elevation": 89.0,
+        "visible_aspect_ratio": 1.6521739130434783
+      },
+      "uncaught_errors": []
+    },
+    "native_expected_cuboid_aspect_ratios": {
+      "front": 4,
+      "right": 2.4,
+      "superior": 1.6666666666666667
+    },
+    "native_harness_correction": "Initial setChecked-only MPR result was rejected; reran with actual click and explicit plane assertions before native evidence capture.",
+    "native_script_sha256": "037dbc40d29d9df380a208c88fc9bcea32ed3dcc8df1560905a6434d44de3f02",
+    "log_sha256": {
+      "/tmp/gui-spatial-red.log": "586d8898260c7189cf54a2eef67642d2e076945b596237686016ece446c09dcb",
+      "/tmp/gui-spatial-targeted.log": "1b6a0aafc9954fabefe0fb5d4ccc8c3bfaaf10411d9d42d31ae410f45940aaeb",
+      "/tmp/gui-spatial-recon-spacing-red.log": "3071fe44a527b0860965765a88181edaa650a259decf030fc89a1f32fe144d03",
+      "/tmp/gui-spatial-full-final.log": "610fc6981337308413d57c3f6ba9459941532fd6184c32c5174a7fb5ec55a6a6",
+      "/tmp/gui-spatial-subset-final.log": "45b6c2cf4b997d95559d2a0306c662d2ca73a862effa22d357208a58f3a367a9",
+      "/tmp/gui-spatial-real.log": "e1fb5d4472763f382579f2dd5a23aa227ad87bf411574e5f499f525d6bca2369",
+      "/tmp/gui-spatial-native.log": "fa95faed06d63e566cdcc3b70ede8c12cb9a4c9602c8310dd983c0eb234440b4"
+    },
+    "limits": [
+      "No expensive ONNX inference rerun for this candidate; the existing real CPU AI record belongs to the earlier audit source hashes.",
+      "Real-input old/new resampling parity is not universal equivalence, independent HU calibration or segmentation accuracy.",
+      "Signed orthogonal orientations do not exhaust oblique geometries or all parameter combinations.",
+      "Temporary logs and screenshots can be cleaned by the OS; this record retains results and fingerprints."
+    ]
   }
 }

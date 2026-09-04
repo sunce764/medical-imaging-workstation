@@ -4,6 +4,25 @@ This file collects the systematic rounds of defect investigation on the **Medica
 
 **Version 1.1.0** (annotated tag `v1.1.0`, 2026-08-28) is the earlier release snapshot. The unreleased changes below are subsequent local work. The exact-tag CI recorded in the historical sections covers that tag, not subsequent changes; neither fact says anything about the copyright registration, which remains under review. The earlier `v1.0-copyright` tag marks the separate snapshot submitted for that registration.
 
+## Unreleased: spatial dimensions, directions and pipeline audit (2026-09-04)
+
+Mesh camera presets now map z-y-x vertices to patient directions correctly; elevation changes
+the viewing direction. View fitting preserves physical pixel proportions through delayed layout
+and resize events, while comparison and reconstruction install their own source pixel spacing.
+AI resampling honours nonempty target dimensions on thin volumes, and return-grid failures clear
+intermediate masks and confidence before fallback.
+
+Follow-up registration and differences require matching matrix sizes and pixel spacing, with the
+current slice inside prior z coverage. Invalid pairs clear stale difference images. Non-square
+pixels permit translation only, with the limitation shown in the title.
+
+Based on `913d423`, local validation adds 74 checks: full suite 1195/1195, local data-independent
+subset 1084/1084, both exit 0. Tests include 24 signed orthogonal DICOM orientations, three
+asymmetric volume roundtrips and known-bad failures before fixes. Actual macOS views were checked;
+the existing 233-slice volume has bit-identical old/new resampling, without rerunning expensive
+ONNX inference. Scope and fingerprints are in the [functional audit](docs/gui_functional_audit.md).
+These are local candidate results, not attestations of a push or remote CI.
+
 ## Unreleased: functional and UI state audit (2026-09-04)
 
 Reset and valid manual mask edits now cancel stale AI results instead of allowing delayed callbacks

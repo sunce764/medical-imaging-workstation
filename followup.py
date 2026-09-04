@@ -19,6 +19,16 @@ from __future__ import annotations
 
 import numpy as np
 
+from dicom_geometry import SPACING_ATOL_MM, SPACING_RTOL
+
+
+def same_pixel_spacing(a, b) -> bool:
+    """同形状不等于同物理网格；逐像素差值 / 像素刚性配准还需相同行列间距。"""
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    return bool(a.shape == b.shape == (2,) and np.isfinite(a).all() and np.isfinite(b).all()
+                and (a > 0).all() and (b > 0).all()
+                and np.allclose(a, b, rtol=SPACING_RTOL, atol=SPACING_ATOL_MM))
+
 
 def can_compare(a: np.ndarray, b: np.ndarray) -> tuple[bool, str]:
     """判断两个切片是否具备可比性。返回 (是否可比, 不可比的原因)。

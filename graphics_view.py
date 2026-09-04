@@ -280,6 +280,14 @@ class MedicalGraphicsView(QGraphicsView):
             if abs(t.m11() - 1.0) < 1e-6 or abs(t.m11() - t.m22()) > 1e-9:
                 self.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
+    def fitInView(self, rect, aspect_mode=Qt.KeepAspectRatio):
+        """加载、切平面、布局和 resize 的适配入口都保留物理像素比例。"""
+        if (not self.image_item.pixmap().isNull()
+                and abs(self.pixel_spacing[0] - self.pixel_spacing[1]) > 1e-9):
+            self._apply_aniso_fit()
+        else:
+            super().fitInView(rect, aspect_mode)
+
     def _apply_aniso_fit(self):
         """各向异性像素的非均匀适配：让每个体素按 (列间距=水平, 行间距=垂直) 的真实物理
         尺寸显示，整体等比缩放填满视口。关键：只改 View 变换，不缩放图元、不重采样，
