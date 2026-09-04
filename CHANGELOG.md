@@ -4,6 +4,25 @@ This file collects the systematic rounds of defect investigation on the **Medica
 
 **Version 1.1.0** (annotated tag `v1.1.0`, 2026-08-28) is the earlier release snapshot. The unreleased changes below are subsequent local work. The exact-tag CI recorded in the historical sections covers that tag, not subsequent changes; neither fact says anything about the copyright registration, which remains under review. The earlier `v1.0-copyright` tag marks the separate snapshot submitted for that registration.
 
+## Unreleased: functional and UI state audit (2026-09-04)
+
+Reset and valid manual mask edits now cancel stale AI results instead of allowing delayed callbacks
+to restore cleared masks or overwrite edits. In-progress annotations survive ordinary redraws and
+are cancelled when their slice, tool, plane, series or mode changes. Unsupported planes explain the
+restriction before drawing starts. Loading another series invalidates reconstruction products even
+when its dimensions and slice index match; removing the last phantom clears the reference image.
+
+Clinical and reconstruction reference views share the CT preview transform. Reset restores inversion
+and slab settings, empty-source controls reflect their actual capabilities, and PNG write failures
+are reported truthfully. AI and reconstruction cancellation status can wrap. Model-card and mesh
+dialogs explicitly set both background and foreground, fixing unreadable text on dark macOS systems.
+
+The local candidate adds 31 checks to the full suite (1121/1121, exit 0). Validation includes actual
+CPU ONNX inference, actual 16² matrix backends, native macOS controls and dialogs, and failing
+regressions before each fix. Scope, limitations, commands, fingerprints and results are maintained
+in the [functional audit](docs/gui_functional_audit.md). This entry records local verification,
+not a push or a remote CI result.
+
 ## Unreleased: use CT window previews directly from the original directory (2026-09-04)
 
 The previous fix explained disabled presets but still required a separately HU-declared copy.

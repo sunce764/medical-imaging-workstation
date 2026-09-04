@@ -30,6 +30,7 @@ class ReconLabMixin:
     # =========================================================================
     def _enter_recon_mode(self):
         """进入重建实验室：记忆原布局、清空视图、切到 2x2、隐藏每视图工具栏控件。"""
+        self._cancel_view_interactions()
         self._pre_recon_layout = self.combo_layout.currentIndex()
         self._recon_ref_z = None   # 强制下一次 _render_recon_reference 初始化重建流水线
         for vid in range(1, 5):
@@ -58,8 +59,7 @@ class ReconLabMixin:
 
     def _exit_recon_mode(self):
         """退出重建实验室：清空弦图缓存与按钮、恢复每视图工具栏控件、还原原布局。"""
-        self.current_sinogram = None
-        self._cached_bp = None; self._cached_bp_sino = None
+        self._invalidate_recon_results()
         for b in [self.btn_dfr, self.btn_bp, self.btn_fbp, self.btn_dl]:
             b.setEnabled(False)
         for vid, v in self.views.items():
@@ -83,6 +83,21 @@ class ReconLabMixin:
         for vid in (2, 3, 4):
             self.set_view_title(vid, f"V{vid} {txt}")
 
+    def _invalidate_recon_results(self):
+        """数据来源变更时统一作废弦图及派生结果，不能只拿层号判断是否换数据。"""
+        self._recon_ref_z = None
+        self.current_sinogram = self.current_theta = self._last_recon_img = None
+        self._cached_bp = self._cached_bp_sino = None
+        for b in (self.btn_dfr, self.btn_bp, self.btn_fbp, self.btn_dl):
+            b.setEnabled(False)
+        if self.recon_mode_active:
+            for vid in (2, 3, 4):
+                view = self.views[vid]['view']
+                view.set_image(QPixmap())
+                view.clear_annotations()
+                view.set_overlay({}, {})
+            self._set_recon_pending_titles()
+
     def _render_recon_reference(self, z):
         """重建实验室分支：仅刷新 V1 的"真实切片"参考图，并重置 V2-V4 重建流水线状态。"""
         # 模体在场时 V1 就该是模体：否则切一次层，V1 变成真实切片而弦图仍来自模体，
@@ -92,9 +107,9 @@ class ReconLabMixin:
             self.set_view_title(1, "V1 [Phantom · known truth]" if self.is_english
                                 else "V1 [模体 · 真值已知]")
             return
-        img_gt = self.volume_hu[z]
+        img_gt = self._display_intensity(self.volume_hu[z])
         ww, wl = self.slider_ww.value(), self.slider_wl.value()
-        # 窗宽/窗位映射：将 HU 值线性映射到 [0, 255]
+        # 与阅片页共用显示强度，未知单位的预览不变更底层体积。
         img_windowed = np.clip(img_gt, wl - ww / 2, wl + ww / 2)
         img_windowed = ((img_windowed - (wl - ww / 2)) / ww * 255).astype(np.uint8)
         img_windowed = np.ascontiguousarray(img_windowed)
@@ -105,6 +120,7 @@ class ReconLabMixin:
         self.set_view_title(1, "V1 [Ground Truth]" if self.is_english else "V1 [真实切片]")
         # 仅当切片真正改变时才重置重建流水线；调窗等其他刷新不应清掉已生成的弦图/重建结果
         if self._recon_ref_z != z:
+            self._invalidate_recon_results()
             self._recon_ref_z = z
             for vid in [2, 3, 4]:
                 self.views[vid]['view'].image_item.setPixmap(QPixmap())
@@ -181,7 +197,7 @@ class ReconLabMixin:
         """
         has_src = (getattr(self, '_phantom_img', None) is not None
                    or getattr(self, 'volume_hu', None) is not None)
-        for b in (self.btn_dmr, self.btn_art):
+        for b in (self.btn_gen_sino, self.btn_dmr, self.btn_art):
             b.setEnabled(has_src)
 
     def _recon_source_slice(self):
@@ -221,6 +237,7 @@ class ReconLabMixin:
         """
         on = self._phantom_img is None
         self._phantom_img = recon_lib.shepp_logan(self.PHANTOM_N) if on else None
+        self._invalidate_recon_results()
         self.current_sinogram = None
         self.current_theta = None
         self._last_recon_img = None
@@ -252,6 +269,9 @@ class ReconLabMixin:
         else:
             self.lbl_time.setText("")
             self.set_view_title(1, "V1 [Ground Truth]" if e else "V1 [真实切片]")
+            if self.volume_hu is None:
+                self.views[1]['view'].set_image(QPixmap())
+                self.views[1]['view'].clear_annotations()
             self.update_display()
 
     def generate_sinogram(self):
@@ -284,6 +304,9 @@ class ReconLabMixin:
         else:
             img_src, src_label = self._recon_source_slice()
             if img_src is None:
+                QMessageBox.information(self, "No source" if self.is_english else "无可重建源图",
+                                        "Load a phantom or select a non-uniform image slice."
+                                        if self.is_english else "请载入模体，或选择具有灰度变化的图像切片。")
                 return
         ar = self._get_n_angles()
         self.current_theta = recon_lib.make_theta(ar, ar * self._get_angle_oversample())

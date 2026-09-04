@@ -1,0 +1,186 @@
+{
+  "date": "2026-09-04",
+  "base_commit": "ad99a10b8bb1827c4c696f38c831e19244182e89",
+  "state": "local pre-commit candidate; does not attest push or remote CI",
+  "candidate_source_sha256": {
+    "main.py": "a50bc9b0cc2975dcf8f9aa4bcb6995e8a0babfeeb12e32f45ea35330425bdd08",
+    "annotation_lab.py": "cf5dbb6308d5d098f60b8ad0388553e9cf5bc31b45f96b40f7ba6bb34c507e10",
+    "graphics_view.py": "4fa95c7f7eefde0f3e1fc4221bfa254ce94af1334fbd966dc343e14fa631a93b",
+    "interaction.py": "80a4a7ef75b8b7a0e8f0e560508f461051e380740f96998f5f0a6b9c5448f3f6",
+    "recon_lab.py": "bd8d3c18acd46a34dacf8a28d9f41157c2b014458d868c6a221d060ac00699ee",
+    "compare_lab.py": "6163bdee9f3096e43ebbbdf6c71fa9ba7ebd5e1d0a70c24a3817e70f9f47f633",
+    "ui_builder.py": "a38d4e8cb7afd8ff12ec98cba5e6254d369fb4145a86e1d72d820ab365e2cc4b",
+    "tests/test_gui.py": "95b59c80c53024d1f8b86b11f30729ce3dfc54ccde749fcd0e65302cb723f8f3",
+    "ai_engine.py": "aaa4899fa2f786e1944471eed97daac249b047f54f03f574db807a0b7ea7a83a"
+  },
+  "real_cpu_ai": {
+    "scope": "single declared RIDER series; functional inference and UI only; no accuracy claim",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "python": "3.10.20",
+    "ort_version": "1.23.2",
+    "available_providers": [
+      "CoreMLExecutionProvider",
+      "AzureExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "volume_shape": [
+      233,
+      512,
+      512
+    ],
+    "model_graph_sha256": "360b7b97765d1582ce0a83e1381e00228a63833647553149bbbd5a9ffb61809e",
+    "model_weights_sha256": "0b96b9d1129129c3b0c3f4d761cdc26a3e52d607977c07336b893b88bfd312ce",
+    "wall_seconds": 44.94072720804252,
+    "peak_rss_bytes": 4997054464,
+    "state": "done",
+    "fallback": false,
+    "label_voxels": {
+      "0": 50432164,
+      "1": 456545,
+      "2": 15066,
+      "3": 19324,
+      "5": 2148505,
+      "6": 236555,
+      "7": 59480,
+      "8": 7162,
+      "9": 5583,
+      "10": 2116199,
+      "11": 1708715,
+      "12": 1034693,
+      "13": 390993,
+      "14": 2245043,
+      "15": 59524,
+      "16": 52560,
+      "17": 23666,
+      "18": 8,
+      "20": 67767
+    },
+    "organ_stats_count": 18,
+    "confidence_shape": [
+      233,
+      512,
+      512
+    ],
+    "resampled_from": [
+      [
+        233,
+        512,
+        512
+      ],
+      [
+        194,
+        243,
+        243
+      ]
+    ],
+    "source_sha256": {
+      "main.py": "0709995760122237942c3338bb4132aec631920cc73d5d3bf587b66a296ef2c3",
+      "ai_engine.py": "aaa4899fa2f786e1944471eed97daac249b047f54f03f574db807a0b7ea7a83a",
+      "annotation_lab.py": "12a2651f2d10acd2e1051578f56c356a372a65bff11bee9659e9032317450bbe"
+    },
+    "requested_execution_providers": [
+      "CPUExecutionProvider"
+    ],
+    "input": "Existing RIDER_HU_declared copy, 233 slices; no source or cache modification",
+    "limitation": "Functional run on an intermediate candidate; later changes affect display and dialogs only. Not segmentation accuracy or independent HU calibration validation."
+  },
+  "real_matrix_ui": {
+    "DMR": {
+      "matrix_shape": [
+        2880,
+        256
+      ],
+      "result_shape": [
+        16,
+        16
+      ],
+      "title": "V4 [DMR 16x16]"
+    },
+    "ART": {
+      "matrix_shape": [
+        2880,
+        256
+      ],
+      "result_shape": [
+        16,
+        16
+      ],
+      "title": "V4 [ART 10it 16x16]"
+    },
+    "SIRT": {
+      "matrix_shape": [
+        2880,
+        256
+      ],
+      "result_shape": [
+        16,
+        16
+      ],
+      "title": "V4 [SIRT 10it 16x16]"
+    },
+    "ASD-POCS": {
+      "matrix_shape": [
+        2880,
+        256
+      ],
+      "result_shape": [
+        16,
+        16
+      ],
+      "title": "V4 [ASD-POCS 50it 16x16]"
+    }
+  },
+  "native_ui": {
+    "platform": "cocoa",
+    "checks": {
+      "original 233 slices, preview enabled, no AI startup": true,
+      "six native preset clicks change pixels": true,
+      "layout 1 visible images": true,
+      "layout 2 visible images": true,
+      "layout 0 visible images": true,
+      "native real source BP and FBP": true,
+      "native phantom DFR": true,
+      "model card opens": true,
+      "mesh preview opens": true,
+      "mesh preset orientation": true,
+      "mesh mouse rotation": true,
+      "native STL export to temporary directory": true,
+      "no uncaught Qt slot exceptions": true
+    },
+    "sizes": [
+      [
+        1280,
+        800
+      ],
+      [
+        1600,
+        950
+      ]
+    ],
+    "errors": []
+  },
+  "local_full_suite": {
+    "command": "COVERAGE_FILE=/tmp/gui-0904-audit-final.coverage python -m coverage run tests/test_gui.py",
+    "exit_code": 0,
+    "checks_total": 1121,
+    "checks_passed": 1121,
+    "coverage_totals": {
+      "covered_lines": 3974,
+      "num_statements": 4253,
+      "percent_covered": 93.43992475899366,
+      "percent_covered_display": "93",
+      "missing_lines": 279,
+      "excluded_lines": 0,
+      "percent_statements_covered": 93.43992475899366,
+      "percent_statements_covered_display": "93"
+    }
+  },
+  "local_subset": {
+    "command": "SKIP_REAL_DATA=1 python tests/test_gui.py",
+    "exit_code": 0,
+    "checks_total": 1010,
+    "checks_passed": 1010,
+    "scope": "Local data-independent subset, with existing optional DL model weights; not equivalent to remote CI without weights."
+  }
+}

@@ -90,6 +90,7 @@ class CompareMixin:
 
     def _enter_compare_mode(self):
         """进入对比模式：强制双窗、关闭 MPR、切换按钮文案。"""
+        self._cancel_view_interactions()
         self.compare_mode_active = True
         self._primary_zpos = self._zpos_array(self.dicom_datasets)
         self._compare_zpos = self._zpos_array(self.compare_datasets)

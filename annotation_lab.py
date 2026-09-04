@@ -146,10 +146,20 @@ def mask_axis_contract_ok(saved_contract):
     return True, ""
 
 
-# QDialog 是顶层窗口，不继承主窗口设在实例上的深色样式表，其背景为系统浅色。
-# 弹窗内的文字必须用浅色背景下的前景色，不能复用主界面那套深色主题调色板。
-_DIALOG_FG = '#24292F'          # 正文，浅底对比度约 13:1
-_DIALOG_FG_MUTED = '#57606A'    # 次要说明，浅底对比度约 6:1
+# 顶层弹窗的系统背景可能为深色，必须同时设置前景 / 背景，不能假定浅色系统主题。
+_DIALOG_FG = '#C9D1D9'
+_DIALOG_FG_MUTED = '#9BAABD'
+_DIALOG_STYLE = f"""
+    QDialog, QLabel, QScrollArea {{ background-color: #1D232C; color: {_DIALOG_FG}; }}
+    QScrollArea {{ border: 1px solid #344151; }}
+    QPushButton {{ background-color: #283241; color: {_DIALOG_FG};
+                   border: 1px solid #44546A; border-radius: 4px; padding: 7px; }}
+    QPushButton:hover {{ background-color: #36465C; }}
+    QScrollBar:vertical {{ background: #1D232C; width: 12px; }}
+    QScrollBar::handle:vertical {{ background: #536175; min-height: 24px; border-radius: 5px; }}
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: #1D232C; }}
+"""
 
 
 def _pin_text_to_screen(txt, view):
@@ -244,6 +254,7 @@ class AnnotationMixin:
             QMessageBox.warning(self, "3D Tracking" if e else "智能追踪", fail_msg)
             return                                    # 未写蒙版，不必刷新定量与显示
         # —— 以下为成功路径，此前不曾改动任何状态 ——
+        self._stop_ai_for_manual_edit()
         if self.volume_mask is None:
             self.volume_mask = np.zeros(self.volume_hu.shape, dtype=np.uint8)
         self._push_volume_undo()
@@ -273,7 +284,6 @@ class AnnotationMixin:
         if self.volume_mask is None:
             self.volume_mask = np.zeros(self.volume_hu.shape, dtype=np.uint8)
         z = self.current_3d_pos[0]
-        self._push_mask_undo(z)   # 编辑前存快照，支持 Ctrl+Z 撤销
         h, w = self.volume_hu.shape[1], self.volume_hu.shape[2]
         r = max(1, self.views[vid]['view'].brush_radius)
         qi = QImage(w, h, QImage.Format_Grayscale8); qi.fill(Qt.black)
@@ -290,6 +300,10 @@ class AnnotationMixin:
         painter.end()
         ma = np.array(qi.constBits(), dtype=np.uint8).reshape((h, qi.bytesPerLine()))[:, :w]
         brush = ma > 0
+        if not brush.any():
+            return
+        self._stop_ai_for_manual_edit()
+        self._push_mask_undo(z)   # 实际命中图像才接管 AI、记录编辑快照
         # 补画写入所选目标器官标签（修正计入该器官定量）；橡皮清零
         label = 0 if is_erase else int(self.cb_paint_target.currentData() or MANUAL_TRACK_LABEL)
         self.volume_mask[z][brush] = label
@@ -425,7 +439,12 @@ class AnnotationMixin:
                 s_p, _ = QFileDialog.getSaveFileName(self, "Save", default_path, "PNG (*.png)")
                 if s_p:
                     # img*bm：将 ROI 外的像素清零，保留病灶区域
-                    QImage((img * bm).data, w, h, w, QImage.Format_Grayscale8).copy().save(s_p)
+                    saved = QImage((img * bm).data, w, h, w, QImage.Format_Grayscale8).copy().save(s_p)
+                    if not saved:
+                        QMessageBox.warning(self, "Export Failed" if self.is_english else "导出失败",
+                                            "Could not save the PNG image. Check the destination."
+                                            if self.is_english else "无法保存 PNG 图像，请检查目标目录与写入权限。")
+                        return
                     try:
                         with open(os.path.join(os.path.dirname(s_p), "export_log.csv"), 'a',
                                   newline='', encoding='utf-8-sig') as f:
@@ -853,7 +872,7 @@ class AnnotationMixin:
         """
         dlg = QDialog(self)
         dlg.setWindowTitle(model_card.card_title(self.is_english))
-        dlg.setStyleSheet(f"QDialog, QLabel {{ color: {_DIALOG_FG}; }}")
+        dlg.setStyleSheet(_DIALOG_STYLE)
         dlg.resize(560, 520)
         lay = QVBoxLayout(dlg)
         body = QLabel(model_card.build_model_card(self.is_english))
@@ -915,7 +934,7 @@ class AnnotationMixin:
         rgb = (int(LABEL_LUT[lid][0]), int(LABEL_LUT[lid][1]), int(LABEL_LUT[lid][2]))
         dlg = QDialog(self)
         dlg.setWindowTitle(f"3D · {nm}")
-        dlg.setStyleSheet(f"QDialog, QLabel {{ color: {_DIALOG_FG}; }}")
+        dlg.setStyleSheet(_DIALOG_STYLE)
         lay = QVBoxLayout(dlg)
 
         # 拖动降质、松手提质：实测完整网格渲染约 100–140ms/帧，拖动时会明显顿挫；

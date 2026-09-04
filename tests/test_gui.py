@@ -1108,6 +1108,12 @@ def test_ct_window_preview_without_hu(app):
             check('preview' in v.lbl_window_status.text().lower(), "英文提示明确是显示预览")
             v.tabs.setCurrentIndex(1); v.tabs.setCurrentIndex(0)
             check(all(b.isEnabled() for b in v.preset_btns), "实验室往返保留窗预览")
+            vd['cb_plane'].setCurrentIndex(AXIAL)
+            v.set_window(400, 40)
+            before = pixel()
+            v.tabs.setCurrentIndex(1)
+            check(pixel() == before, "重建参考图与阅片图使用同一显示变换，不突然泛白")
+            v.tabs.setCurrentIndex(0)
             check(not v.hu_calibrated and float(v.volume_hu[1, 0, 0]) == 1124,
                   "底层未知单位数组保留原始 1124，不伪称 100 HU")
             check(not kickoffs and not v.btn_compare.isEnabled()
@@ -1320,6 +1326,171 @@ def test_layout_reveals_current_images(app):
                 px = v.views[vid]['view'].image_item.pixmap()
                 check(not px.isNull() and abs(px.toImage().pixelColor(0, 0).red() - 191) <= 1,
                       f"展开 V{vid} 得到新层 200 HU 的像素 191，不沿用之前的 100 HU")
+        finally:
+            v.close(); app.processEvents()
+
+
+def test_full_ui_state_audit(app):
+    """从真实控件入口覆盖重置、换序列、模体和后台结果的交叉状态。"""
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtTest import QTest
+
+    print("[全功能审计：重置 / 后台竞态 / 重建来源 / 空载控件]")
+    class PendingAI:
+        confidence = None
+        cancelled = False
+        def isRunning(self): return True
+        def cancel(self): self.cancelled = True
+
+    with tempfile.TemporaryDirectory() as root:
+        paths = []
+        for j in range(2):
+            path = os.path.join(root, str(j)); os.mkdir(path); paths.append(path)
+            sid = generate_uid()
+            for i in range(3):
+                _write_min_dcm(os.path.join(path, f'{i}.dcm'), (16, 16), sid, i, i + 1,
+                               pixels=np.arange(256).reshape(16, 16) * (j + 1) + 1024)
+        v = m.MedicalViewer(); v._kickoff_ai = lambda: None
+        try:
+            check(not v.btn_cine.isEnabled() and not v.btn_gen_sino.isEnabled(),
+                  "空载时播放和生成弦图入口禁用，不给可点但静默无效的按钮")
+            v.load_data(paths[0]); v.show(); QTest.qWait(120)
+            pending = PendingAI(); v.ai_thread = pending; v._ai_state = 'running'
+            generation = v._ai_generation
+            v.volume_mask.fill(5)
+            v.btn_reset.click()
+            v.on_auto_ai_finished(np.ones(v.volume_hu.shape, np.uint8), 1, generation)
+            v._on_ai_failed('late failure', generation)
+            v._on_ai_progress(1, 2, generation)
+            check(pending.cancelled and not v.volume_mask.any() and v._ai_state == 'standby',
+                  "重置取消旧推理，迟到的成功 / 失败 / 进度不得复活蒙版或改状态")
+            check(v._mask_cache_clear_requested, "重置非空蒙版后保存会记录明确清空意图")
+
+            pending = PendingAI(); v.ai_thread = pending; v._ai_state = 'running'
+            generation = v._ai_generation
+            v.handle_seg_paint(1, [(8, 8)], False)
+            edited = v.volume_mask.copy()
+            v.on_auto_ai_finished(np.ones(v.volume_hu.shape, np.uint8), 1, generation)
+            check(pending.cancelled and np.array_equal(edited, v.volume_mask),
+                  "手动编辑接管蒙版，迟到的 AI 不能抹掉用户画笔")
+            v.toggle_language()
+            check('stopped' in v.lbl_ai_status.text().lower(), "AI 停止原因随语言切换保留")
+            v.chk_invert.setChecked(True)
+            v.views[1]['cb_proj'].setCurrentIndex(1); v.views[1]['sp_thick'].setValue(7)
+            v.lbl_hu_value.setText('stale probe')
+            v.btn_reset.click()
+            check(not v.chk_invert.isChecked() and not v.lbl_hu_value.text()
+                  and all(vd['cb_proj'].currentIndex() == 0 and vd['sp_thick'].value() == 1
+                          for vd in v.views.values()),
+                  "重置同时复原反色 / 厚层投影并清掉旧探针读数")
+
+            v.tabs.setCurrentIndex(1); v.btn_gen_sino.click(); v.btn_fbp.click()
+            check(v.current_sinogram is not None and not v.views[4]['view'].image_item.pixmap().isNull(),
+                  "先有实际 FBP 结果，换序列测试不能从空状态假通过")
+            v.load_data(paths[1])
+            check(v.current_sinogram is None and v.current_theta is None
+                  and v._cached_bp is None and not v.btn_bp.isEnabled()
+                  and all(v.views[i]['view'].image_item.pixmap().isNull() for i in (2, 3, 4)),
+                  "重建中换同尺寸同层数序列也作废旧弦图 / BP 缓存 / 结果图")
+        finally:
+            v.close(); app.processEvents()
+        e = m.MedicalViewer()
+        try:
+            e.tabs.setCurrentIndex(1); e.btn_phantom.click(); e.btn_gen_sino.click(); e.btn_fbp.click()
+            check(e.btn_gen_sino.isEnabled() and e.current_sinogram is not None,
+                  "空载模体仍可通过按钮完成重建")
+            e.tabs.setCurrentIndex(0); e.tabs.setCurrentIndex(1); e.btn_phantom.click()
+            check(e._phantom_img is None and e.views[1]['view'].image_item.pixmap().isNull()
+                  and not e.btn_gen_sino.isEnabled(), "卸下最后一个源图后清空 V1，不留模体冒充原图")
+        finally:
+            e.close(); app.processEvents()
+
+
+def test_drawing_context_audit(app):
+    """真实视图接主窗口时，刷新保留当前笔划；换层 / 工具 / 模式取消它。"""
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtTest import QTest
+
+    print("[全功能审计：绘制进行中的上下文切换]")
+    with tempfile.TemporaryDirectory() as root:
+        sid = generate_uid()
+        for i in range(3):
+            _write_min_dcm(os.path.join(root, f'{i}.dcm'), (32, 32), sid, i, i + 1, pix=1100)
+        v = m.MedicalViewer(); v._kickoff_ai = lambda: None
+        try:
+            v.load_data(root); v.show(); QTest.qWait(120)
+            view = v.views[1]['view']
+            def begin():
+                v.tool_btns['btn_drw'].click()
+                p = view.mapFromScene(QPointF(4, 4))
+                q = view.mapFromScene(QPointF(12, 12))
+                QTest.mousePress(view.viewport(), Qt.LeftButton, pos=p)
+                QTest.mouseMove(view.viewport(), q)
+                return q
+
+            v.btn_mpr.click()
+            q = begin()
+            check(view.temp_item is not None and view.temp_item.scene() is view.scene,
+                  "MPR 悬停刷新不移除正在绘制的预览线")
+            QTest.mouseRelease(view.viewport(), Qt.LeftButton, pos=q)
+            check(sum(map(len, v.global_annotations.values())) == 1, "正常拖画真实落库一条标注")
+            v.global_annotations = {'all': []}
+            q = begin(); v.slider_slice.setValue(2)
+            QTest.mouseRelease(view.viewport(), Qt.LeftButton, pos=q)
+            check(not any(v.global_annotations.values()) and not view.is_drawing,
+                  "画到一半切层会取消笔划，不错存到新层")
+            begin(); v.tool_btns['btn_ptr'].click()
+            check(not view.is_drawing and view.temp_item is None, "换工具取消未提交笔划")
+            begin(); v.tabs.setCurrentIndex(1)
+            check(not view.is_drawing and view.temp_item is None, "进入重建取消未提交笔划")
+            v.tabs.setCurrentIndex(0)
+            begin(); v.load_data(root)
+            check(not view.is_drawing and view.temp_item is None, "重新加载序列取消未提交笔划")
+            v.views[1]['cb_plane'].setCurrentIndex(CORONAL)
+            q = begin()
+            check(not view.is_drawing and view.temp_item is None,
+                  "不支持标注的冠状面在落笔前阻止绘制，不画完才丢弃")
+            QTest.mouseRelease(view.viewport(), Qt.LeftButton, pos=q)
+        finally:
+            v.close(); app.processEvents()
+
+
+def test_export_failure_and_status_audit(app):
+    import tempfile
+    from unittest.mock import patch
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QFileDialog
+
+    print("[全功能审计：PNG 写失败 / 状态区排版 / 套索入口]")
+    with tempfile.TemporaryDirectory() as root:
+        sid = generate_uid()
+        for i in range(3):
+            _write_min_dcm(os.path.join(root, f'{i}.dcm'), (32, 32), sid, i, i + 1, pix=1100)
+        v = m.MedicalViewer(); v._kickoff_ai = lambda: None
+        try:
+            v.load_data(root); v.export_dir = root
+            warnings = []
+            dest = os.path.join(root, 'missing', 'crop.png')
+            with patch.object(QMessageBox, 'question', return_value=QMessageBox.Yes), \
+                 patch.object(QFileDialog, 'getSaveFileName', return_value=(dest, 'PNG')), \
+                 patch.object(QMessageBox, 'warning', side_effect=lambda *a: warnings.append(a[2])):
+                v.handle_crop_requested(1, [(4, 4), (20, 4), (20, 20), (4, 20)])
+            check(not os.path.exists(dest) and len(warnings) == 1 and '图像已保存' not in warnings[0],
+                  "PNG 写入失败必须如实报错，不声称图像已保存")
+            check(v.lbl_ai_status.wordWrap(), "AI 成功 / 降级 / 重采样长状态必须换行可见")
+            v.hu_calibrated = False; v._sync_view_controls()
+            check(not v.tool_btns['btn_las'].isEnabled(), "套索统计与矩形截取使用相同 HU / spacing 入口条件")
+            v.resize(1280, 800); v.show(); v.tabs.setCurrentIndex(1)
+            v.lbl_time.setText("ASD-POCS (1/200it): 123.4 ms ← cancelled, not the 200-iteration result")
+            QTest.qWait(80)
+            check(v.lbl_time.wordWrap() and v.lbl_time.height() > 2 * v.lbl_time.fontMetrics().height(),
+                  "重建取消状态完整换行，不被固定单行高度截掉")
         finally:
             v.close(); app.processEvents()
 
@@ -7208,19 +7379,12 @@ def test_ai_inplane_axis_contract(app):
 
 
 def test_mesh_dialog_text_is_readable(app):
-    """三维预览弹窗里的文字必须在它自己的背景上读得出来。
-
-    QDialog 是顶层窗口，不继承主窗口设在实例上的深色样式表，背景是系统浅色。
-    此前弹窗沿用了主界面的深色主题调色板：统计行 `#C9D1D9` 落在浅底上对比度约
-    1.4:1，几乎不可见——而那一行正是这个弹窗唯一的定量输出（表面积/体积/球形度）。
-    这里真实弹出弹窗、读每个 QLabel 的实际前景色，与弹窗实际背景算 WCAG 对比度，
-    不做源码字符串匹配：换成任何一种在该背景上读不出来的颜色都会被抓到。
-    """
-    print("[三维预览弹窗：文字对比度]")
+    """两类弹窗在系统深 / 浅 palette 下都有实际可读的文字，不能假定系统主题。"""
+    print("[模型卡 / 三维弹窗：深浅系统背景文字对比度]")
     import re
 
     from PySide6.QtCore import QTimer
-    from PySide6.QtGui import QColor
+    from PySide6.QtGui import QColor, QPalette
     from PySide6.QtWidgets import QDialog, QLabel
 
     def rel_lum(c):
@@ -7276,21 +7440,28 @@ def test_mesh_dialog_text_is_readable(app):
             w.accept()
             return
 
-    QTimer.singleShot(600, inspect)
-    v._show_mesh_dialog(5, verts, faces, stats)
-    app.processEvents()
-
-    check('worst' in seen, "弹窗被真实构造并可枚举其文字标签")
-    # 没有这条计数断言，上面的循环一旦因判定写错而全部 continue，对比度检查会
-    # 保持初始值并「通过」——即测试空转。至少要真正量到方位角、统计行、流程说明三行。
-    check(seen.get('n', 0) >= 3,
-          f"实际参与对比度检查的文字标签数 = {seen.get('n', 0)} ≥ 3（非空转）")
-    if 'worst' in seen:
-        # 4.5:1 是 WCAG AA 对正文的门槛；此前的 #C9D1D9 在浅底上只有约 1.4:1。
-        check(seen['worst'] >= 4.5,
-              f"弹窗最差文字对比度 {seen['worst']:.2f}:1 ≥ 4.5（背景 {seen['bg']}，"
-              f"最差的一行：{seen['text']!r}）")
-    v.close()
+    old_palette = app.palette()
+    try:
+        for background in ('#efefef', '#333333'):
+            palette = QPalette(old_palette)
+            palette.setColor(QPalette.Window, QColor(background))
+            palette.setColor(QPalette.Base, QColor(background))
+            app.setPalette(palette)
+            for name, show in (("mesh", lambda: v._show_mesh_dialog(5, verts, faces, stats)),
+                               ("model card", v.show_model_card)):
+                seen.clear()
+                QTimer.singleShot(150, inspect)
+                show(); app.processEvents()
+                check('worst' in seen, f"{background} {name} 弹窗真实打开")
+                minimum = 3 if name == 'mesh' else 1
+                check(seen.get('n', 0) >= minimum,
+                      f"{background} {name} 实际检查 {seen.get('n', 0)} 个文字标签（非空转）")
+                if 'worst' in seen:
+                    check(seen['worst'] >= 4.5,
+                          f"{background} {name} 最差对比度 {seen['worst']:.2f}:1 ≥ 4.5"
+                          f"（实际背景 {seen['bg']}，{seen['text']!r}）")
+    finally:
+        app.setPalette(old_palette); v.close(); app.processEvents()
 
 
 def test_annotation_text_does_not_scale_with_zoom(app):
@@ -7492,6 +7663,8 @@ def main_run():
     test_ct_preview_rescale_contract()
     for test in (test_window_control_feedback, test_raw_window_and_mode_feedback,
                  test_ct_window_preview_without_hu,
+                 test_full_ui_state_audit, test_drawing_context_audit,
+                 test_export_failure_and_status_audit,
                  test_scroll_background_rendering, test_series_and_compare_control_transitions,
                  test_layout_reveals_current_images):
         test(app)

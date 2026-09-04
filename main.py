@@ -174,7 +174,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.ai_thread = None             # AutoAIEngineThread 实例
         # _ai_generation：每次加载新数据自增，回调中比对该值可丢弃旧数据的结果（竞态保护）
         self._ai_generation = 0
-        self._ai_state = 'standby'        # 'standby' | 'running' | 'done' | 'failed'
+        self._ai_state = 'standby'        # 'standby' | 'running' | 'done' | 'failed' | 'stopped'
         self._ai_time_ms = 0.0            # 最近一次 AI 推理耗时（毫秒）
 
         # --- 系统矩阵缓存 ---
@@ -194,6 +194,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # 初始可见性立即确定；switch_layout 只把尺寸适配延迟到下个布局周期。
         # 旧的 50ms 回调会在用户已切模式 / 测试已安装其它数据后强制重置为单窗。
         self.switch_layout(0)
+        self._sync_matrix_buttons()
 
         # 可选：启动时加载指定 DICOM 目录（由入口 --data 传入或测试显式指定）；默认不加载。
         # 不再硬编码自动加载本地"肺癌"目录——避免开发便利泄进产品入口，也避免误加载患者数据。
@@ -252,7 +253,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             (self.tool_btns['btn_rul'], "Ruler\nDist", "测距\n卡尺"),
             (self.tool_btns['btn_drw'], "Draw\nPath", "自由\n画笔"),
             (self.tool_btns['btn_rec'], "Rect\nCrop", "矩形\n截取"),
-            (self.tool_btns['btn_las'], "Lasso\nMask", "套索\n抠图"),
+            (self.tool_btns['btn_las'], "Lasso\nROI", "套索\n抠图"),
             (self.tool_btns['btn_trk'], "3D\nTrack", "3D\n追踪"),
             (self.tool_btns['btn_brush'], "Seg\nBrush", "分割\n画笔"),
             (self.tool_btns['btn_erase'], "Seg\nErase", "分割\n橡皮"),
@@ -316,7 +317,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             'btn_rul': ("Ruler — drag to measure distance (mm)", "测距卡尺 — 拖出直线测量两点距离(mm)"),
             'btn_drw': ("Freehand draw — annotate freely", "自由画笔 — 在图像上自由绘制标注"),
             'btn_rec': ("Rect crop — select ROI to export stats", "矩形截取 — 框选区域导出ROI统计"),
-            'btn_las': ("Lasso mask — polygon segmentation", "套索抠图 — 绘制多边形生成分割蒙版"),
+            'btn_las': ("Lasso ROI — crop image and measure HU", "套索抠图 — 截取多边形区域并统计 HU"),
             'btn_trk': ("3D track — track structure through slices", "3D追踪 — 框选区域执行三维连通域追踪"),
             'btn_brush': ("Seg brush — paint on the current Axial slice to add to the mask",
                           "分割画笔 — 在当前横断面涂画，补入分割蒙版（修正 AI 遗漏）"),
@@ -357,6 +358,8 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             self.lbl_ai_status.setText(self._ai_done_text())
         elif self._ai_state == 'failed':
             self.lbl_ai_status.setText(self._ai_failed_text())
+        elif self._ai_state == 'stopped':
+            self.lbl_ai_status.setText(self._ai_stopped_text())
 
         # 状态相关按钮
         mpr_on = self.btn_mpr.isChecked()
@@ -500,7 +503,13 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         """切换全局工具，并同步更新所有视图的 current_tool，确保各视图行为一致。"""
         self.active_tool = tid
         for v in self.views.values():
+            if v['view'].current_tool != tid:
+                v['view'].cancel_interaction()
             v['view'].current_tool = tid
+
+    def _cancel_view_interactions(self):
+        for vd in self.views.values():
+            vd['view'].cancel_interaction()
 
     def _set_brush_radius(self, r):
         """同步所有视图的分割修正画笔/橡皮半径。"""
@@ -527,6 +536,11 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         避免在重建实验室中意外清空正在查看的重建结果。
         """
         self._stop_cine()               # 重置时停止 Cine 播放
+        self._cancel_view_interactions()
+        self._invalidate_running_ai()
+        self._ai_state = 'standby'
+        self.lbl_ai_status.setStyleSheet("color: #8B949E; font-weight: bold;")
+        self.lbl_ai_status.setText(self._standby_text())
         if self.compare_mode_active:
             self._exit_compare_mode()   # 重置时退出对比模式
         # 布局复位仅在临床模式：recon 模式需保持 2x2，改 combo_layout 会隐藏 V2/3/4
@@ -536,14 +550,18 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.tool_btns['btn_ptr'].setChecked(True); self.change_active_tool(0)
         self.global_annotations = {'all': []}
         if self.volume_mask is not None:
+            self._mask_cache_clear_requested |= bool(self.volume_mask.any())
             self.volume_mask = np.zeros(self.volume_hu.shape, dtype=np.uint8)
             self.volume_conf = None       # 置信度属于上一次推理，不可跨重置沿用
         self._hidden_organs.clear()
         self._mask_undo = []         # 重置清撤销栈，避免撤销回被清掉的编辑
         self.lbl_hud.setText("")     # 清除光标 HUD 残留文本
+        self.lbl_hu_value.setText("")
+        with QSignalBlocker(self.chk_invert):
+            self.chk_invert.setChecked(False)
         self._update_organ_stats()  # 蒙版已清，定量面板同步清空
         self.btn_mpr.setChecked(False)
-        self.current_sinogram = None; self.current_theta = None
+        self._invalidate_recon_results()
         self._sync_view_controls()
         self._last_recon_img = None
         for b in [self.btn_dfr, self.btn_bp, self.btn_fbp, self.btn_dl]: b.setEnabled(False)
@@ -551,11 +569,15 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # （模体也是合法源图，见该方法的说明）
         self._sync_matrix_buttons()
         for v in self.views.values():
+            with QSignalBlocker(v['cb_proj']), QSignalBlocker(v['sp_thick']):
+                v['cb_proj'].setCurrentIndex(0)
+                v['sp_thick'].setValue(1)
             v['cb_plane'].setCurrentIndex(AXIAL)
             v['preset'].setCurrentIndex(0)
             v['chk_anno'].setChecked(True)
             v['view']._user_zoomed = False
             v['view'].fitInView(v['view'].scene.sceneRect(), Qt.KeepAspectRatio)
+        self._sync_view_controls()
         if not self.recon_mode_active:
             self.update_display()
 
@@ -605,6 +627,10 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         loaded = self.volume_hu is not None
         clinical = not self.recon_mode_active
         independent = clinical and not self.compare_mode_active
+        self.btn_cine.setEnabled(loaded and clinical and self.volume_hu.shape[0] > 1)
+        self.cb_cine_speed.setEnabled(self.btn_cine.isEnabled())
+        for control in (self.slider_slice, self.slider_ww, self.slider_wl, self.chk_invert):
+            control.setEnabled(loaded and clinical)
         anatomical = loaded and all((self.canonical_orientation, self.inplane_spacing_valid,
                                      self.uniform_z_geometry_valid))
         self.btn_mpr.setEnabled(anatomical and independent)
@@ -617,7 +643,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
                 available = True
             elif key == 'btn_rul':
                 available &= self.inplane_spacing_valid
-            elif key in ('btn_rec', 'btn_roi'):
+            elif key in ('btn_rec', 'btn_las', 'btn_roi'):
                 available &= self.hu_calibrated and self.inplane_spacing_valid
             elif key == 'btn_trk':
                 available &= self.hu_calibrated and anatomical
@@ -649,6 +675,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             button.setEnabled(loaded and self._ct_windows_available() and clinical)
             button.setToolTip(reason or ("Apply to visible views" if e else "应用到当前可见视图"))
         for vd in self.views.values():
+            vd['view'].annotation_enabled = loaded and independent and vd['plane'] == AXIAL
             vd['cb_plane'].setVisible(clinical and self.canonical_orientation)
             vd['cb_plane'].setEnabled(anatomical and independent)
             for key in ('preset', 'chk_anno', 'cb_proj', 'sp_thick'):
@@ -660,6 +687,11 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             vd['chk_anno'].setEnabled(loaded and independent)
             vd['cb_proj'].setEnabled(loaded and independent)
             vd['sp_thick'].setEnabled(loaded and independent and vd['cb_proj'].currentIndex() != 0)
+
+    def explain_annotation_unavailable(self):
+        QMessageBox.information(self, "Annotation" if self.is_english else "标注",
+            "Annotations require an axial view in the Clinical Viewer. Switch this view to Axial first."
+            if self.is_english else "标注工具仅支持阅片页的横断面，请先将当前视图切换为横断面。")
 
     def switch_layout(self, m):
         self._apply_grid_visibility(m)
@@ -702,8 +734,10 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # 只有 volume 已成功构建、确认新序列成为当前序列后才清旧 readout；读目录或
         # decode 失败的路径在上方返回，必须保留旧序列及其 probe/HUD，不能在 load 开始时清。
         self._stop_cine()
+        self._cancel_view_interactions()
         if self.compare_mode_active:
             self._exit_compare_mode()
+        self._invalidate_recon_results()
         self.lbl_hu_value.setText("")
         self.lbl_hud.setText("")
         # 匿名 token 只与本次成功 load session 绑定，不由 PatientID/UID/hash 推导。
@@ -1005,6 +1039,19 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         )
         self.ai_thread.start()
 
+    def _ai_stopped_text(self):
+        return ("AI stopped to preserve manual mask edits" if self.is_english
+                else "AI 已停止，保留当前手动蒙版编辑")
+
+    def _stop_ai_for_manual_edit(self):
+        """成功的手动编辑接管蒙版；也拦住已计算完但仍排在事件队列中的结果。"""
+        if self._ai_state != 'running':
+            return
+        self._invalidate_running_ai()
+        self._ai_state = 'stopped'
+        self.lbl_ai_status.setStyleSheet("color: #8B949E; font-weight: bold;")
+        self.lbl_ai_status.setText(self._ai_stopped_text())
+
     def _slice_spacing(self):
         """返回由 patient-space 相邻位置证明的 uniform slice spacing；否则 0。
 
@@ -1122,6 +1169,8 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         """切片滑动条 valueChanged 回调：更新 3D 光标 Z 轴坐标并刷新显示。
         无条件 update_display：临床/对比/重建三种模式各走自己的分支，确保切片滑条在
         重建实验室也能切换 V1 参考层（_render_recon_reference 靠 _recon_ref_z 判定是否重置流水线）。"""
+        if self.current_3d_pos[0] != idx:
+            self._cancel_view_interactions()
         self.current_3d_pos[0] = idx
         self.lbl_slice.setText(f"{'Slice: ' if self.is_english else '层数: '}{idx + 1} / {len(self.dicom_datasets)}")
         self.update_display()
@@ -1306,6 +1355,14 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             orient = {}
         vdata['view'].set_overlay(corners, orient)
 
+    def _display_intensity(self, plane):
+        """各显示入口共用预览变换；不改变原始体积或 HU 分析能力。"""
+        if not self.hu_calibrated and self._ct_preview_scale is not None:
+            slope, intercept = self._ct_preview_scale
+            # float64 防止有效 DICOM 系数在 float32 中间乘法中先溢出。
+            return plane.astype(np.float64) * slope + intercept
+        return plane
+
     def _render_clinical_plane(self, vdata, z, y, x, ww_m, wl_m, px_sp, slice_thick,
                                ps_row=None, ps_col=None):
         """临床阅片分支：渲染单个视图的 2D 截面 + 蒙版 + 标注 + 十字线。"""
@@ -1347,10 +1404,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         sp = (r, c) if plane == AXIAL else (slice_thick, c if plane == CORONAL else r)
 
         # 预览只变换这张显示切片（正向统一 affine 与投影可交换），避免另存整卷。
-        # float64 防止有效 DICOM 系数在 float32 中间乘法中先溢出。
-        if not self.hu_calibrated and self._ct_preview_scale is not None:
-            slope, intercept = self._ct_preview_scale
-            hu = hu.astype(np.float64) * slope + intercept
+        hu = self._display_intensity(hu)
         # 窗宽窗位映射：显示强度 → [0, 255]；未知单位不得标为 HU。
         img = np.clip(hu, wl - ww / 2, wl + ww / 2)
         img = ((img - (wl - ww / 2)) / ww * 255).astype(np.uint8)

@@ -35,7 +35,12 @@ class InteractionMixin:
         """
         if plane_idx < 0:
             return  # 下拉框清空重填时会触发 index=-1，需要过滤
+        if self.views[vid]['plane'] != plane_idx:
+            self.views[vid]['view'].cancel_interaction()
         self.views[vid]['plane'] = plane_idx
+        view = self.views[vid]['view']
+        view.annotation_enabled = (self.volume_hu is not None and plane_idx == AXIAL
+                                   and not self.recon_mode_active and not self.compare_mode_active)
         if not self.recon_mode_active:
             self.update_display()
         v = self.views[vid]['view']
@@ -59,6 +64,8 @@ class InteractionMixin:
         self._update_hud(z, y, x)  # HUD 实时更新，不依赖 MPR 联动开关
         if not self.btn_mpr.isChecked():
             return
+        if self.current_3d_pos[0] != z:
+            self._cancel_view_interactions()
         self.current_3d_pos = [z, y, x]
         # 同步切片滑条（blockSignals 防止递归触发 on_slice_changed），保持三者一致
         if self.slider_slice.value() != z:
@@ -126,6 +133,7 @@ class InteractionMixin:
 
     def on_wheel_mpr(self, d, vid):
         if self.volume_hu is None or self.recon_mode_active: return
+        self._cancel_view_interactions()
         increment = -1 if d > 0 else 1
         Z_MAX, Y_MAX, X_MAX = self.volume_hu.shape; z, y, x = self.current_3d_pos
         if self.compare_mode_active:   # 对比模式：滚轮始终换主序列切片，V2 按比例联动

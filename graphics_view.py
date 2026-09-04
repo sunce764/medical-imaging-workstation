@@ -126,6 +126,7 @@ class MedicalGraphicsView(QGraphicsView):
     clicked_pos = Signal(QPoint)       # 鼠标左键点击（指针工具），用于测量 HU 值
     wheel_scrolled = Signal(int)       # 滚轮滚动量（非 Ctrl），用于切换切片
     annotation_added = Signal(dict)    # 标注完成，携带标注数据字典
+    annotation_blocked = Signal()      # 当前视图不支持标注，在落笔前给出说明
     crop_requested = Signal(list)      # 截取/套索完成，携带多边形顶点列表
     track_requested = Signal(QRectF)   # 3D 追踪框选完成，携带矩形区域
     annotation_deleted = Signal(str)   # Delete 键删除选中标注，携带标注 id
@@ -137,6 +138,7 @@ class MedicalGraphicsView(QGraphicsView):
         super().__init__()
         self.view_id = view_id         # 视图编号 1~4，用于日志和信号路由
         self.current_tool = TOOL_POINTER
+        self.annotation_enabled = True
         self.pixel_spacing = (1.0, 1.0)  # (行间距mm, 列间距mm)，从 DICOM PixelSpacing 读取
 
         # --- 场景与图层堆叠 ---
@@ -310,24 +312,32 @@ class MedicalGraphicsView(QGraphicsView):
         """移除场景中的所有标注图元，保留底层影像、蒙版和十字线图元。
         每次 update_display() 刷新影像后都需要调用，防止标注重影（旧标注叠加在新帧上）。
         """
-        keep = (self.image_item, self.mask_item, self.vline, self.hline, self.brush_cursor)
+        keep = (self.image_item, self.mask_item, self.vline, self.hline, self.brush_cursor,
+                self.temp_item, self.temp_text, self.temp_rect_item)
         for item in self.scene.items():
             if item.parentItem() is not None:
                 continue  # 子图元（如 ROI 缩放手柄）随父项一起移除，不单独处理
             if item not in keep:
                 self.scene.removeItem(item)
 
+    def cancel_interaction(self):
+        """上下文变更时丢弃未提交笔划，防止旧坐标被写入新切片 / 新工具。"""
+        for item in (self.temp_item, self.temp_text, self.temp_rect_item):
+            if item is not None and item.scene() is self.scene:
+                self.scene.removeItem(item)
+        self.temp_item = self.temp_text = self.temp_rect_item = None
+        self.start_pos = self.last_mouse_pos = self.current_path = None
+        self.polygon_points = []
+        self.is_drawing = self.is_windowing = False
+        self.brush_cursor.setVisible(False)
+        self.setDragMode(QGraphicsView.NoDrag)
+        self.setCursor(Qt.ArrowCursor)
+
     def cancel_ruler_preview(self):
         """取消尚未提交的 Ruler 交互，供 spacing capability 失效时安全降级。"""
         if self.current_tool != TOOL_RULER:
             return
-        for item in (self.temp_item, self.temp_text):
-            if item is not None and item.scene() is self.scene:
-                self.scene.removeItem(item)
-        self.temp_item = None
-        self.temp_text = None
-        self.start_pos = None
-        self.is_drawing = False
+        self.cancel_interaction()
 
     def leaveEvent(self, event):
         """鼠标离开视图时隐藏画笔预览圈。"""
@@ -389,6 +399,9 @@ class MedicalGraphicsView(QGraphicsView):
         sp = self.mapToScene(event.position().toPoint())
 
         if event.button() == Qt.LeftButton:
+            if self.current_tool != TOOL_POINTER and not self.annotation_enabled:
+                self.annotation_blocked.emit()
+                return
             self.is_drawing = True
 
             if self.current_tool == TOOL_POINTER:
