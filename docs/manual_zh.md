@@ -56,7 +56,7 @@ python main.py --data <DICOM目录路径>    # 启动即加载指定 DICOM 目�
 - **并行读盘**：多线程读取目录内全部 DICOM 文件，加速大序列加载；
 - **多序列处理**：multi-file 输入只在每片都有 `SeriesInstanceUID` 时分组；缺 UID 时 fail closed，避免把未知系列混到一起。组内再按多数切片矩阵尺寸过滤；
 - **空间排序**：当所有切片的 `ImageOrientationPatient` / `ImagePositionPatient` 都有限且方向一致时，按 `dot(IPP, normal)` 的 patient-space 投影排序；无法证明时整列回退 `InstanceNumber`，但不会把这一回退声称为可靠解剖顺序；
-- **强度与单位证明**：每一保留层都必须有有限且非零的 `RescaleSlope`、有限的 `RescaleIntercept`，并满足 explicit `RescaleType=HU`，或满足 classic CT 的标准保证（`ImageType` 为 `ORIGINAL`、非 `LOCALIZER`、非 multi-energy），才按 `HU = stored value × slope + intercept` 构建 HU volume；否则整卷保留 raw stored values，关闭 CT preset、HU 定量、AI 与 HU follow-up，避免混合或虚构 HU。multi-energy CT 本轮明确不支持，但不据此声称其数值本质上一定不是 HU；
+- **强度与单位证明**：每一保留层都必须有有限且非零的 `RescaleSlope`、有限的 `RescaleIntercept`，并满足 explicit `RescaleType=HU`，或满足 classic CT 的标准保证（`ImageType` 为 `ORIGINAL`、非 `LOCALIZER`、非 multi-energy），才按 `HU = stored value × slope + intercept` 构建 HU volume；否则整卷保留 raw stored values，关闭 HU 定量、AI 与 HU follow-up。仅缺单位声明、且全卷具有一致正向有限线性变换的受支持 CT，可直接使用六种窗预设；界面标为显示预览，不必复制目录或修改 DICOM。明确非 HU、变换不一致或缺失、LOCALIZER、multi-energy 与不支持的 LUT 保留原始灰度滑条。multi-energy CT 本轮明确不支持，但不据此声称其数值本质上一定不是 HU；
 - **能力门控**：valid PixelSpacing、canonical orientation、uniform projected-z geometry 分别独立记录。只有相应契约成立时才开放 mm/mm²、MPR、mL/physical STL、AI 与 follow-up；non-canonical 或缺失 geometry 的输入保留安全的 viewer-only 功能，不显示伪 anatomical labels 或伪物理单位。
 
 ---

@@ -101,6 +101,40 @@ def _slice_has_standard_hu(dataset):
     )
 
 
+def ct_preview_rescale(datasets):
+    """缺单位的 classic CT 可预览窗位，但此结果绝不是 HU 证明。
+
+    仅接受全卷一致的正向线性变换；这样三平面与 max/min/mean 厚层显示
+    可在取片后变换，无需复制整卷。明确非 HU、LOCALIZER、多能量、混合
+    变换或另有 LUT 的序列不套用 CT 预设，仍走原始灰度显示。
+    """
+    if not datasets:
+        return None
+    scale = None
+    missing_units = False
+    for ds in datasets:
+        if (_normalized_terms(ds, 'Modality') != ('CT',)
+                or str(getattr(ds, 'SOPClassUID', '')) != '1.2.840.10008.5.1.4.1.1.2'
+                or _normalized_terms(ds, 'MultienergyCTAcquisition') not in ((), ('NO',))
+                or hasattr(ds, 'ModalityLUTSequence')):
+            return None
+        image_type = _normalized_terms(ds, 'ImageType')
+        unit = _normalized_terms(ds, 'RescaleType')
+        if (len(image_type) < 3 or image_type[0] not in ('ORIGINAL', 'DERIVED')
+                or 'LOCALIZER' in image_type or unit not in ((), ('HU',))):
+            return None
+        slope = _finite_scalar(ds, 'RescaleSlope')
+        intercept = _finite_scalar(ds, 'RescaleIntercept')
+        if slope is None or slope <= 0 or intercept is None:
+            return None
+        pair = (slope, intercept)
+        if scale is not None and pair != scale:
+            return None
+        scale = pair
+        missing_units |= not unit
+    return scale if missing_units else None
+
+
 def _is_orthonormal_iop(iop):
     """Validate one slice's two DICOM direction cosines with explicit tolerances."""
     row, column = iop[:3], iop[3:]

@@ -4,7 +4,7 @@
 **报告日期：** 2026-08-28<br>
 **报告用途：** 研究生申请与算法作品集审阅、项目阶段复盘、后续研究决策<br>
 **软件定位：** 教学 / 科研工具，非医疗器械，不得用于临床诊断<br>
-**审计基线：** 固定 Git baseline `2e9b7005b33aed9012b7707ba89b4d0d26bb315d`。中英文 README 相对该 baseline 的 unified diff SHA-256 为 `8675011407dc49f4c04b8612951703db70046b57aa69eeccfd69eeecf71911a0`；该 hash 只绑定两份 README 的当前内容，不声称它们已 push 或经远端 CI 覆盖。回归套件会解析本段的 baseline 与 canonical command 后独立复算，README 变化而本行未同步时即失败。
+**审计基线：** 固定 Git baseline `2e9b7005b33aed9012b7707ba89b4d0d26bb315d`。中英文 README 相对该 baseline 的 unified diff SHA-256 为 `2ebe1650d601d08014b82483ef4dd89c48decb9734423ceecf07e85c93ee7ebc`；该 hash 只绑定两份 README 的当前内容，不声称它们已 push 或经远端 CI 覆盖。回归套件会解析本段的 baseline 与 canonical command 后独立复算，README 变化而本行未同步时即失败。
 
 > 本报告刻意区分四类信息：**本次实测**、**可由仓库产物复算**、**历史实测但未归档**、**推断或未测项**。数值不因叙事需要而跨越这些边界。
 

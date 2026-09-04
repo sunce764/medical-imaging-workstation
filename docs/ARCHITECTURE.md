@@ -21,7 +21,7 @@ recon.py           reconstruction algorithms (Radon / BP / FBP / DFR / DMR / ART
 quantify.py        organ quantification (volume mL + seven HU statistics per organ)
 segmentation.py    classical fallback segmentation (lung connected-components)
 mpr_geometry.py    MPR coordinate mapping + dual-series z-registration
-dicom_geometry.py  classic CT HU-unit proof + patient-space geometry/order/fingerprint contracts
+dicom_geometry.py  classic CT HU-unit proof + separate preview affine + geometry/order/fingerprint contracts
 windowing.py       raw-value display window and slider limits, excluding DICOM padding; no HU inference
 followup.py        follow-up comparison metrics (HU difference map + per-slice statistics)
 projection.py      slab projection (MIP / MinIP / AIP) across the three planes

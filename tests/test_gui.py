@@ -1050,6 +1050,109 @@ def test_window_control_feedback(app):
             v.close(); app.processEvents()
 
 
+def test_ct_window_preview_without_hu(app):
+    """原目录缺单位也能直接调窗；显示变换不解锁 HU 定量 / AI。"""
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtTest import QTest
+
+    print("[CT 窗预览：直接加载缺单位序列，无副本 / 确认 / AI]")
+    with tempfile.TemporaryDirectory() as directory:
+        sid = generate_uid()
+        for i in range(3):
+            _write_min_dcm(os.path.join(directory, f'{i}.dcm'), (8, 8), sid,
+                           i, i + 1, pix=1024 + 100 * i,
+                           image_type=('DERIVED', 'SECONDARY', 'PROCESSED'))
+        v = m.MedicalViewer()
+        kickoffs = []
+        v._kickoff_ai = lambda: kickoffs.append(True)
+        try:
+            v.show(); v.load_data(directory); QTest.qWait(120)
+            def pixel():
+                return v.views[1]['view'].image_item.pixmap().toImage().pixelColor(0, 0).red()
+
+            check(all(b.isEnabled() for b in v.preset_btns), "缺单位但可变换的 CT 自动启用六种窗预览")
+            for button, expected in zip(v.preset_btns, (229, 165, 76, 106, 246, 255), strict=True):
+                button.click()
+                check(abs(pixel() - expected) <= 1,
+                      f"{button.text()} 实际显示变换后 100 的预期灰度 {expected}（得到 {pixel()}）")
+            vd = v.views[1]
+            vd['preset'].setCurrentIndex(3)
+            check(vd['preset'].isEnabled() and abs(pixel() - 76) <= 1,
+                  "单视图骨窗同样实际生效")
+            v.preset_btns[1].click()
+            vd['sp_thick'].setValue(3)
+            for proj_index, expected in ((1, 229), (2, 102), (3, 165)):
+                vd['cb_proj'].setCurrentIndex(proj_index)
+                check(abs(pixel() - expected) <= 1,
+                      f"纵隔窗厚层模式 {proj_index} 在同一显示变换下得到 {expected}（得到 {pixel()}）")
+            vd['cb_proj'].setCurrentIndex(0)
+            for plane in (CORONAL, SAGITTAL):
+                vd['cb_plane'].setCurrentIndex(plane)
+                im = vd['view'].image_item.pixmap().toImage()
+                check([im.pixelColor(0, row).red() for row in range(3)] == [229, 165, 102],
+                      f"平面 {plane} 按正确 Z 方向显示变换后的 200/100/0")
+            vd['cb_plane'].setCurrentIndex(AXIAL)
+            v.slider_ww.setValue(600)
+            check(abs(pixel() - 153) <= 1, "预览状态手动 WW 滑条沿用同一显示单位")
+            v.set_window(400, 40); vd['preset'].setCurrentIndex(3)
+            v.on_window_changed_by_mouse(200, 0)
+            check(abs(pixel() - 153) <= 1, "预览状态首次右拖也清掉独立预设")
+            v.reset_all_states()
+            check((v.slider_ww.value(), v.slider_wl.value()) == (1500, -500),
+                  "预览重置回可用肺窗，无需重新选择目录")
+            v.btn_mpr.click()
+            check(all(vd['preset'].isEnabled() for vd in v.views.values()), "MPR 内部重译保留窗预览")
+            v.toggle_language()
+            check('preview' in v.lbl_window_status.text().lower(), "英文提示明确是显示预览")
+            v.tabs.setCurrentIndex(1); v.tabs.setCurrentIndex(0)
+            check(all(b.isEnabled() for b in v.preset_btns), "实验室往返保留窗预览")
+            check(not v.hu_calibrated and float(v.volume_hu[1, 0, 0]) == 1124,
+                  "底层未知单位数组保留原始 1124，不伪称 100 HU")
+            check(not kickoffs and not v.btn_compare.isEnabled()
+                  and not v.tool_btns['btn_roi'].isEnabled(), "预览不启动 AI、不开放 HU 定量 / 随访")
+            check(all(not hasattr(ds, 'RescaleType') for ds in v.dicom_datasets),
+                  "不在内存篡改 DICOM 单位标签")
+            v.load_data(os.path.join(directory, 'missing'))
+            check(all(b.isEnabled() for b in v.preset_btns), "失败加载保留当前窗预览状态")
+            v.load_data(directory)
+            check(all(b.isEnabled() for b in v.preset_btns) and not kickoffs,
+                  "重新加载同一原目录自动恢复，无需手动确认")
+        finally:
+            v.close(); app.processEvents()
+
+
+def test_ct_preview_rescale_contract():
+    """缺单位可预览不等于一切都能套 CT 窗；纯 helper 无 Qt / 数据依赖。"""
+    from copy import deepcopy
+    from types import SimpleNamespace
+
+    from dicom_geometry import analyze_series, ct_preview_rescale
+
+    print("[窗预览：独立显示变换合约与拒绝路径]")
+    source = SimpleNamespace(Modality='CT', SOPClassUID='1.2.840.10008.5.1.4.1.1.2',
+                             ImageType=['DERIVED', 'SECONDARY', 'PROCESSED'],
+                             RescaleSlope=1, RescaleIntercept=-1024)
+    check(ct_preview_rescale([source, source]) == (1, -1024)
+          and not analyze_series([source, source]).hu_calibrated,
+          "可显示的统一 affine 不构成 HU 证明")
+    check(ct_preview_rescale([]) is None, "空序列无显示变换")
+    for field, value in (
+            ('RescaleType', 'ED'), ('RescaleType', 'HU_MOD'),
+            ('RescaleSlope', 0), ('RescaleSlope', -1), ('RescaleSlope', float('nan')),
+            ('RescaleSlope', 2), ('RescaleIntercept', None), ('RescaleIntercept', float('inf')),
+            ('RescaleIntercept', -1000), ('Modality', 'MR'),
+            ('SOPClassUID', '1.2.840.10008.5.1.4.1.1.2.1'),
+            ('MultienergyCTAcquisition', 'YES'), ('ModalityLUTSequence', []),
+            ('ImageType', ['ORIGINAL', 'PRIMARY', 'LOCALIZER']), ('ImageType', None)):
+        altered = deepcopy(source); setattr(altered, field, value)
+        check(ct_preview_rescale([source, altered]) is None,
+              f"整卷拒绝单层不支持 / 混合值 {field}={value}")
+    declared = deepcopy(source); declared.RescaleType = 'HU'
+    check(ct_preview_rescale([declared]) is None, "已有 HU 证据不再重复显示变换")
+
+
 def test_raw_window_and_mode_feedback(app):
     """单位未知的序列也应可看，并始终给出与实际能力一致的反馈。"""
     import tempfile
@@ -1065,7 +1168,7 @@ def test_raw_window_and_mode_feedback(app):
         for i in range(3):
             path = os.path.join(directory, f'{i}.dcm')
             _write_min_dcm(path, (8, 8), sid, i, i + 1, pixels=pixels,
-                           image_type=('DERIVED', 'SECONDARY', 'PROCESSED'))
+                           image_type=('DERIVED', 'SECONDARY', 'PROCESSED'), rescale_type='US')
             ds = pydicom.dcmread(path); ds.add_new((0x0028, 0x0120), 'SS', -2000); ds.save_as(path)
         v = m.MedicalViewer(); v._kickoff_ai = lambda: None
         try:
@@ -1277,11 +1380,11 @@ def test_hu_unit_semantics_gating(app):
             v.load_data(directory); app.processEvents()
             check(not v.hu_calibrated and bool(np.all(v.volume_hu == 100)),
                   f"{label}：整卷 raw，不把 stored values 伪称 HU")
-            check(all(not vd['preset'].isEnabled() for vd in v.views.values())
+            check(all(vd['preset'].isEnabled() == (directory == derived) for vd in v.views.values())
                   and not v.tool_btns['btn_rec'].isEnabled()
                   and not v.tool_btns['btn_roi'].isEnabled()
                   and not v.btn_compare.isEnabled(),
-                  f"{label}：产品路径关闭 CT preset/AI/HU ROI/compare")
+                  f"{label}：仅缺单位的 DERIVED 可预览窗位；AI/HU ROI/compare 始终关闭")
 
         compare_volume, compare_datasets = v._read_compare_dir(non_hu['Z_EFF'])
         check(compare_volume is None and compare_datasets == [],
@@ -7386,7 +7489,9 @@ def main_run():
     app = QApplication([])
     test_runner_catches_qt_slot_exceptions()
     test_raw_display_window_limits()
+    test_ct_preview_rescale_contract()
     for test in (test_window_control_feedback, test_raw_window_and_mode_feedback,
+                 test_ct_window_preview_without_hu,
                  test_scroll_background_rendering, test_series_and_compare_control_transitions,
                  test_layout_reveals_current_images):
         test(app)

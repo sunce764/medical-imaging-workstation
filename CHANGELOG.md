@@ -4,6 +4,40 @@ This file collects the systematic rounds of defect investigation on the **Medica
 
 **Version 1.1.0** (annotated tag `v1.1.0`, 2026-08-28) is the earlier release snapshot. The unreleased changes below are subsequent local work. The exact-tag CI recorded in the historical sections covers that tag, not subsequent changes; neither fact says anything about the copyright registration, which remains under review. The earlier `v1.0-copyright` tag marks the separate snapshot submitted for that registration.
 
+## Unreleased: use CT window previews directly from the original directory (2026-09-04)
+
+The previous fix explained disabled presets but still required a separately HU-declared copy.
+That was an unnecessary user workflow for a display operation. CT window previews now have a
+separate capability: supported classic CT missing a unit declaration can use a uniform positive
+finite slope/intercept for display, without changing its raw array or HU-analysis capability.
+Global presets, independent view presets, manual WW/WL, MPR and positive-affine slab projections
+share that display transform. The renderer transforms only the displayed plane, avoiding another
+full-volume allocation. Both the sidebar and image overlay identify unconfirmed-unit previews.
+No file copy, tag edit, unit-confirmation dialog or AI startup is required for these previews.
+
+Explicit non-HU units, localizers, multi-energy images, unsupported modality LUTs and inconsistent
+or invalid transforms still use raw-value sliders. HU measurements, AI and follow-up retain the
+existing stricter contract. The optional declaration tool is no longer the recommended route for
+display; README wording now describes its histogram checks as plausibility, not independent proof.
+
+Local candidate based on `ed723b2`: the new UI regression failed **12/15** checks before the fix
+(exit 1). The expanded targeted run passed **79/79** (exit 0), covering all six preset pixels,
+independent presets, three-plane orientation, max/min/mean slabs, manual adjustments, reset,
+reload, failed load, language and mode changes, plus rejected metadata combinations. A read-only
+load of the original 233-slice RIDER directory matched the independently calculated middle-slice
+pixels for all six windows exactly; HU remained false and no model inference ran. Local temporary
+logs: `/tmp/gui-0904-preview-red.log`, `/tmp/gui-0904-preview-targeted.log` and
+`/tmp/gui-0904-preview-real.log`. These candidate checks do not establish remote CI results.
+
+Final local validation in `dicom_gui`: full suite **1090/1090**, data-independent subset
+**979/979**, Ruff and `git diff --check` passed (exit 0). The first full run was rejected
+because the README change invalidated its documented diff digest; both README languages and
+the digest in `docs/project_report_zh.md` were synchronized before the passing rerun. Final logs:
+`/tmp/gui-0904-preview-full-verified.log` and `/tmp/gui-0904-preview-subset-verified.log`.
+Native macOS (`cocoa`) was restarted on the original directory and confirmed 233 slices,
+all six preset buttons enabled, HU false and no AI thread. The inspected native screenshot is
+`/tmp/gui-0904-preview-native.png`; no dataset, saved mask, model, result or submitted PDF changed.
+
 ## Unreleased: window controls, dark sidebar and state transitions (2026-09-04)
 
 Validation provenance: the checks below were recorded locally on the candidate based on

@@ -42,7 +42,12 @@ from constants import (
     SAGITTAL,
     TOOL_POINTER,
 )
-from dicom_geometry import SeriesGeometry, analyze_series, voxel_plane_edge_labels
+from dicom_geometry import (
+    SeriesGeometry,
+    analyze_series,
+    ct_preview_rescale,
+    voxel_plane_edge_labels,
+)
 from interaction import InteractionMixin
 from recon_lab import ReconLabMixin
 from ui_builder import UiBuilderMixin
@@ -119,6 +124,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self._default_window = (1500, -500)
         # 四项能力必须分别由 DICOM contract 证明；不能由“数组能堆叠”推断解剖/物理语义。
         self.hu_calibrated = False
+        self._ct_preview_scale = None     # 显示专用变换，不改变 volume_hu / HU capability
         self.canonical_orientation = False
         self.inplane_spacing_valid = False
         self.uniform_z_geometry_valid = False
@@ -564,7 +570,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
     def _configure_window_range(self):
         """加载成功后按显示单位设置范围；只配置控件，不转换体素或开放 HU 功能。"""
         ww, wl, low, high, max_width = 1500, -500, -1200, 1200, 4000
-        if not self.hu_calibrated:
+        if not self._ct_windows_available():
             padding = [(_int_tag(d, 'PixelPaddingValue', None),
                         _int_tag(d, 'PixelPaddingRangeLimit', None)) for d in self.dicom_datasets]
             ww, wl, low, high, max_width = raw_display_window(self.volume_hu, padding)
@@ -578,6 +584,9 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
     def _standby_text(self):
         if self.volume_hu is not None:
             if not self.hu_calibrated:
+                if self._ct_preview_scale is not None:
+                    return ("Window preview available; HU unavailable for AI / quantification" if self.is_english
+                            else "可调窗预览；HU 未确认，AI / 定量不可用")
                 return ("Viewer only — raw stored values; HU unavailable" if self.is_english
                         else "仅阅片 — 原始存储值；HU 不可用")
             if not all((self.canonical_orientation, self.inplane_spacing_valid,
@@ -585,6 +594,10 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
                 return ("Viewer only — DICOM geometry is not AI-compatible" if self.is_english
                         else "仅阅片 — DICOM 几何不满足 AI 条件")
         return "Status: Standby" if self.is_english else "状态: 待机中"
+
+    def _ct_windows_available(self):
+        """显示能力与 AI / 定量所需的 HU 证明分开，不能用预览结果开放后者。"""
+        return self.hu_calibrated or self._ct_preview_scale is not None
 
     def _sync_view_controls(self):
         """统一模式与能力对控件的影响，避免返回 Tab / 重译时恢复无效操作。"""
@@ -620,6 +633,9 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
                             else ("MPR 联动: 开启" if on else "MPR 联动: 关"))
         if not loaded:
             reason = "Load a DICOM series first." if e else "请先加载 DICOM 序列。"
+        elif self._ct_preview_scale is not None and not self.hu_calibrated:
+            reason = ("Window preview available. HU units unconfirmed; AI and HU measurements unavailable."
+                      if e else "可直接使用下方窗预设。HU 单位未确认，当前仅作显示预览。")
         elif not self.hu_calibrated:
             reason = ("HU unavailable: CT presets are disabled. Adjust WW/WL to view raw values."
                       if e else "HU 单位未确认，肺窗等预设已禁用。可用 WW/WL 滑条调节原始灰度。")
@@ -627,15 +643,17 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             reason = ""
         self.lbl_window_status.setText(reason)
         self.lbl_window_status.setVisible(bool(reason))
+        color = '#8BAAB8' if self._ct_preview_scale is not None else '#E9B949'
+        self.lbl_window_status.setStyleSheet(f"color: {color}; font-size: 11px;")
         for button in self.preset_btns:
-            button.setEnabled(loaded and self.hu_calibrated and clinical)
+            button.setEnabled(loaded and self._ct_windows_available() and clinical)
             button.setToolTip(reason or ("Apply to visible views" if e else "应用到当前可见视图"))
         for vd in self.views.values():
             vd['cb_plane'].setVisible(clinical and self.canonical_orientation)
             vd['cb_plane'].setEnabled(anatomical and independent)
             for key in ('preset', 'chk_anno', 'cb_proj', 'sp_thick'):
                 vd[key].setVisible(clinical)
-            vd['preset'].setEnabled(loaded and self.hu_calibrated and independent)
+            vd['preset'].setEnabled(loaded and self._ct_windows_available() and independent)
             vd['preset'].setToolTip(("Use the WW/WL controls on the right in comparison mode."
                                      if e else "对比模式请使用右侧统一窗宽/窗位。")
                                     if self.compare_mode_active else reason)
@@ -746,8 +764,8 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             # Axial/Coronal/Sagittal，也不能让下拉框进入伪解剖重切面。
             vdata['cb_plane'].setEnabled(anatomical_mpr)
             vdata['cb_plane'].setVisible(self.canonical_orientation)
-            vdata['preset'].setEnabled(self.hu_calibrated)
-            if not self.hu_calibrated:
+            vdata['preset'].setEnabled(self._ct_windows_available())
+            if not self._ct_windows_available():
                 # disabled 只阻止新交互，不会清掉上一序列已选中的 Lung/Bone 等文本；
                 # 必须主动回到 Global，避免 raw stored values 继续套用 CT-specific WW/WL。
                 vdata['preset'].blockSignals(True)
@@ -757,7 +775,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
                 vdata['plane'] = AXIAL
                 vdata['cb_plane'].setCurrentIndex(AXIAL)
         for button in self.preset_btns:
-            button.setEnabled(self.hu_calibrated)
+            button.setEnabled(self._ct_windows_available())
         if not anatomical_mpr:
             self.btn_mpr.setChecked(False)
         self.tool_btns['btn_rul'].setEnabled(self.inplane_spacing_valid)
@@ -909,6 +927,16 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             if postdecode.hu_calibrated else raw
             for raw, d in pairs
         ])
+        # 缺单位时只为显示保留线性变换；存储数组、HU 判定与所有分析入口原样保留。
+        # 只在 decode 完成后安装，失败加载不得覆盖旧序列的预览状态。
+        self._ct_preview_scale = (None if postdecode.hu_calibrated
+                                  else ct_preview_rescale(self.dicom_datasets))
+        if self._ct_preview_scale is not None:
+            slope, intercept = self._ct_preview_scale
+            with np.errstate(over='ignore', invalid='ignore'):
+                bounds = np.array([self.volume_hu.min(), self.volume_hu.max()], dtype=float) * slope + intercept
+            if not np.all(np.isfinite(bounds)):
+                self._ct_preview_scale = None
         self.volume_mask = np.zeros_like(self.volume_hu, dtype=np.uint8)
         self._mask_cache_clear_requested = False  # 新序列的全零 mask 只是 AI placeholder
         # 换序列必须一并作废置信度：两个序列 shape 常常相同（都是 512²），
@@ -1267,6 +1295,8 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             'bl': [f"W: {int(ww)}  L: {int(wl)}", f"Zoom: {zoom:.0f}%"],
             'br': [f"{'Slice' if e else '层'} {idx + 1}/{tot}", z_text, px_text],
         }
+        if self._ct_preview_scale is not None and not self.hu_calibrated:
+            corners['bl'].append("Preview · units unconfirmed" if e else "显示预览 · 单位未确认")
         # 解剖方位字母：Axial 图像左=解剖右(R)；冠/矢状面上=头(S)下=足(I)
         if self.canonical_orientation:
             orient = ({AXIAL: voxel_plane_edge_labels(ds0.ImageOrientationPatient),
@@ -1283,7 +1313,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         pre = vdata['preset'].currentText()
 
         # 窗宽/窗位来源：优先使用各视图独立预设，否则跟随全局滑动条
-        if not self.hu_calibrated or pre in ["Global", "跟随"]:
+        if not self._ct_windows_available() or pre in ["Global", "跟随"]:
             ww, wl = ww_m, wl_m
         else:
             ww, wl = self._WW_PRESETS.get(pre, ww_m), self._WL_PRESETS.get(pre, wl_m)
@@ -1316,7 +1346,12 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         c = px_sp if ps_col is None else ps_col
         sp = (r, c) if plane == AXIAL else (slice_thick, c if plane == CORONAL else r)
 
-        # 窗宽窗位映射：HU → [0, 255] 线性映射
+        # 预览只变换这张显示切片（正向统一 affine 与投影可交换），避免另存整卷。
+        # float64 防止有效 DICOM 系数在 float32 中间乘法中先溢出。
+        if not self.hu_calibrated and self._ct_preview_scale is not None:
+            slope, intercept = self._ct_preview_scale
+            hu = hu.astype(np.float64) * slope + intercept
+        # 窗宽窗位映射：显示强度 → [0, 255]；未知单位不得标为 HU。
         img = np.clip(hu, wl - ww / 2, wl + ww / 2)
         img = ((img - (wl - ww / 2)) / ww * 255).astype(np.uint8)
         if self.chk_invert.isChecked():
