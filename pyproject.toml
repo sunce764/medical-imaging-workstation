@@ -41,8 +41,8 @@ docs = ["markdown>=3"]
 py-modules = [
     "main", "recon", "ai_engine", "constants", "graphics_view",
     "annotation_lab", "compare_lab", "interaction", "recon_lab", "ui_builder",
-    "quantify", "segmentation", "mpr_geometry", "dicom_geometry",
-    # 以下模块晚于软著 V1.0 快照；列表是当前 19-module worktree inventory，
+    "quantify", "segmentation", "mpr_geometry", "dicom_geometry", "windowing",
+    # 以下模块晚于软著 V1.0 快照；列表是当前 20-module worktree inventory，
     # 不是冻结登记 snapshot 的模块清单。
     "followup", "projection", "mesh3d", "registration", "model_card",
 ]

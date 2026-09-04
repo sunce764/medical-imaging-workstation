@@ -990,6 +990,237 @@ def test_invalid_calibration_raw_gating(app):
         shutil.rmtree(valid, ignore_errors=True)
 
 
+def test_raw_display_window_limits():
+    """灰度适配只使用有效存储值，padding / 常量 / 非有限数据不会造假单位。"""
+    from windowing import raw_display_window
+
+    print("[raw 窗位纯函数：padding、常量与非有限值]")
+    volume = np.array([[[-2000, -1999, 0, 2048, 4095]]], dtype=np.float32)
+    before = volume.copy()
+    w, level, low, high, maximum = raw_display_window(volume, [(-2000, -1999)])
+    check(w == 4095 and level == 2048 and high >= 4095 and maximum >= w,
+          "padding range 排除后显示 0..4095；中灰≈2048 而非 HU -500")
+    check(np.array_equal(volume, before), "窗位计算不修改输入数组")
+    check(raw_display_window(np.full((1, 2, 2), 100))[:2] == (1, 100),
+          "常量存储值居中且 WW 非零")
+    check(raw_display_window(np.array([[[np.nan, np.inf]]]))[:2] == (1, 0),
+          "没有有限值时可确定回退，不产生 NaN 窗位")
+    check(raw_display_window(volume[:, :, :2], [(-2000, -1999)])[:2] == (1, 0),
+          "全 padding 卷使用无单位安全显示窗口")
+
+
+def test_window_control_feedback(app):
+    """从真实控件入口验图像像素；数值变了而图没变也必须失败。"""
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtTest import QTest
+
+    print("[窗位：按钮 / 滑条 / 首次右拖与独立预设同步]")
+    with tempfile.TemporaryDirectory() as directory:
+        sid = generate_uid()
+        for i in range(3):
+            _write_min_dcm(os.path.join(directory, f'{i}.dcm'), (8, 8), sid, i, i + 1,
+                           pix=1124)  # 已证明的 HU=100
+        v = m.MedicalViewer(); v._kickoff_ai = lambda: None
+        try:
+            v.show(); v.tabs.setCurrentIndex(1); QTest.qWait(80)
+            check(not v.views[4]['container'].isHidden(),
+                  "启动后立即切实验室，延迟布局不能再次强制单窗")
+            v.tabs.setCurrentIndex(0)
+            v.load_data(directory); QTest.qWait(120)
+            vd = v.views[1]
+            def pixel():
+                return vd['view'].image_item.pixmap().toImage().pixelColor(0, 0).red()
+
+            v.set_window(400, 40)
+            vd['preset'].setCurrentIndex(3)  # Bone: 100 HU 显示为 76
+            v.preset_btns[1].click()         # 与全局现值相同，也必须退出 Bone 并重画
+            check(vd['preset'].currentIndex() == 0 and abs(pixel() - 165) <= 1,
+                  f"点击纵隔即使 WW/WL 未变化，也切回跟随并实际渲染（pixel={pixel()}）")
+            vd['preset'].setCurrentIndex(3)
+            v.slider_ww.setValue(600)
+            check(vd['preset'].currentIndex() == 0 and abs(pixel() - 153) <= 1,
+                  f"拖全局 WW 滑条立即替换独立预设（pixel={pixel()}）")
+            v.set_window(400, 40); vd['preset'].setCurrentIndex(3)
+            v.on_window_changed_by_mouse(200, 0)
+            check(vd['preset'].currentIndex() == 0 and abs(pixel() - 153) <= 1,
+                  f"首次右拖就在清除预设后重绘，无需第二次事件（pixel={pixel()}）")
+        finally:
+            v.close(); app.processEvents()
+
+
+def test_raw_window_and_mode_feedback(app):
+    """单位未知的序列也应可看，并始终给出与实际能力一致的反馈。"""
+    import tempfile
+
+    import pydicom
+    from pydicom.uid import generate_uid
+    from PySide6.QtTest import QTest
+
+    print("[raw 阅片：显示范围、禁用原因、语言与模式往返]")
+    with tempfile.TemporaryDirectory() as directory:
+        sid = generate_uid()
+        pixels = np.tile(np.array([-2000, 0, 512, 1024, 2048, 3072, 4095, 4095]), (8, 1))
+        for i in range(3):
+            path = os.path.join(directory, f'{i}.dcm')
+            _write_min_dcm(path, (8, 8), sid, i, i + 1, pixels=pixels,
+                           image_type=('DERIVED', 'SECONDARY', 'PROCESSED'))
+            ds = pydicom.dcmread(path); ds.add_new((0x0028, 0x0120), 'SS', -2000); ds.save_as(path)
+        v = m.MedicalViewer(); v._kickoff_ai = lambda: None
+        try:
+            v.load_data(directory); v.show(); QTest.qWait(120)
+            vd = v.views[1]
+            im = vd['view'].image_item.pixmap().toImage()
+            check(im.pixelColor(3, 0).red() < 230 and im.pixelColor(4, 0).red() < 250,
+                  "raw 加载按实际值域设窗，不用 HU 肺窗把中间灰度挤成白色")
+            check(v.slider_wl.maximum() >= 4095 and v.slider_ww.maximum() >= 4095,
+                  "raw WW/WL 滑条覆盖实际存储值域，超出 HU 固定范围仍可调")
+            check(not v.hu_calibrated and np.array_equal(v.volume_hu[0], pixels),
+                  "显示修复不变换 raw 数据、不伪造 HU capability")
+            hint = getattr(v, 'lbl_window_status', None)
+            check(hint is not None and not hint.isHidden() and 'HU' in hint.text()
+                  and all(b.toolTip() for b in v.preset_btns),
+                  "窗位按钮旁可见禁用原因，并提供 tooltip")
+            v.toggle_language()
+            check('HU unavailable' in v.lbl_ai_status.text(),
+                  "切到英文保留 HU unavailable，不能改成 Standby")
+            v.btn_mpr.click()
+            check('HU unavailable' in v.lbl_ai_status.text(),
+                  "MPR 的内部重译也不能抹掉 viewer-only 原因")
+            v.reset_all_states()
+            check(v.slider_wl.value() >= 0, "raw 重置使用本序列显示窗口，不回到 -500 HU")
+            check('OFF' in v.btn_mpr.text(), "重置后 MPR 文案与关闭状态一致")
+            # 非 canonical 输入在实验室往返后仍不能展示伪解剖平面选择器。
+            v.canonical_orientation = False
+            for view in v.views.values():
+                view['cb_plane'].hide()
+            v.tabs.setCurrentIndex(1)
+            check(all(view['cb_proj'].isHidden() and view['sp_thick'].isHidden()
+                      for view in v.views.values()), "重建模式隐藏无效的临床投影控件")
+            v.tabs.setCurrentIndex(0)
+            check(all(view['cb_plane'].isHidden() for view in v.views.values()),
+                  "重建返回保留非 canonical 平面限制，不重新显示 Axial/Coronal/Sagittal")
+        finally:
+            v.close(); app.processEvents()
+
+
+def test_scroll_background_rendering(app):
+    """渲染真正的滚动内容，防止主题只覆盖外框而漏掉浅色内层。"""
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QScrollArea
+
+    print("[暗色侧栏：系统浅色 palette 下两个 Tab 的实际背景]")
+    old = app.palette()
+    light = QPalette(old); light.setColor(QPalette.Window, QColor('#efefef'))
+    app.setPalette(light)
+    v = m.MedicalViewer()
+    try:
+        v.resize(1200, 780); v.show(); QTest.qWait(120)
+        for index in (0, 1):
+            v.tabs.setCurrentIndex(index); app.processEvents()
+            area = v.tabs.widget(index).findChild(QScrollArea)
+            im = area.widget().grab().toImage()
+            check(im.pixelColor(2, 2).lightness() < 80,
+                  f"Tab {index} 内容空隙实际为暗色（{im.pixelColor(2, 2).name()}）")
+    finally:
+        v.close(); app.setPalette(old); app.processEvents()
+
+
+def test_series_and_compare_control_transitions(app):
+    """跨序列 / 模式检查残留状态，使用合成 DICOM 与真实信号入口。"""
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtTest import QTest
+
+    print("[换序列与对比模式：旧定量 / 当前工具 / 控件能力 / 失败回滚]")
+    with tempfile.TemporaryDirectory() as root:
+        paths = {}
+        for label in ('hu', 'raw', 'empty'):
+            directory = os.path.join(root, label); os.mkdir(directory); paths[label] = directory
+            sid = generate_uid()
+            if label == 'empty':
+                continue
+            for i in range(3):
+                _write_min_dcm(os.path.join(directory, f'{i}.dcm'), (8, 8), sid, i, i + 1,
+                               image_type=('ORIGINAL', 'PRIMARY', 'AXIAL') if label == 'hu'
+                               else ('DERIVED', 'SECONDARY', 'PROCESSED'))
+        v = m.MedicalViewer(); v._kickoff_ai = lambda: None
+        try:
+            v.load_data(paths['hu']); v.show(); QTest.qWait(120)
+            v.volume_mask[0:2, 1:4, 1:4] = 5; v._update_organ_stats()
+            check(bool(v.lbl_ai_stats.text()) and v.btn_export_stats.isEnabled(),
+                  "前序列通过真实 mask 路径生成可见定量，建立残留检测前提")
+            v.tool_btns['btn_roi'].click()
+            v.load_data(paths['raw'])
+            check(not v.lbl_ai_stats.text() and not v.btn_export_stats.isEnabled(),
+                  "成功换 raw 序列立即清除旧定量文本与导出状态")
+            check(v.active_tool == TOOL_POINTER and v.tool_btns['btn_ptr'].isChecked(),
+                  "换序列禁用当前 ROI 工具时，实际交互同时退回 Pointer")
+            v.load_data(paths['hu'])
+            v.btn_mpr.click()
+            v.compare_volume = v.volume_hu.copy(); v.compare_datasets = v.dicom_datasets[:]
+            v._enter_compare_mode()
+            check(not v.btn_mpr.isEnabled() and not v.btn_mpr.isChecked()
+                  and ('关' in v.btn_mpr.text() or 'OFF' in v.btn_mpr.text()),
+                  "对比模式真正关闭 MPR，按钮文案、可用性同步")
+            check(all(not d['cb_plane'].isEnabled() and not d['preset'].isEnabled()
+                      and not d['cb_proj'].isEnabled() for d in v.views.values()),
+                  "对比模式不接受 renderer 忽略的平面、独立预设、厚层选择")
+            check(all(not b.isEnabled() for key, b in v.tool_btns.items() if key != 'btn_ptr')
+                  and not v.chk_overlay.isEnabled(),
+                  "对比模式禁用不会被保留的标注 / 分割工具和信息叠加开关")
+            prior, volume = v.compare_volume, v.volume_hu
+            v.load_data(paths['empty'])
+            check(v.compare_mode_active and v.compare_volume is prior and v.volume_hu is volume,
+                  "新目录加载失败保留原对比与主序列，不提前退出模式")
+            v._exit_compare_mode()
+            check(v.btn_mpr.isEnabled() and v.views[1]['preset'].isEnabled(),
+                  "退出对比后按有效 HU/geometry 恢复临床控件")
+            v.tool_btns['btn_roi'].click(); v.tabs.setCurrentIndex(1)
+            check(v.active_tool == TOOL_POINTER and not v.tool_btns['btn_roi'].isEnabled(),
+                  "进入重建实验室退出临床 ROI 工具，避免画了却被 handler 丢弃")
+            v.tabs.setCurrentIndex(0)
+            check(v.tool_btns['btn_roi'].isEnabled() and v.chk_overlay.isEnabled(),
+                  "从实验室返回有效 HU 序列恢复工具与叠加开关")
+        finally:
+            v.close(); app.processEvents()
+
+
+def test_layout_reveals_current_images(app):
+    """隐藏视图没有参与逐层渲染；展开时必须补画当前层，不能保留空白或旧像素。"""
+    import tempfile
+
+    from pydicom.uid import generate_uid
+    from PySide6.QtTest import QTest
+
+    print("[单窗 → 双窗 / 四窗：新增视图立即显示当前切片]")
+    with tempfile.TemporaryDirectory() as directory:
+        sid = generate_uid()
+        for i in range(3):
+            _write_min_dcm(os.path.join(directory, f'{i}.dcm'), (8, 8), sid, i, i + 1,
+                           pix=1024 + 100 * i)
+        v = m.MedicalViewer(); v._kickoff_ai = lambda: None
+        try:
+            # 等首次单窗布局完成再加载，等同用户启动后选择目录。
+            v.show(); QTest.qWait(120); v.load_data(directory); QTest.qWait(120)
+            v.set_window(400, 100)
+            v.combo_layout.setCurrentIndex(1); QTest.qWait(30)
+            px = v.views[2]['view'].image_item.pixmap()
+            check(not px.isNull() and abs(px.toImage().pixelColor(0, 0).red() - 127) <= 1,
+                  "第一次展开双窗立即显示本层，不需额外点滑条才能出图")
+            v.combo_layout.setCurrentIndex(0); v.slider_slice.setValue(2)
+            v.combo_layout.setCurrentIndex(2); QTest.qWait(30)
+            for vid in (2, 3, 4):
+                px = v.views[vid]['view'].image_item.pixmap()
+                check(not px.isNull() and abs(px.toImage().pixelColor(0, 0).red() - 191) <= 1,
+                      f"展开 V{vid} 得到新层 200 HU 的像素 191，不沿用之前的 100 HU")
+        finally:
+            v.close(); app.processEvents()
+
+
 def test_hu_unit_semantics_gating(app):
     """标准 HU 必须有逐片单位证据；不支持的 multi-energy 与混合单位整卷 raw。"""
     print("[DICOM intensity：RescaleType/ImageType/multi-energy unit contract]")
@@ -6162,7 +6393,7 @@ def test_doc_code_consistency():
     inventory_bad = inventory_errors(declared, listed, claimed)
     check(not inventory_bad,
           f"pyproject/root imports/ARCHITECTURE inventory 一致（问题: {inventory_bad or '无'}）")
-    check(len(declared) == 19 and len(qt_free_compute) == 10,
+    check(len(declared) == 20 and len(qt_free_compute) == 11,
           f"当前 candidate inventory：{len(declared)} top-level modules / "
           f"{len(qt_free_compute)} Qt-free compute modules")
 
@@ -7154,6 +7385,11 @@ def test_mirrored_pipeline_feeds_model_identically(app):
 def main_run():
     app = QApplication([])
     test_runner_catches_qt_slot_exceptions()
+    test_raw_display_window_limits()
+    for test in (test_window_control_feedback, test_raw_window_and_mode_feedback,
+                 test_scroll_background_rendering, test_series_and_compare_control_transitions,
+                 test_layout_reveals_current_images):
+        test(app)
     # 有真实数据（本地开发）跑全套；无数据或 CI（SKIP_REAL_DATA=1）只跑数据无关的自包含测试。
     has_data = (os.path.isdir(os.path.join(_ROOT, "肺癌"))
                 and not os.environ.get("SKIP_REAL_DATA"))

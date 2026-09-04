@@ -53,6 +53,7 @@ class ReconLabMixin:
         self._set_recon_pending_titles()
         for v in self.views.values():
             v['cb_plane'].hide(); v['preset'].hide(); v['chk_anno'].hide()
+        self._sync_view_controls()
         self.update_display()
 
     def _exit_recon_mode(self):
@@ -71,6 +72,7 @@ class ReconLabMixin:
         prev = self._pre_recon_layout
         self._apply_grid_visibility(prev)
         self._apply_grid_sizes(prev)
+        self._sync_view_controls()
         self.update_display()
 
     def _set_recon_pending_titles(self):

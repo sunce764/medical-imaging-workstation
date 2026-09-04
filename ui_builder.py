@@ -145,10 +145,13 @@ class UiBuilderMixin:
         outer = QVBoxLayout(tab)
         outer.setContentsMargins(0, 0, 0, 0); outer.setSpacing(0)
         area = QScrollArea()
+        area.setObjectName("ControlScroll")
+        area.viewport().setObjectName("ControlScrollViewport")
         area.setWidgetResizable(True)
         area.setFrameShape(QFrame.NoFrame)
         area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         inner = QWidget()
+        inner.setObjectName("ControlScrollContent")
         lay = QVBoxLayout(inner)
         lay.setContentsMargins(0, 0, 0, 0)
         area.setWidget(inner)
@@ -191,9 +194,9 @@ class UiBuilderMixin:
         self.lbl_slice = QLabel(); self.slider_slice = QSlider(Qt.Horizontal)
         self.slider_slice.valueChanged.connect(self.on_slice_changed)
         self.lbl_ww = QLabel(); self.slider_ww = QSlider(Qt.Horizontal)
-        self.slider_ww.setRange(1, 4000); self.slider_ww.setValue(1500); self.slider_ww.valueChanged.connect(self.update_display)
+        self.slider_ww.setRange(1, 4000); self.slider_ww.setValue(1500); self.slider_ww.valueChanged.connect(self._on_global_window_changed)
         self.lbl_wl = QLabel(); self.slider_wl = QSlider(Qt.Horizontal)
-        self.slider_wl.setRange(-1200, 1200); self.slider_wl.setValue(-500); self.slider_wl.valueChanged.connect(self.update_display)
+        self.slider_wl.setRange(-1200, 1200); self.slider_wl.setValue(-500); self.slider_wl.valueChanged.connect(self._on_global_window_changed)
         # 标签宽度按字体实算，不写死：曾硬编码 76px，结果中文「层数: 117 / 233」被裁成
         # 「117 / 23」、英文「Slice: 117 / 233」更短一截——用户看到的总层数是**错的**，
         # 比排版难看严重得多。取中英文所有标签的最长文本之最大值，故切换语言时
@@ -206,6 +209,10 @@ class UiBuilderMixin:
             lbl.setFixedWidth(w_need); row = QHBoxLayout(); row.setSpacing(6); row.addWidget(lbl); row.addWidget(slider); dl.addLayout(row)
         self.lbl_ww_hint = QLabel(); self.lbl_ww_hint.setStyleSheet("color: #5C677D; font-size: 10px;")
         dl.addWidget(self.lbl_ww_hint)
+        self.lbl_window_status = QLabel()
+        self.lbl_window_status.setWordWrap(True)
+        self.lbl_window_status.setStyleSheet("color: #E9B949; font-size: 11px;")
+        dl.addWidget(self.lbl_window_status)
 
         # 6 个临床预设窗口按钮（3 列栅格）
         pl = QGridLayout(); self.preset_btns = []
@@ -547,4 +554,3 @@ class UiBuilderMixin:
         self.views[vid] = {'container':c, 'cb_plane': cb_plane, 'preset':ps, 'chk_anno':an, 'view':v, 'plane': plane, 'title_label': lt,
                            'cb_proj': cb_proj, 'sp_thick': sp_thick}
         cb_plane.currentIndexChanged.connect(lambda idx, v_id=vid: self.change_view_plane(v_id, idx))
-

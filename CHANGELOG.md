@@ -2,7 +2,70 @@
 
 This file collects the systematic rounds of defect investigation on the **Medical Imaging Workstation Pro + Reconstruction Lab** — a robustness round (2026-07) and a correctness round (2026-08).
 
-**Version 1.1.0** (annotated tag `v1.1.0`, 2026-08-28) freezes the state described by the newest entry below. Its measurements began as a local freeze and are now separately backed by the exact-tag CI recorded in the next section; neither fact says anything about the copyright registration, which remains under review. The earlier `v1.0-copyright` tag marks the separate snapshot submitted for that registration.
+**Version 1.1.0** (annotated tag `v1.1.0`, 2026-08-28) is the earlier release snapshot. The unreleased changes below are subsequent local work. The exact-tag CI recorded in the historical sections covers that tag, not subsequent changes; neither fact says anything about the copyright registration, which remains under review. The earlier `v1.0-copyright` tag marks the separate snapshot submitted for that registration.
+
+## Unreleased: window controls, dark sidebar and state transitions (2026-09-04)
+
+Validation provenance: the checks below were recorded locally on the candidate based on
+`02cd217`, before commit and push. They do not establish remote CI results.
+The reported silent CT-preset buttons and light sidebar were reproduced with the original
+233-slice RIDER input. Two different causes were involved: this input has no declared HU units,
+so CT presets are intentionally unavailable, while the scroll content inherited the system's
+light background. The HU-unit contract is unchanged. Unknown-unit data now receives a display
+window based on its stored-value range (excluding padding), corresponding slider limits, visible
+explanations beside the disabled presets, and distinct disabled styling. `windowing.py` contains
+the pure display calculation; it neither changes voxels nor infers physical units.
+
+The same investigation reproduced and corrected related state failures:
+
+- Global preset buttons, slider edits and the first right-drag now clear visible views' independent
+  presets before rendering. Clicking a preset with unchanged WW/WL still refreshes the image.
+- Both sidebar tabs style their scroll content, viewport and scrollbar; the slab-thickness spinbox
+  also follows the dark theme.
+- Language changes and MPR's internal retranslation retain viewer-only status. Reset uses the
+  current series' display default and synchronizes the MPR button caption.
+- A successful series change clears the previous visible organ statistics and leaves a now-disabled
+  ROI/crop/tracking tool. A failed load preserves the existing comparison session. Slice-slider
+  signals are blocked while the new volume and its capabilities are being installed.
+- Comparison mode disables clinical controls its renderer does not use. Reconstruction hides
+  those controls; both modes also disable unsupported clinical annotation tools. Returning to
+  clinical mode restores available tools and preserves noncanonical geometry restrictions.
+- Expanding from one view to two/four renders newly visible views before fitting their images,
+  preventing blank views and stale slices. Initial visibility is set synchronously, so a delayed
+  startup callback cannot override a subsequently selected mode.
+
+Regression evidence: before these fixes, the first two targeted runs recorded **14/15** and
+**5/7** failed checks; a later layout probe recorded **4/4** failed checks. All three commands
+returned exit 1. These were actual pixel/state/render checks, including unchanged slider values,
+first mouse events, light system palette, and hidden-view transitions. The checks are registered
+in both local full-data and `SKIP_REAL_DATA=1` runs. No dataset, saved mask, model, experimental
+result, or submitted PDF was changed. The existing HU-declared RIDER copy was inspected with AI
+startup stubbed; all six presets worked, but its old cache lacks the current axis contract and
+is not a validated replacement cache. No real model inference was run.
+
+An additional mode-tool probe failed **2/10** checks before the tool-state fix. During layout
+integration, a full run had all assertion checks pass but caught a Qt-slot `IndexError` from the
+old delayed startup callback; that run returned exit 1 and was rejected. Rendering and initial
+visibility are now synchronous, with only size fitting deferred to the next layout cycle.
+
+Validation in the local `dicom_gui` environment (all commands returned exit 0):
+
+| Scope | Command / observation | Result |
+|---|---|---|
+| Local full-data | `python -u tests/test_gui.py` | 1048 / 1048 checks passed; no uncaught Qt exceptions |
+| Local data-independent | `SKIP_REAL_DATA=1 python -u tests/test_gui.py` | 937 / 937 checks passed; no uncaught Qt exceptions |
+| Lint | `ruff check .` | Passed |
+| Native macOS Qt | `QT_QPA_PLATFORM=cocoa`, original RIDER load, both tabs rendered | Both scroll backgrounds `#12141a`; raw shape `(233, 512, 512)`, HU capability false |
+
+The full and subset logs are at `/tmp/gui-0904-full-verified.log` and
+`/tmp/gui-0904-subset-verified.log`; native-render observations and screenshot are at
+`/tmp/gui-0904-native.log` and `/tmp/gui-0904-native-after.png`. These are local temporary
+artifacts, not committed evidence or remote CI. The original dataset remains raw-value
+viewer-only; normal loading of the HU-declared copy would start AI if no valid cache is available.
+
+Runtime/test source identity: `shasum -a 256 main.py ui_builder.py compare_lab.py recon_lab.py
+style.qss windowing.py tests/test_gui.py | shasum -a 256` gives
+`d8e0e7b779884ef6e7a2e2a01e952b2e5514756f022518537434b1f01e54b5f6`.
 
 ## Four public-claim boundaries tightened, and the emphasis gate extended to single asterisks (2026-08-30)
 

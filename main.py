@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import pydicom  # 读取 DICOM 医学影像文件格式
 from pydicom.uid import CTImageStorage
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication, QFileDialog, QMainWindow, QMessageBox
 
@@ -46,6 +46,7 @@ from dicom_geometry import SeriesGeometry, analyze_series, voxel_plane_edge_labe
 from interaction import InteractionMixin
 from recon_lab import ReconLabMixin
 from ui_builder import UiBuilderMixin
+from windowing import raw_display_window
 
 
 def _int_tag(ds, name, default=0):
@@ -115,6 +116,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
 
         # --- 3D 体数据 ---
         self.volume_hu = None             # 完整 HU 值体素数组 shape=(Z, H, W)，float32
+        self._default_window = (1500, -500)
         # 四项能力必须分别由 DICOM contract 证明；不能由“数组能堆叠”推断解剖/物理语义。
         self.hu_calibrated = False
         self.canonical_orientation = False
@@ -183,8 +185,9 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.init_ui()
         self.update_language()
 
-        # 延迟 50ms 执行布局切换，确保 Qt 窗口几何完成初始化再设置 splitter 尺寸
-        QTimer.singleShot(50, lambda: self.switch_layout(0))
+        # 初始可见性立即确定；switch_layout 只把尺寸适配延迟到下个布局周期。
+        # 旧的 50ms 回调会在用户已切模式 / 测试已安装其它数据后强制重置为单窗。
+        self.switch_layout(0)
 
         # 可选：启动时加载指定 DICOM 目录（由入口 --data 传入或测试显式指定）；默认不加载。
         # 不再硬编码自动加载本地"肺癌"目录——避免开发便利泄进产品入口，也避免误加载患者数据。
@@ -341,7 +344,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
 
         # AI 状态文案随状态机
         if self._ai_state == 'standby':
-            self.lbl_ai_status.setText("Status: Standby" if e else "状态: 待机中")
+            self.lbl_ai_status.setText(self._standby_text())
         elif self._ai_state == 'running':
             self.lbl_ai_status.setText("Processing AI Pipeline..." if e else "状态: AI 引擎自动运算中...")
         elif self._ai_state == 'done':
@@ -406,6 +409,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
                 (f"未找到模型 models/recon_dl_v{RECON_DL_VIEWS}.onnx，或未安装 onnxruntime。\n"
                  f"可用 experiments/recon_dl.py 训练并导出。"))
 
+        self._sync_view_controls()
         self._refresh_patient_info()   # 脱敏占位文字随语言刷新
         self.on_slice_changed(self.slider_slice.value())
 
@@ -470,16 +474,21 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             return
         new_ww = max(self.slider_ww.minimum(), min(self.slider_ww.maximum(), self.slider_ww.value() + delta_ww))
         new_wl = max(self.slider_wl.minimum(), min(self.slider_wl.maximum(), self.slider_wl.value() + delta_wl))
-        self.slider_ww.setValue(new_ww)
-        self.slider_wl.setValue(new_wl)
+        self.set_window(new_ww, new_wl)
+
+    def _follow_global_window(self):
+        """所有可见视图先退出独立窗位，再渲染本次全局操作。"""
         for vdata in self.views.values():
             if vdata['container'].isHidden():
                 continue
             if vdata['preset'].currentText() not in ["Global", "跟随"]:
                 # blockSignals 防止 setCurrentIndex 触发 update_display 重入
-                vdata['preset'].blockSignals(True)
-                vdata['preset'].setCurrentIndex(0)
-                vdata['preset'].blockSignals(False)
+                with QSignalBlocker(vdata['preset']):
+                    vdata['preset'].setCurrentIndex(0)
+
+    def _on_global_window_changed(self):
+        self._follow_global_window()
+        self.update_display()
 
     def change_active_tool(self, tid):
         """切换全局工具，并同步更新所有视图的 current_tool，确保各视图行为一致。"""
@@ -517,7 +526,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         # 布局复位仅在临床模式：recon 模式需保持 2x2，改 combo_layout 会隐藏 V2/3/4
         if not self.recon_mode_active:
             self.combo_layout.setCurrentIndex(0)
-        self.slider_ww.setValue(1500); self.slider_wl.setValue(-500)
+        self.set_window(*self._default_window)
         self.tool_btns['btn_ptr'].setChecked(True); self.change_active_tool(0)
         self.global_annotations = {'all': []}
         if self.volume_mask is not None:
@@ -529,6 +538,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self._update_organ_stats()  # 蒙版已清，定量面板同步清空
         self.btn_mpr.setChecked(False)
         self.current_sinogram = None; self.current_theta = None
+        self._sync_view_controls()
         self._last_recon_img = None
         for b in [self.btn_dfr, self.btn_bp, self.btn_fbp, self.btn_dl]: b.setEnabled(False)
         # DMR/迭代重建不依赖弦图；判据统一由 _sync_matrix_buttons 给出
@@ -544,12 +554,99 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             self.update_display()
 
     def set_window(self, ww, wl):
-        """快捷设置窗宽/窗位（供预设按钮调用），触发 slider.valueChanged → update_display。"""
-        self.slider_ww.setValue(ww)
-        self.slider_wl.setValue(wl)
+        """一次提交 WW/WL 与跟随状态；值相同也必须渲染，不能依赖 valueChanged。"""
+        self._follow_global_window()
+        with QSignalBlocker(self.slider_ww), QSignalBlocker(self.slider_wl):
+            self.slider_ww.setValue(ww)
+            self.slider_wl.setValue(wl)
+        self.update_display()
+
+    def _configure_window_range(self):
+        """加载成功后按显示单位设置范围；只配置控件，不转换体素或开放 HU 功能。"""
+        ww, wl, low, high, max_width = 1500, -500, -1200, 1200, 4000
+        if not self.hu_calibrated:
+            padding = [(_int_tag(d, 'PixelPaddingValue', None),
+                        _int_tag(d, 'PixelPaddingRangeLimit', None)) for d in self.dicom_datasets]
+            ww, wl, low, high, max_width = raw_display_window(self.volume_hu, padding)
+        self._default_window = (ww, wl)
+        with QSignalBlocker(self.slider_ww), QSignalBlocker(self.slider_wl):
+            self.slider_ww.setRange(1, max_width)
+            self.slider_wl.setRange(low, high)
+            self.slider_ww.setValue(ww)
+            self.slider_wl.setValue(wl)
+
+    def _standby_text(self):
+        if self.volume_hu is not None:
+            if not self.hu_calibrated:
+                return ("Viewer only — raw stored values; HU unavailable" if self.is_english
+                        else "仅阅片 — 原始存储值；HU 不可用")
+            if not all((self.canonical_orientation, self.inplane_spacing_valid,
+                        self.uniform_z_geometry_valid)):
+                return ("Viewer only — DICOM geometry is not AI-compatible" if self.is_english
+                        else "仅阅片 — DICOM 几何不满足 AI 条件")
+        return "Status: Standby" if self.is_english else "状态: 待机中"
+
+    def _sync_view_controls(self):
+        """统一模式与能力对控件的影响，避免返回 Tab / 重译时恢复无效操作。"""
+        e = self.is_english
+        loaded = self.volume_hu is not None
+        clinical = not self.recon_mode_active
+        independent = clinical and not self.compare_mode_active
+        anatomical = loaded and all((self.canonical_orientation, self.inplane_spacing_valid,
+                                     self.uniform_z_geometry_valid))
+        self.btn_mpr.setEnabled(anatomical and independent)
+        self.btn_compare.setEnabled(loaded and self.hu_calibrated and anatomical and clinical)
+        self.chk_overlay.setEnabled(loaded and independent)
+        # 对比 / 重建 handler 不接收临床标注，入口也必须同步禁用，避免画完无声丢弃。
+        for key, button in self.tool_btns.items():
+            available = loaded and independent
+            if key == 'btn_ptr':
+                available = True
+            elif key == 'btn_rul':
+                available &= self.inplane_spacing_valid
+            elif key in ('btn_rec', 'btn_roi'):
+                available &= self.hu_calibrated and self.inplane_spacing_valid
+            elif key == 'btn_trk':
+                available &= self.hu_calibrated and anatomical
+            button.setEnabled(available)
+        selected = self.tool_btn_group.checkedButton()
+        if selected is not None and not selected.isEnabled():
+            for vd in self.views.values():
+                vd['view'].cancel_ruler_preview()
+            self.tool_btns['btn_ptr'].setChecked(True)
+            self.change_active_tool(TOOL_POINTER)
+        on = self.btn_mpr.isChecked()
+        self.btn_mpr.setText(("MPR Link: ON" if on else "MPR Link: OFF") if e
+                            else ("MPR 联动: 开启" if on else "MPR 联动: 关"))
+        if not loaded:
+            reason = "Load a DICOM series first." if e else "请先加载 DICOM 序列。"
+        elif not self.hu_calibrated:
+            reason = ("HU unavailable: CT presets are disabled. Adjust WW/WL to view raw values."
+                      if e else "HU 单位未确认，肺窗等预设已禁用。可用 WW/WL 滑条调节原始灰度。")
+        else:
+            reason = ""
+        self.lbl_window_status.setText(reason)
+        self.lbl_window_status.setVisible(bool(reason))
+        for button in self.preset_btns:
+            button.setEnabled(loaded and self.hu_calibrated and clinical)
+            button.setToolTip(reason or ("Apply to visible views" if e else "应用到当前可见视图"))
+        for vd in self.views.values():
+            vd['cb_plane'].setVisible(clinical and self.canonical_orientation)
+            vd['cb_plane'].setEnabled(anatomical and independent)
+            for key in ('preset', 'chk_anno', 'cb_proj', 'sp_thick'):
+                vd[key].setVisible(clinical)
+            vd['preset'].setEnabled(loaded and self.hu_calibrated and independent)
+            vd['preset'].setToolTip(("Use the WW/WL controls on the right in comparison mode."
+                                     if e else "对比模式请使用右侧统一窗宽/窗位。")
+                                    if self.compare_mode_active else reason)
+            vd['chk_anno'].setEnabled(loaded and independent)
+            vd['cb_proj'].setEnabled(loaded and independent)
+            vd['sp_thick'].setEnabled(loaded and independent and vd['cb_proj'].currentIndex() != 0)
 
     def switch_layout(self, m):
         self._apply_grid_visibility(m)
+        # 隐藏视图不参与逐帧绘制；展开时同步补画，不能把数据读取留到下一轮事件。
+        self.update_display()
         # setSizes 和 fitInView 合并到同一帧执行，消除两步之间的闪烁间隙
         def _settle():
             self._apply_grid_sizes(m)
@@ -563,9 +660,6 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
 
     def load_data(self, path):
         """加载 DICOM 目录并构建 3D 体积——分四步：读盘 / 构 HU / 加载注解 / 启动 AI。"""
-        self._stop_cine()               # 换病例停止 Cine 播放
-        if self.compare_mode_active:
-            self._exit_compare_mode()   # 新主序列作废旧的对比配对
         # 记住加载前状态：若新目录无法解码，恢复原序列而非留下 dicom_datasets 与 volume_hu
         # 不一致的半更新状态（否则后续按 idx 取切片会越界崩溃）。
         prev_datasets, prev_volume = self.dicom_datasets, self.volume_hu
@@ -589,11 +683,16 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             return
         # 只有 volume 已成功构建、确认新序列成为当前序列后才清旧 readout；读目录或
         # decode 失败的路径在上方返回，必须保留旧序列及其 probe/HUD，不能在 load 开始时清。
+        self._stop_cine()
+        if self.compare_mode_active:
+            self._exit_compare_mode()
         self.lbl_hu_value.setText("")
         self.lbl_hud.setText("")
         # 匿名 token 只与本次成功 load session 绑定，不由 PatientID/UID/hash 推导。
         self._anon_session_nonce = secrets.token_hex(6)
         self._apply_series_capabilities()
+        self._configure_window_range()
+        self._update_organ_stats()  # 清掉前序列的可见定量和导出状态，不只清 Python 列表
         self._load_annotations_json(pid)
         ai_semantics_valid = all((self.hu_calibrated, self.canonical_orientation,
                                   self.inplane_spacing_valid, self.uniform_z_geometry_valid))
@@ -628,13 +727,7 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
             self._invalidate_running_ai()
             self._ai_state = 'standby'
             self.lbl_ai_status.setStyleSheet("color: #F1C40F; font-weight: bold;")
-            if not self.hu_calibrated:
-                msg = ("Viewer only — raw stored values; HU unavailable" if self.is_english
-                       else "仅阅片 — 原始存储值；HU 不可用")
-            else:
-                msg = ("Viewer only — DICOM geometry is not AI-compatible" if self.is_english
-                       else "仅阅片 — DICOM 几何不满足 AI 条件")
-            self.lbl_ai_status.setText(msg)
+            self.lbl_ai_status.setText(self._standby_text())
             self.btn_export_stats.setEnabled(False)
             self.btn_mesh3d.setEnabled(False)
 
@@ -684,6 +777,12 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         self.btn_compare.setEnabled(all((self.hu_calibrated, self.canonical_orientation,
                                          self.inplane_spacing_valid,
                                          self.uniform_z_geometry_valid)))
+        # setEnabled(False) 不会退出已经选中的工具；数据能力变化必须同步交互模式。
+        selected = self.tool_btn_group.checkedButton()
+        if selected is not None and not selected.isEnabled():
+            self.tool_btns['btn_ptr'].setChecked(True)
+            self.change_active_tool(TOOL_POINTER)
+        self._sync_view_controls()
 
     def _read_dicom_dir(self, path):
         """递归扫描目录并并行读取 DICOM，按 patient-space 投影排序。
@@ -826,8 +925,10 @@ class MedicalViewer(QMainWindow, ReconLabMixin, CompareMixin, AnnotationMixin,
         z, y, x = self.volume_hu.shape
         # 默认将 3D 光标定位在体积中心（中间切片、中间行、中间列）
         self.current_3d_pos = [z // 2, y // 2, x // 2]
-        self.slider_slice.setRange(0, z - 1)
-        self.slider_slice.setValue(z // 2)
+        # 新 volume 与旧 capability / 模式尚未完成切换，不让 valueChanged 提前渲染。
+        with QSignalBlocker(self.slider_slice):
+            self.slider_slice.setRange(0, z - 1)
+            self.slider_slice.setValue(z // 2)
         return pid
 
     def _invalidate_running_ai(self):
